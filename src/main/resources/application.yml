@@ -1,0 +1,33 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: osrs-party-api
+  jackson:
+    default-property-inclusion: always
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      # password: ...
+
+app:
+  # Ad storage backend: "memory" (default, in-process) or "redis" (persists
+  # across restarts, native TTL). Redis needs a server reachable at spring.data.redis.*
+  storage: memory
+  rate-limit:
+    # Minimum gap between POSTs from one client IP (ms). 0 disables.
+    interval-ms: 5000
+  ads:
+    # An ad is reaped if it hasn't been heartbeated within this window (ms)...
+    ttl-ms: 90000
+    # ...checked this often (ms).
+    evict-interval-ms: 30000
+
+logging:
+  level:
+    # One INFO line per request (method, path, IP, status, latency).
+    net.osparty.api.requests: INFO
+    # Flip to DEBUG to also log request bodies (the PartyRequest JSON):
+    # net.osparty.api.requests: DEBUG

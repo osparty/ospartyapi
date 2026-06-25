@@ -1,0 +1,40 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.5.6'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'net.osparty'
+version = '0.1.0'
+description = 'Advertising/bulletin-board API for the OSParty RuneLite plugin'
+
+java {
+    // Compile to 17 bytecode; runs on any JDK 17+ (the dev box may have a newer JDK).
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    // Only used when app.storage=redis; the connection is created lazily, so the
+    // default in-memory mode (and the tests) run without a Redis server.
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+// Stable output name so the Dockerfile can COPY build/libs/app.jar.
+tasks.named('bootJar') {
+    archiveFileName = 'app.jar'
+}

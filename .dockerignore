@@ -1,0 +1,3 @@
+# Keep the build context tiny — only the pre-built jar is needed.
+*
+!build/libs/app.jar

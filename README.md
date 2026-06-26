@@ -10,15 +10,23 @@ ad.
 
 All endpoints live under the versioned base path **`/api/v1`**.
 
-| Method | Path                             | Body / Query                   | Returns       |
-|--------|----------------------------------|--------------------------------|---------------|
-| GET    | `/api/v1/parties`                | `?activity={id}&player={name}` | `Party[]`     |
-| POST   | `/api/v1/parties`                | `PartyRequest`                 | `Party` (201) |
-| PUT    | `/api/v1/parties/{id}/heartbeat` | —                              | `Party`       |
-| DELETE | `/api/v1/parties/{id}`           | —                              | `Party`       |
+| Method | Path                             | Body / Query                   | Returns                 |
+|--------|----------------------------------|--------------------------------|-------------------------|
+| GET    | `/api/v1/parties`                | `?activity={id}&player={name}` | `Party[]` (public only) |
+| GET    | `/api/v1/parties/by-code/{code}` | —                              | `Party`                 |
+| POST   | `/api/v1/parties`                | `PartyRequest`                 | `Party` (201)           |
+| PUT    | `/api/v1/parties/{id}/heartbeat` | —                              | `Party`                 |
+| DELETE | `/api/v1/parties/{id}`           | —                              | `Party`                 |
 
 `activity` filters to one activity id (e.g. `cox`, `tob`, `toa`, `nex`, …).
 `player` is accepted but unused — the plugin hides your own ad client-side.
+
+**Party types** — an ad can be **private** (`privateParty`: excluded from the
+public list, reachable only via its server-generated **`inviteCode`** at
+`GET …/by-code/{code}`, case-insensitive), tagged with a **loot rule**
+(`lootRule`: `FFA` / `SPLIT` / `UNSPECIFIED`), and/or **ironman-only**
+(`ironmanOnly`, with the host's `hostAccountType` for display). The API just
+stores these; the plugin filters and enforces them.
 
 ## Behaviour
 
@@ -55,11 +63,16 @@ app:
   "world": "302",
   "minKillCount": 500,
   "minHardModeKillCount": 50,
-  "passphrase": "wine-of-zamorak-…"
+  "passphrase": "wine-of-zamorak-…",
+  "privateParty": false,
+  "lootRule": "SPLIT",
+  "ironmanOnly": false,
+  "hostAccountType": "NORMAL"
 }
 ```
 
-`activity` and `host` are required (otherwise `400`).
+`activity` and `host` are required (otherwise `400`). The party-type fields are
+optional (`lootRule` defaults to `UNSPECIFIED`).
 
 ### `Party` (response)
 
@@ -76,11 +89,17 @@ app:
   "passphrase": "wine-of-zamorak-…",
   "minKillCount": 500,
   "minHardModeKillCount": 50,
-  "members": ["Zezima"]
+  "members": ["Zezima"],
+  "privateParty": false,
+  "inviteCode": "Y2Y3D9",
+  "lootRule": "SPLIT",
+  "ironmanOnly": false,
+  "hostAccountType": "NORMAL"
 }
 ```
 
 `size`/`members` are advisory only; the real roster lives in the P2P room.
+`inviteCode` is server-generated.
 
 ## Run
 

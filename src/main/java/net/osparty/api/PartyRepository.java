@@ -12,14 +12,26 @@ import java.util.Optional;
  */
 public interface PartyRepository
 {
-	/** All open ads, newest first, optionally filtered to one activity id. */
+	/**
+	 * Open <b>public</b> ads, newest first, optionally filtered to one activity id.
+	 * Private parties are excluded — they're reached via {@link #findByInviteCode}.
+	 */
 	List<Party> list(String activity);
+
+	/** Look up any party (public or private) by its invite code. */
+	Optional<Party> findByInviteCode(String code);
+
+	/** Look up the ad currently hosted by {@code host}, if any (for rejoin-on-restart). */
+	Optional<Party> findByHost(String host);
 
 	/** Advertise a party. Replaces any existing ad from the same host. */
 	Party create(PartyRequest request);
 
-	/** Host keep-alive: refresh the ad's liveness. @return the ad if it exists. */
-	Optional<Party> heartbeat(String id);
+	/**
+	 * Host keep-alive: refresh the ad's liveness and, when {@code size} is non-null,
+	 * update the advertised occupancy. @return the ad if it exists.
+	 */
+	Optional<Party> heartbeat(String id, Integer size);
 
 	Optional<Party> delete(String id);
 

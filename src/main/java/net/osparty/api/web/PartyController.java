@@ -21,7 +21,8 @@ import org.springframework.web.server.ResponseStatusException;
  * The advertising contract the plugin talks to:
  *
  * <pre>
- *   GET    /api/v1/parties?activity={id}&amp;player={name}   -&gt; Party[]
+ *   GET    /api/v1/parties?activity={id}&amp;player={name}   -&gt; Party[]  (public only)
+ *   GET    /api/v1/parties/by-code/{code}                  -&gt; Party   (public or private)
  *   POST   /api/v1/parties        (PartyRequest)           -&gt; Party (201)
  *   PUT    /api/v1/parties/{id}/heartbeat                  -&gt; Party   (host keep-alive)
  *   DELETE /api/v1/parties/{id}                            -&gt; Party
@@ -57,6 +58,22 @@ public class PartyController
 		return store.list(activity);
 	}
 
+	/** Look up a single party (public or private) by its invite code. */
+	@GetMapping("/by-code/{code}")
+	public Party byCode(@PathVariable String code)
+	{
+		return store.findByInviteCode(code).orElseThrow(
+			() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No party with code " + code));
+	}
+
+	/** Look up the ad hosted by a player (used by the plugin to rejoin after a restart). */
+	@GetMapping("/by-host/{host}")
+	public Party byHost(@PathVariable String host)
+	{
+		return store.findByHost(host).orElseThrow(
+			() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No party for host " + host));
+	}
+
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
 	public Party create(@RequestBody PartyRequest request)
@@ -74,9 +91,9 @@ public class PartyController
 	 * rate limit. 404 if the ad is already gone.
 	 */
 	@PutMapping("/{id}/heartbeat")
-	public Party heartbeat(@PathVariable String id)
+	public Party heartbeat(@PathVariable String id, @RequestParam(required = false) Integer size)
 	{
-		return store.heartbeat(id).orElseThrow(
+		return store.heartbeat(id, size).orElseThrow(
 			() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No party " + id));
 	}
 

@@ -34,6 +34,7 @@ public class RedisPartyRepository implements PartyRepository
 
 	private static final String PARTY_KEY = "party:";
 	private static final String HOST_KEY = "partyhost:";
+	private static final String CODE_KEY = "partycode:";
 	private static final String SEQ_KEY = "party:seq";
 
 	private final StringRedisTemplate redis;
@@ -63,7 +64,7 @@ public class RedisPartyRepository implements PartyRepository
 					continue;
 				}
 				Party party = read(key);
-				if (party != null && (activity == null || activity.isBlank()
+				if (party != null && !party.isPrivateParty() && (activity == null || activity.isBlank()
 					|| activity.equals(party.getActivity())))
 				{
 					out.add(party);
@@ -72,6 +73,29 @@ public class RedisPartyRepository implements PartyRepository
 		}
 		out.sort(Comparator.comparingLong(Party::getCreatedAt).reversed());
 		return out;
+	}
+
+	@Override
+	public Optional<Party> findByInviteCode(String code)
+	{
+		String normalized = PartyFactory.normalizeInviteCode(code);
+		if (normalized == null)
+		{
+			return Optional.empty();
+		}
+		String id = redis.opsForValue().get(CODE_KEY + normalized);
+		return id == null ? Optional.empty() : Optional.ofNullable(read(PARTY_KEY + id));
+	}
+
+	@Override
+	public Optional<Party> findByHost(String host)
+	{
+		if (host == null)
+		{
+			return Optional.empty();
+		}
+		String id = redis.opsForValue().get(HOST_KEY + PartyFactory.normalizeHost(host));
+		return id == null ? Optional.empty() : Optional.ofNullable(read(PARTY_KEY + id));
 	}
 
 	@Override
@@ -84,19 +108,26 @@ public class RedisPartyRepository implements PartyRepository
 		String previousId = redis.opsForValue().get(hostKey);
 		if (previousId != null)
 		{
+			Party previous = read(PARTY_KEY + previousId);
+			if (previous != null && previous.getInviteCode() != null)
+			{
+				redis.delete(CODE_KEY + previous.getInviteCode());
+			}
 			redis.delete(PARTY_KEY + previousId);
 		}
 
 		String id = String.valueOf(redis.opsForValue().increment(SEQ_KEY));
-		Party party = PartyFactory.fromRequest(request, id, now);
+		String inviteCode = uniqueInviteCode();
+		Party party = PartyFactory.fromRequest(request, id, inviteCode, now);
 
 		redis.opsForValue().set(PARTY_KEY + id, write(party), ttl);
 		redis.opsForValue().set(hostKey, id, ttl);
+		redis.opsForValue().set(CODE_KEY + inviteCode, id, ttl);
 		return party;
 	}
 
 	@Override
-	public Optional<Party> heartbeat(String id)
+	public Optional<Party> heartbeat(String id, Integer size)
 	{
 		String key = PARTY_KEY + id;
 		Party party = read(key);
@@ -104,9 +135,22 @@ public class RedisPartyRepository implements PartyRepository
 		{
 			return Optional.empty();
 		}
-		// Native TTL refresh — this is the whole liveness mechanism.
-		redis.expire(key, ttl);
+		// Report current occupancy (membership is peer-to-peer; the host tells us).
+		if (size != null && size > 0 && size != party.getSize())
+		{
+			party.setSize(size);
+			redis.opsForValue().set(key, write(party), ttl);
+		}
+		else
+		{
+			// Native TTL refresh — this is the whole liveness mechanism.
+			redis.expire(key, ttl);
+		}
 		redis.expire(HOST_KEY + PartyFactory.normalizeHost(party.getHost()), ttl);
+		if (party.getInviteCode() != null)
+		{
+			redis.expire(CODE_KEY + party.getInviteCode(), ttl);
+		}
 		return Optional.of(party);
 	}
 
@@ -121,7 +165,22 @@ public class RedisPartyRepository implements PartyRepository
 		}
 		redis.delete(key);
 		redis.delete(HOST_KEY + PartyFactory.normalizeHost(party.getHost()));
+		if (party.getInviteCode() != null)
+		{
+			redis.delete(CODE_KEY + party.getInviteCode());
+		}
 		return Optional.of(party);
+	}
+
+	private String uniqueInviteCode()
+	{
+		String code;
+		do
+		{
+			code = PartyFactory.newInviteCode();
+		}
+		while (redis.hasKey(CODE_KEY + code));
+		return code;
 	}
 
 	private Party read(String key)

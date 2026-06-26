@@ -31,16 +31,42 @@ public class InMemoryPartyRepository implements PartyRepository
 	public List<Party> list(String activity)
 	{
 		return parties.values().stream()
+			.filter(p -> !p.isPrivateParty())
 			.filter(p -> activity == null || activity.isBlank() || activity.equals(p.getActivity()))
 			.sorted(Comparator.comparingLong(Party::getCreatedAt).reversed())
 			.collect(Collectors.toList());
 	}
 
 	@Override
+	public Optional<Party> findByInviteCode(String code)
+	{
+		String normalized = PartyFactory.normalizeInviteCode(code);
+		if (normalized == null)
+		{
+			return Optional.empty();
+		}
+		return parties.values().stream()
+			.filter(p -> normalized.equals(p.getInviteCode()))
+			.findFirst();
+	}
+
+	@Override
+	public Optional<Party> findByHost(String host)
+	{
+		if (host == null)
+		{
+			return Optional.empty();
+		}
+		return parties.values().stream()
+			.filter(p -> PartyFactory.sameHost(p.getHost(), host))
+			.findFirst();
+	}
+
+	@Override
 	public Party create(PartyRequest request)
 	{
 		long now = System.currentTimeMillis();
-		Party party = PartyFactory.fromRequest(request, nextId(), now);
+		Party party = PartyFactory.fromRequest(request, nextId(), uniqueInviteCode(), now);
 
 		// A host can only have one ad at a time — drop any previous one so
 		// re-advertising replaces it instead of piling up.
@@ -60,7 +86,7 @@ public class InMemoryPartyRepository implements PartyRepository
 	}
 
 	@Override
-	public Optional<Party> heartbeat(String id)
+	public Optional<Party> heartbeat(String id, Integer size)
 	{
 		Party party = parties.get(id);
 		if (party == null)
@@ -68,6 +94,11 @@ public class InMemoryPartyRepository implements PartyRepository
 			return Optional.empty();
 		}
 		lastSeen.put(id, System.currentTimeMillis());
+		// Report current occupancy (membership is peer-to-peer; the host tells us).
+		if (size != null && size > 0)
+		{
+			party.setSize(size);
+		}
 		return Optional.of(party);
 	}
 
@@ -100,5 +131,16 @@ public class InMemoryPartyRepository implements PartyRepository
 	private String nextId()
 	{
 		return String.valueOf(idSequence.getAndIncrement());
+	}
+
+	private String uniqueInviteCode()
+	{
+		String code;
+		do
+		{
+			code = PartyFactory.newInviteCode();
+		}
+		while (findByInviteCode(code).isPresent());
+		return code;
 	}
 }

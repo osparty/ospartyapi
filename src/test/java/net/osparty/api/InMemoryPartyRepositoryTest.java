@@ -1,8 +1,10 @@
 package net.osparty.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
 import org.junit.jupiter.api.Test;
 
@@ -11,7 +13,7 @@ class InMemoryPartyRepositoryTest
 {
 	private PartyRequest req(String host, String activity)
 	{
-		return new PartyRequest(activity, host, null, 2, null, 0, 0, "p");
+		return new PartyRequest(activity, host, null, 2, null, 0, 0, "p", false, "FFA", false, "NORMAL");
 	}
 
 	@Test
@@ -38,5 +40,26 @@ class InMemoryPartyRepositoryTest
 
 		assertEquals(1, store.list(null).size());
 		assertEquals("tob", store.list(null).get(0).getActivity());
+	}
+
+	@Test
+	void privatePartiesAreHiddenFromListButFoundByCode()
+	{
+		InMemoryPartyRepository store = new InMemoryPartyRepository();
+		store.create(req("Pub", "cox"));
+		Party priv = store.create(
+			new PartyRequest("toa", "Priv", null, 2, null, 0, 0, "p", true, "split", true, "IRONMAN"));
+
+		// Public list excludes the private party.
+		assertEquals(1, store.list(null).size());
+		assertEquals("Pub", store.list(null).get(0).getHost());
+
+		// But it's reachable by its (case-insensitive) invite code, with fields intact.
+		assertTrue(priv.isPrivateParty());
+		assertEquals("SPLIT", priv.getLootRule());   // normalized to upper-case
+		assertTrue(priv.isIronmanOnly());
+		assertTrue(store.findByInviteCode(priv.getInviteCode().toLowerCase()).isPresent());
+		assertEquals("Priv", store.findByInviteCode(priv.getInviteCode()).get().getHost());
+		assertFalse(store.findByInviteCode("nope").isPresent());
 	}
 }

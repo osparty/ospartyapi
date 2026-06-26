@@ -99,6 +99,34 @@ class PartyApiTest
 			.andExpect(status().isNotFound());
 	}
 
+	@Test
+	void privatePartyHiddenFromListButReachableByCode() throws Exception
+	{
+		String body = "{\"activity\":\"toa\",\"host\":\"PrivHost\",\"capacity\":2,\"passphrase\":\"p\","
+			+ "\"privateParty\":true,\"lootRule\":\"SPLIT\",\"ironmanOnly\":true,\"hostAccountType\":\"IRONMAN\"}";
+		String json = mvc.perform(post("/api/v1/parties").contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.inviteCode").exists())
+			.andExpect(jsonPath("$.privateParty").value(true))
+			.andExpect(jsonPath("$.lootRule").value("SPLIT"))
+			.andExpect(jsonPath("$.ironmanOnly").value(true))
+			.andReturn().getResponse().getContentAsString();
+		String code = objectMapper.readTree(json).get("inviteCode").asText();
+
+		// Not in the public list...
+		mvc.perform(get("/api/v1/parties"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$[?(@.host == 'PrivHost')]", hasSize(0)));
+
+		// ...but reachable by code.
+		mvc.perform(get("/api/v1/parties/by-code/" + code))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.host").value("PrivHost"));
+
+		mvc.perform(get("/api/v1/parties/by-code/ZZZZZZ"))
+			.andExpect(status().isNotFound());
+	}
+
 	private String createParty(String host, String activity) throws Exception
 	{
 		String body = "{\"activity\":\"" + activity + "\",\"host\":\"" + host

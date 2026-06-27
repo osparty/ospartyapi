@@ -127,7 +127,7 @@ public class RedisPartyRepository implements PartyRepository
 	}
 
 	@Override
-	public Optional<Party> heartbeat(String id, Integer size, String world)
+	public Optional<Party> heartbeat(String id, Integer size, String world, String layout)
 	{
 		String key = PARTY_KEY + id;
 		Party party = read(key);
@@ -135,8 +135,8 @@ public class RedisPartyRepository implements PartyRepository
 		{
 			return Optional.empty();
 		}
-		// Report current occupancy and the host's live world (both are peer-to-peer;
-		// the host tells us). Only rewrite the value when something actually changed.
+		// Report current occupancy, the host's live world and the CoX raid layout
+		// (all peer-to-peer; the host tells us). Only rewrite when something changed.
 		boolean changed = false;
 		if (size != null && size > 0 && size != party.getSize())
 		{
@@ -146,6 +146,11 @@ public class RedisPartyRepository implements PartyRepository
 		if (world != null && !world.isBlank() && !world.equals(party.getWorld()))
 		{
 			party.setWorld(world);
+			changed = true;
+		}
+		if (layout != null && !layout.isBlank() && !layout.equals(party.getLayout()))
+		{
+			party.setLayout(layout);
 			changed = true;
 		}
 		if (changed)

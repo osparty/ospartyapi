@@ -36,6 +36,8 @@ final class PartyFactory
 		party.setLootRule(normalizeLootRule(request.lootRule()));
 		party.setIronmanOnly(request.ironmanOnly());
 		party.setHostAccountType(request.hostAccountType());
+		party.setHardMode(request.hardMode());
+		party.setInvocation(request.invocation());
 		// Advisory only — the host occupies the first slot until the live room takes over.
 		party.setSize(1);
 		List<String> members = new ArrayList<>();

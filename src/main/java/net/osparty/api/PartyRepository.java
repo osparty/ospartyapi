@@ -29,10 +29,10 @@ public interface PartyRepository
 
 	/**
 	 * Host keep-alive: refresh the ad's liveness and, when non-null, update the
-	 * advertised occupancy ({@code size}) and the host's current {@code world}.
-	 * @return the ad if it exists.
+	 * advertised occupancy ({@code size}), the host's current {@code world}, and
+	 * the live CoX raid {@code layout}. @return the ad if it exists.
 	 */
-	Optional<Party> heartbeat(String id, Integer size, String world);
+	Optional<Party> heartbeat(String id, Integer size, String world, String layout);
 
 	Optional<Party> delete(String id);
 

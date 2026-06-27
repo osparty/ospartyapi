@@ -13,7 +13,7 @@ class InMemoryPartyRepositoryTest
 {
 	private PartyRequest req(String host, String activity)
 	{
-		return new PartyRequest(activity, host, null, 2, null, 0, 0, "p", false, "FFA", false, "NORMAL");
+		return new PartyRequest(activity, host, null, 2, null, 0, 0, "p", false, "FFA", false, "NORMAL", false, 0);
 	}
 
 	@Test
@@ -48,7 +48,7 @@ class InMemoryPartyRepositoryTest
 		InMemoryPartyRepository store = new InMemoryPartyRepository();
 		store.create(req("Pub", "cox"));
 		Party priv = store.create(
-			new PartyRequest("toa", "Priv", null, 2, null, 0, 0, "p", true, "split", true, "IRONMAN"));
+			new PartyRequest("toa", "Priv", null, 2, null, 0, 0, "p", true, "split", true, "IRONMAN", false, 300));
 
 		// Public list excludes the private party.
 		assertEquals(1, store.list(null).size());

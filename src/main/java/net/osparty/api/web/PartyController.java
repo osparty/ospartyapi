@@ -92,9 +92,9 @@ public class PartyController
 	 */
 	@PutMapping("/{id}/heartbeat")
 	public Party heartbeat(@PathVariable String id, @RequestParam(required = false) Integer size,
-		@RequestParam(required = false) String world)
+		@RequestParam(required = false) String world, @RequestParam(required = false) String layout)
 	{
-		return store.heartbeat(id, size, world).orElseThrow(
+		return store.heartbeat(id, size, world, layout).orElseThrow(
 			() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No party " + id));
 	}
 

@@ -18,6 +18,8 @@ public record PartyRequest(
 	boolean privateParty,
 	String lootRule,
 	boolean ironmanOnly,
-	String hostAccountType)
+	String hostAccountType,
+	boolean hardMode,
+	int invocation)
 {
 }

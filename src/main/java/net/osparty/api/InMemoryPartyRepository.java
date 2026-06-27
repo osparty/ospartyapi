@@ -86,7 +86,7 @@ public class InMemoryPartyRepository implements PartyRepository
 	}
 
 	@Override
-	public Optional<Party> heartbeat(String id, Integer size)
+	public Optional<Party> heartbeat(String id, Integer size, String world)
 	{
 		Party party = parties.get(id);
 		if (party == null)
@@ -94,10 +94,15 @@ public class InMemoryPartyRepository implements PartyRepository
 			return Optional.empty();
 		}
 		lastSeen.put(id, System.currentTimeMillis());
-		// Report current occupancy (membership is peer-to-peer; the host tells us).
+		// Report current occupancy and the host's live world (membership and the
+		// host's whereabouts are peer-to-peer; the host tells us).
 		if (size != null && size > 0)
 		{
 			party.setSize(size);
+		}
+		if (world != null && !world.isBlank())
+		{
+			party.setWorld(world);
 		}
 		return Optional.of(party);
 	}

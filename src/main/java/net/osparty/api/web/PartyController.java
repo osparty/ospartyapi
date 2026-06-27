@@ -91,9 +91,10 @@ public class PartyController
 	 * rate limit. 404 if the ad is already gone.
 	 */
 	@PutMapping("/{id}/heartbeat")
-	public Party heartbeat(@PathVariable String id, @RequestParam(required = false) Integer size)
+	public Party heartbeat(@PathVariable String id, @RequestParam(required = false) Integer size,
+		@RequestParam(required = false) String world)
 	{
-		return store.heartbeat(id, size).orElseThrow(
+		return store.heartbeat(id, size, world).orElseThrow(
 			() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No party " + id));
 	}
 

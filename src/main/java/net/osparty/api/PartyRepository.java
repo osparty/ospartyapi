@@ -28,10 +28,11 @@ public interface PartyRepository
 	Party create(PartyRequest request);
 
 	/**
-	 * Host keep-alive: refresh the ad's liveness and, when {@code size} is non-null,
-	 * update the advertised occupancy. @return the ad if it exists.
+	 * Host keep-alive: refresh the ad's liveness and, when non-null, update the
+	 * advertised occupancy ({@code size}) and the host's current {@code world}.
+	 * @return the ad if it exists.
 	 */
-	Optional<Party> heartbeat(String id, Integer size);
+	Optional<Party> heartbeat(String id, Integer size, String world);
 
 	Optional<Party> delete(String id);
 

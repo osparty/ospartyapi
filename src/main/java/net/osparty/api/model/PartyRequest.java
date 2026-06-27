@@ -1,5 +1,7 @@
 package net.osparty.api.model;
 
+import java.util.List;
+
 /**
  * Payload the plugin POSTs to advertise a new party. Mirrors the plugin's
  * {@code net.osparty.model.PartyRequest}. The {@code passphrase} is generated
@@ -20,6 +22,8 @@ public record PartyRequest(
 	boolean ironmanOnly,
 	String hostAccountType,
 	boolean hardMode,
-	int invocation)
+	int invocation,
+	List<String> requiredRoles,
+	String hostRole)
 {
 }

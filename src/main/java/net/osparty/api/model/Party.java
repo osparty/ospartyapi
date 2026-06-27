@@ -45,4 +45,20 @@ public class Party
 
 	/** The host's account type (NORMAL / IRONMAN / …), for display. */
 	private String hostAccountType;
+
+	/**
+	 * The full team composition the host wants, as role ids (a multiset, so e.g.
+	 * two "Range" slots appear twice). Empty/null for activities without roles.
+	 */
+	private List<String> requiredRoles;
+
+	/** The role id the host fills themselves, or null when roles don't apply. */
+	private String hostRole;
+
+	/**
+	 * Roles still open, as role ids (advisory; the host updates this live via the
+	 * heartbeat as members join/leave). Initialised to {@link #requiredRoles} minus
+	 * the {@link #hostRole}.
+	 */
+	private List<String> neededRoles;
 }

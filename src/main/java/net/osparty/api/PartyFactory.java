@@ -38,6 +38,9 @@ final class PartyFactory
 		party.setHostAccountType(request.hostAccountType());
 		party.setHardMode(request.hardMode());
 		party.setInvocation(request.invocation());
+		party.setRequiredRoles(request.requiredRoles());
+		party.setHostRole(request.hostRole());
+		party.setNeededRoles(initialNeededRoles(request.requiredRoles(), request.hostRole()));
 		// Advisory only — the host occupies the first slot until the live room takes over.
 		party.setSize(1);
 		List<String> members = new ArrayList<>();
@@ -47,6 +50,46 @@ final class PartyFactory
 		}
 		party.setMembers(members);
 		return party;
+	}
+
+	/**
+	 * The roles still open right after creation: the full required composition with
+	 * the host's own role removed once (the host fills it). Null/empty in, null out.
+	 */
+	private static List<String> initialNeededRoles(List<String> requiredRoles, String hostRole)
+	{
+		if (requiredRoles == null || requiredRoles.isEmpty())
+		{
+			return requiredRoles;
+		}
+		List<String> needed = new ArrayList<>(requiredRoles);
+		if (hostRole != null)
+		{
+			needed.remove(hostRole);
+		}
+		return needed;
+	}
+
+	/**
+	 * Parse a comma-separated list of role ids (as sent on the heartbeat) into a
+	 * list. Null/blank in -> null out (treated as "no update" by callers).
+	 */
+	static List<String> parseRoles(String csv)
+	{
+		if (csv == null || csv.isBlank())
+		{
+			return null;
+		}
+		List<String> roles = new ArrayList<>();
+		for (String part : csv.split(","))
+		{
+			String role = part.trim();
+			if (!role.isEmpty())
+			{
+				roles.add(role);
+			}
+		}
+		return roles;
 	}
 
 	static String newInviteCode()

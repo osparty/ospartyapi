@@ -86,7 +86,7 @@ public class InMemoryPartyRepository implements PartyRepository
 	}
 
 	@Override
-	public Optional<Party> heartbeat(String id, Integer size, String world, String layout)
+	public Optional<Party> heartbeat(String id, Integer size, String world, String layout, String roles)
 	{
 		Party party = parties.get(id);
 		if (party == null)
@@ -94,8 +94,8 @@ public class InMemoryPartyRepository implements PartyRepository
 			return Optional.empty();
 		}
 		lastSeen.put(id, System.currentTimeMillis());
-		// Report current occupancy, the host's live world and the CoX raid layout
-		// (all peer-to-peer; the host tells us).
+		// Report current occupancy, the host's live world, the CoX raid layout and
+		// the still-open roles (all peer-to-peer; the host tells us).
 		if (size != null && size > 0)
 		{
 			party.setSize(size);
@@ -107,6 +107,11 @@ public class InMemoryPartyRepository implements PartyRepository
 		if (layout != null && !layout.isBlank())
 		{
 			party.setLayout(layout);
+		}
+		List<String> neededRoles = PartyFactory.parseRoles(roles);
+		if (neededRoles != null)
+		{
+			party.setNeededRoles(neededRoles);
 		}
 		return Optional.of(party);
 	}

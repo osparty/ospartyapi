@@ -24,8 +24,13 @@ public interface PartyRepository
 	/** Look up the ad currently hosted by {@code host}, if any (for rejoin-on-restart). */
 	Optional<Party> findByHost(String host);
 
-	/** Advertise a party. Replaces any existing ad from the same host. */
-	Party create(PartyRequest request);
+	/**
+	 * Advertise a party. Replaces any existing ad from the same host. {@code hostKey}
+	 * is the caller's secret credential: stored alongside the ad (never returned to
+	 * clients) and required on later host-only mutations (see {@link #authorize}). A
+	 * null/blank key creates an unauthenticated ad (back-compat for older clients).
+	 */
+	Party create(PartyRequest request, String hostKey);
 
 	/**
 	 * Host keep-alive: refresh the ad's liveness and, when non-null, update the
@@ -37,6 +42,20 @@ public interface PartyRepository
 	Optional<Party> heartbeat(String id, Integer size, String world, String layout, String roles);
 
 	Optional<Party> delete(String id);
+
+	/**
+	 * Whether {@code hostKey} may perform a host-only mutation on party {@code id}:
+	 * {@link Authorization#NOT_FOUND} when no such ad exists, {@link Authorization#FORBIDDEN}
+	 * when the ad has a credential the key doesn't match, else {@link Authorization#OK}
+	 * (including ads created without a credential, which stay open for back-compat).
+	 */
+	Authorization authorize(String id, String hostKey);
+
+	/** Outcome of {@link #authorize}. */
+	enum Authorization
+	{
+		OK, NOT_FOUND, FORBIDDEN
+	}
 
 	/**
 	 * Drop ads not heard from within {@code maxAgeMs}. Backends with native key

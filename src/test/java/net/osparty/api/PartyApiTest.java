@@ -93,6 +93,33 @@ class PartyApiTest
 	}
 
 	@Test
+	void hostKeyProtectsKeyedPartiesAndIsNeverReturned() throws Exception
+	{
+		String body = "{\"activity\":\"cox\",\"host\":\"Keyed\",\"capacity\":2,\"passphrase\":\"p\"}";
+		String json = mvc.perform(post("/api/v1/parties").contentType(MediaType.APPLICATION_JSON)
+				.header("X-OSParty-Host-Key", "s3cret").content(body))
+			.andExpect(status().isCreated())
+			// The credential must never be echoed back to clients.
+			.andExpect(jsonPath("$.hostKey").doesNotExist())
+			.andReturn().getResponse().getContentAsString();
+		String id = objectMapper.readTree(json).get("id").asText();
+
+		// Missing or wrong key can't heartbeat or disband a key-bearing ad.
+		mvc.perform(put("/api/v1/parties/" + id + "/heartbeat"))
+			.andExpect(status().isForbidden());
+		mvc.perform(put("/api/v1/parties/" + id + "/heartbeat").header("X-OSParty-Host-Key", "wrong"))
+			.andExpect(status().isForbidden());
+		mvc.perform(delete("/api/v1/parties/" + id).header("X-OSParty-Host-Key", "wrong"))
+			.andExpect(status().isForbidden());
+
+		// The real key is accepted.
+		mvc.perform(put("/api/v1/parties/" + id + "/heartbeat").header("X-OSParty-Host-Key", "s3cret"))
+			.andExpect(status().isOk());
+		mvc.perform(delete("/api/v1/parties/" + id).header("X-OSParty-Host-Key", "s3cret"))
+			.andExpect(status().isOk());
+	}
+
+	@Test
 	void deleteUnknownPartyIs404() throws Exception
 	{
 		mvc.perform(delete("/api/v1/parties/does-not-exist"))

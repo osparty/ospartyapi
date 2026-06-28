@@ -2,6 +2,8 @@ package net.osparty.api;
 
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.List;
@@ -114,6 +116,25 @@ final class PartyFactory
 			return "UNSPECIFIED";
 		}
 		return lootRule.trim().toUpperCase();
+	}
+
+	/**
+	 * Whether a stored host credential matches the one supplied on a request. An ad
+	 * with no stored credential ({@code stored} null/blank) is open to anyone — older
+	 * clients that pre-date the feature. Otherwise the supplied key must match exactly
+	 * (compared in constant time so a mismatch can't be timed out character by character).
+	 */
+	static boolean hostKeyAuthorized(String stored, String supplied)
+	{
+		if (stored == null || stored.isBlank())
+		{
+			return true;
+		}
+		if (supplied == null)
+		{
+			return false;
+		}
+		return MessageDigest.isEqual(stored.getBytes(StandardCharsets.UTF_8), supplied.getBytes(StandardCharsets.UTF_8));
 	}
 
 	/** Case/whitespace-insensitive host comparison (RSNs may carry nbsp). */

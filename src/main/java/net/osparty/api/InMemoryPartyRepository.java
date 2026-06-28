@@ -25,6 +25,8 @@ public class InMemoryPartyRepository implements PartyRepository
 {
 	private final Map<String, Party> parties = new ConcurrentHashMap<>();
 	private final Map<String, Long> lastSeen = new ConcurrentHashMap<>();
+	/** Party id -> host credential; the secret authorising host-only mutations. */
+	private final Map<String, String> hostKeys = new ConcurrentHashMap<>();
 	private final AtomicLong idSequence = new AtomicLong(1000);
 
 	@Override
@@ -63,7 +65,7 @@ public class InMemoryPartyRepository implements PartyRepository
 	}
 
 	@Override
-	public Party create(PartyRequest request)
+	public Party create(PartyRequest request, String hostKey)
 	{
 		long now = System.currentTimeMillis();
 		Party party = PartyFactory.fromRequest(request, nextId(), uniqueInviteCode(), now);
@@ -75,6 +77,7 @@ public class InMemoryPartyRepository implements PartyRepository
 			if (PartyFactory.sameHost(p.getHost(), request.host()))
 			{
 				lastSeen.remove(p.getId());
+				hostKeys.remove(p.getId());
 				return true;
 			}
 			return false;
@@ -82,7 +85,22 @@ public class InMemoryPartyRepository implements PartyRepository
 
 		parties.put(party.getId(), party);
 		lastSeen.put(party.getId(), now);
+		if (hostKey != null && !hostKey.isBlank())
+		{
+			hostKeys.put(party.getId(), hostKey);
+		}
 		return party;
+	}
+
+	@Override
+	public Authorization authorize(String id, String hostKey)
+	{
+		if (!parties.containsKey(id))
+		{
+			return Authorization.NOT_FOUND;
+		}
+		return PartyFactory.hostKeyAuthorized(hostKeys.get(id), hostKey)
+			? Authorization.OK : Authorization.FORBIDDEN;
 	}
 
 	@Override
@@ -120,6 +138,7 @@ public class InMemoryPartyRepository implements PartyRepository
 	public Optional<Party> delete(String id)
 	{
 		lastSeen.remove(id);
+		hostKeys.remove(id);
 		return Optional.ofNullable(parties.remove(id));
 	}
 
@@ -133,6 +152,7 @@ public class InMemoryPartyRepository implements PartyRepository
 			if (entry.getValue() < cutoff)
 			{
 				lastSeen.remove(entry.getKey());
+				hostKeys.remove(entry.getKey());
 				if (parties.remove(entry.getKey()) != null)
 				{
 					removed++;

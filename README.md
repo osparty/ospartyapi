@@ -14,12 +14,26 @@ All endpoints live under the versioned base path **`/api/v1`**.
 |--------|----------------------------------|--------------------------------|-------------------------|
 | GET    | `/api/v1/parties`                | `?activity={id}&player={name}` | `Party[]` (public only) |
 | GET    | `/api/v1/parties/by-code/{code}` | —                              | `Party`                 |
-| POST   | `/api/v1/parties`                | `PartyRequest`                 | `Party` (201)           |
-| PUT    | `/api/v1/parties/{id}/heartbeat` | —                              | `Party`                 |
-| DELETE | `/api/v1/parties/{id}`           | —                              | `Party`                 |
+| POST   | `/api/v1/parties`                | `PartyRequest` (+ host key)    | `Party` (201)           |
+| PUT    | `/api/v1/parties/{id}/heartbeat` | host key                       | `Party`                 |
+| DELETE | `/api/v1/parties/{id}`           | host key                       | `Party`                 |
 
 `activity` filters to one activity id (e.g. `cox`, `tob`, `toa`, `nex`, …).
 `player` is accepted but unused — the plugin hides your own ad client-side.
+
+**Host authentication** — host-only mutations are gated by a per-party secret so a
+hand-rolled REST client can't hijack or close someone else's ad. On `POST` the
+plugin mints a random key and sends it in the **`X-OSParty-Host-Key`** header; the
+server stores it in the party's session (never returned in any response) and
+requires the same header on that party's `heartbeat` and `DELETE`:
+
+- correct key → the mutation proceeds,
+- wrong / missing key on a key-bearing ad → **`403 Forbidden`**,
+- no such ad → **`404`**.
+
+Ads created **without** a key stay open (no header required) — backward
+compatibility for plugin versions that predate the feature; those ads simply
+aren't protected until the host updates and re-advertises.
 
 **Party types** — an ad can be **private** (`privateParty`: excluded from the
 public list, reachable only via its server-generated **`inviteCode`** at

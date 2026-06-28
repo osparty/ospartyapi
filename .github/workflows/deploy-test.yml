@@ -1,0 +1,97 @@
+name: Deploy API (test)
+
+# Continuous test deploy: every push to main (and on-demand via the Run workflow
+# button) builds the current source and ships it to the test stack at
+# testing.osparty.net. Production stays tag-driven (see deploy.yml) and is
+# untouched — this runs a separate stack/Redis/port on the same server.
+#
+# Uses the same repository secrets as the prod deploy:
+#   API_SERVER_ADDRESS  - server host/IP to SSH into
+#   SSH_USER            - SSH user (must be able to run docker / docker compose)
+#   SSH_KEY             - private SSH key for that user (PEM, no passphrase)
+# Optional:
+#   SSH_PORT            - SSH port (defaults to 22)
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Don't run two test deploys at once, but never block a prod deploy.
+concurrency:
+  group: deploy-api-test
+  cancel-in-progress: false
+
+env:
+  DEPLOY_DIR: osparty-api-test   # directory on the server, under the SSH user's home
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          BASE=$(sed -nE "s/.*findProperty\('appVersion'\) \?: '([^']+)'.*/\1/p" build.gradle | head -1)
+          VERSION="${BASE:-0.0.0}-test-$(git rev-parse --short HEAD)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Deploying test version: $VERSION"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Build and test
+        run: ./gradlew --no-daemon clean test bootJar -PappVersion=${{ steps.version.outputs.version }}
+
+      - name: Stage the test deploy bundle
+        run: |
+          rm -rf stage
+          mkdir -p stage/build/libs
+          cp build/libs/app.jar                  stage/build/libs/app.jar
+          cp Dockerfile                          stage/Dockerfile
+          cp .dockerignore                       stage/.dockerignore
+          cp osparty-api-test/docker-compose.yml stage/docker-compose.yml
+
+      - name: Copy bundle to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.API_SERVER_ADDRESS }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          # strip the leading "stage/" so files land directly under DEPLOY_DIR.
+          source: "stage/build/libs/app.jar,stage/Dockerfile,stage/.dockerignore,stage/docker-compose.yml"
+          target: ${{ env.DEPLOY_DIR }}
+          strip_components: 1
+          overwrite: true
+
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
+        with:
+          host: ${{ secrets.API_SERVER_ADDRESS }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          envs: VERSION,DEPLOY_DIR
+          script: |
+            set -euo pipefail
+            cd "$DEPLOY_DIR"
+
+            # Rebuild the test api image from the new jar and (re)start the stack.
+            # The test redis/volume keep running; compose recreates only what changed.
+            docker compose up -d --build
+
+            # Tidy dangling images from the rebuild.
+            docker image prune -f >/dev/null 2>&1 || true
+
+            echo "Deployed osparty-api-test ${VERSION}"

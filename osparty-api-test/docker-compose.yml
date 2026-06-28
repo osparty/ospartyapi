@@ -1,0 +1,63 @@
+# Test stack for the AIO Party API.
+#
+# Isolated copy of the API — separate Redis, volume, published port and compose
+# project — so it runs next to production on the same host without ever touching
+# prod data. Deployed by .github/workflows/deploy-test.yml, which stages the
+# pre-built jar + Dockerfile alongside this file on the server and runs:
+#     docker compose up -d --build
+#
+# The API is published on host port 8081 (prod uses 8080). Point the Nginx Proxy
+# Manager proxy host for testing.osparty.net at 127.0.0.1:8081 (or
+# host.docker.internal:8081 from inside the NPM container).
+name: osparty-api-test
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: osparty-redis-test
+    command: ["redis-server", "--appendonly", "yes"]   # durable across restarts
+    volumes:
+      - redis-test-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build:
+      # CI stages build/libs/app.jar + Dockerfile into this directory, so the build
+      # context is the deploy directory itself (mirrors the prod stack).
+      context: .
+      dockerfile: Dockerfile
+    container_name: osparty-api-test
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      APP_STORAGE: redis
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+    # Distinct host port so the test stack runs alongside prod (8080) without clashing.
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+
+    # --- Optional: route NPM to this container by name over a shared network ---
+    # Instead of the published port above, you can put this service on the same
+    # docker network as your Nginx Proxy Manager and point the proxy host at
+    # http://osparty-api-test:8080. Create/attach the network on the server, then
+    # uncomment the two `networks:` blocks below (and set the name to match yours).
+    #
+    # networks:
+    #   - default   # keep talking to the test redis
+    #   - proxy     # reachable by NPM as osparty-api-test:8080
+
+volumes:
+  redis-test-data:
+
+# networks:
+#   proxy:
+#     external: true
+#     name: <your-nginx-proxy-manager-network>

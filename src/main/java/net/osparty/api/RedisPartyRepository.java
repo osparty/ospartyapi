@@ -35,6 +35,8 @@ public class RedisPartyRepository implements PartyRepository
 	private static final String PARTY_KEY = "party:";
 	private static final String HOST_KEY = "partyhost:";
 	private static final String CODE_KEY = "partycode:";
+	/** Per-party host credential (the session secret), kept under the same TTL as the ad. */
+	private static final String CREDENTIAL_KEY = "partykey:";
 	private static final String SEQ_KEY = "party:seq";
 
 	private final StringRedisTemplate redis;
@@ -99,13 +101,13 @@ public class RedisPartyRepository implements PartyRepository
 	}
 
 	@Override
-	public Party create(PartyRequest request)
+	public Party create(PartyRequest request, String hostKey)
 	{
 		long now = System.currentTimeMillis();
-		String hostKey = HOST_KEY + PartyFactory.normalizeHost(request.host());
+		String hostIndexKey = HOST_KEY + PartyFactory.normalizeHost(request.host());
 
 		// One ad per host: drop the host's previous ad (if any) before writing.
-		String previousId = redis.opsForValue().get(hostKey);
+		String previousId = redis.opsForValue().get(hostIndexKey);
 		if (previousId != null)
 		{
 			Party previous = read(PARTY_KEY + previousId);
@@ -114,6 +116,7 @@ public class RedisPartyRepository implements PartyRepository
 				redis.delete(CODE_KEY + previous.getInviteCode());
 			}
 			redis.delete(PARTY_KEY + previousId);
+			redis.delete(CREDENTIAL_KEY + previousId);
 		}
 
 		String id = String.valueOf(redis.opsForValue().increment(SEQ_KEY));
@@ -121,9 +124,25 @@ public class RedisPartyRepository implements PartyRepository
 		Party party = PartyFactory.fromRequest(request, id, inviteCode, now);
 
 		redis.opsForValue().set(PARTY_KEY + id, write(party), ttl);
-		redis.opsForValue().set(hostKey, id, ttl);
+		redis.opsForValue().set(hostIndexKey, id, ttl);
 		redis.opsForValue().set(CODE_KEY + inviteCode, id, ttl);
+		if (hostKey != null && !hostKey.isBlank())
+		{
+			redis.opsForValue().set(CREDENTIAL_KEY + id, hostKey, ttl);
+		}
 		return party;
+	}
+
+	@Override
+	public Authorization authorize(String id, String hostKey)
+	{
+		if (read(PARTY_KEY + id) == null)
+		{
+			return Authorization.NOT_FOUND;
+		}
+		String stored = redis.opsForValue().get(CREDENTIAL_KEY + id);
+		return PartyFactory.hostKeyAuthorized(stored, hostKey)
+			? Authorization.OK : Authorization.FORBIDDEN;
 	}
 
 	@Override
@@ -170,6 +189,7 @@ public class RedisPartyRepository implements PartyRepository
 			redis.expire(key, ttl);
 		}
 		redis.expire(HOST_KEY + PartyFactory.normalizeHost(party.getHost()), ttl);
+		redis.expire(CREDENTIAL_KEY + id, ttl);
 		if (party.getInviteCode() != null)
 		{
 			redis.expire(CODE_KEY + party.getInviteCode(), ttl);
@@ -188,6 +208,7 @@ public class RedisPartyRepository implements PartyRepository
 		}
 		redis.delete(key);
 		redis.delete(HOST_KEY + PartyFactory.normalizeHost(party.getHost()));
+		redis.delete(CREDENTIAL_KEY + id);
 		if (party.getInviteCode() != null)
 		{
 			redis.delete(CODE_KEY + party.getInviteCode());

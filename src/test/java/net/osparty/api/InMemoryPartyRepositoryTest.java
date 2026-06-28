@@ -21,7 +21,7 @@ class InMemoryPartyRepositoryTest
 	void freshAdsSurviveButStaleOnesAreEvicted()
 	{
 		InMemoryPartyRepository store = new InMemoryPartyRepository();
-		store.create(req("Host", "cox"));
+		store.create(req("Host", "cox"), "key");
 
 		// Generous TTL: nothing is stale yet.
 		assertEquals(0, store.evictStale(60_000));
@@ -36,8 +36,8 @@ class InMemoryPartyRepositoryTest
 	void reAdvertisingReplacesTheHostsPreviousAd()
 	{
 		InMemoryPartyRepository store = new InMemoryPartyRepository();
-		store.create(req("Dup", "cox"));
-		store.create(req("Dup", "tob"));
+		store.create(req("Dup", "cox"), "key");
+		store.create(req("Dup", "tob"), "key");
 
 		assertEquals(1, store.list(null).size());
 		assertEquals("tob", store.list(null).get(0).getActivity());
@@ -47,10 +47,10 @@ class InMemoryPartyRepositoryTest
 	void privatePartiesAreHiddenFromListButFoundByCode()
 	{
 		InMemoryPartyRepository store = new InMemoryPartyRepository();
-		store.create(req("Pub", "cox"));
+		store.create(req("Pub", "cox"), "key");
 		Party priv = store.create(
 			new PartyRequest("toa", "Priv", null, 2, null, 0, 0, "p", true, "split", true, "IRONMAN", false, 300,
-				null, null));
+				null, null), "key");
 
 		// Public list excludes the private party.
 		assertEquals(1, store.list(null).size());
@@ -63,5 +63,23 @@ class InMemoryPartyRepositoryTest
 		assertTrue(store.findByInviteCode(priv.getInviteCode().toLowerCase()).isPresent());
 		assertEquals("Priv", store.findByInviteCode(priv.getInviteCode()).get().getHost());
 		assertFalse(store.findByInviteCode("nope").isPresent());
+	}
+
+	@Test
+	void hostKeyGatesMutations()
+	{
+		InMemoryPartyRepository store = new InMemoryPartyRepository();
+		Party keyed = store.create(req("Keyed", "cox"), "secret");
+
+		// Only the matching key authorises a host mutation on a key-bearing ad.
+		assertEquals(PartyRepository.Authorization.OK, store.authorize(keyed.getId(), "secret"));
+		assertEquals(PartyRepository.Authorization.FORBIDDEN, store.authorize(keyed.getId(), "wrong"));
+		assertEquals(PartyRepository.Authorization.FORBIDDEN, store.authorize(keyed.getId(), null));
+		assertEquals(PartyRepository.Authorization.NOT_FOUND, store.authorize("9999", "secret"));
+
+		// An ad created without a key stays open (back-compat for older clients).
+		Party open = store.create(req("Open", "tob"), null);
+		assertEquals(PartyRepository.Authorization.OK, store.authorize(open.getId(), null));
+		assertEquals(PartyRepository.Authorization.OK, store.authorize(open.getId(), "anything"));
 	}
 }

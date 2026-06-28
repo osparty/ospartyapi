@@ -185,6 +185,28 @@ For a hardened deploy, drop the `api` service's `ports:` mapping so NPM
 ./gradlew build    # full build (jar in build/libs)
 ```
 
+## Deploy
+
+CI deploys are **tag-driven** (`.github/workflows/deploy.yml`). Pushing a semver
+tag builds that version, ships the jar to the server over SSH, and runs
+`docker compose up -d --build` there:
+
+```sh
+git tag v1.2.3 && git push origin v1.2.3   # builds + deploys version 1.2.3
+```
+
+The build version comes from the tag (`v1.2.3` -> `1.2.3`, via
+`-PappVersion`), each release jar is archived on the server under
+`releases/app-<version>.jar` (last 5 kept for rollback), the built image is
+tagged `osparty-api:<version>` and `:latest`, and a GitHub Release is cut for the
+tag. You can also trigger a manual deploy from the Actions tab (**Run workflow**),
+optionally passing a version label.
+
+Required repository **secrets**: `API_SERVER_ADDRESS`, `SSH_USER`, `SSH_KEY`
+(PEM private key, no passphrase). Optional: `SSH_PORT` (defaults to 22). The SSH
+user must be able to run `docker` / `docker compose`, which needs Docker Compose
+v2 on the server.
+
 ## Layout
 
 ```

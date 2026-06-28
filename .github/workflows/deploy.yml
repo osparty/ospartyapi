@@ -1,0 +1,124 @@
+name: Deploy API
+
+# Versioned, tag-driven deploys. Pushing a semver tag (e.g. v1.2.3) builds that
+# version and ships it to the server; a workflow_dispatch run deploys on demand
+# (versioned as <gradle-version>-<short-sha> unless you pass a version).
+#
+# Required repository secrets:
+#   API_SERVER_ADDRESS  - server host/IP to SSH into
+#   SSH_USER            - SSH user (must be able to run docker / docker compose)
+#   SSH_KEY             - private SSH key for that user (PEM, no passphrase)
+# Optional:
+#   SSH_PORT            - SSH port (defaults to 22)
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label for a manual deploy (default: <gradle version>-<sha>)'
+        required: false
+
+# Let release notes be created from the GITHUB_TOKEN.
+permissions:
+  contents: write
+
+# Never run two deploys at once.
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
+env:
+  DEPLOY_DIR: osparty-api      # directory on the server, under the SSH user's home
+  RELEASES_TO_KEEP: '5'        # versioned jars kept on the server for rollback
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            BASE=$(sed -nE "s/.*findProperty\('appVersion'\) \?: '([^']+)'.*/\1/p" build.gradle | head -1)
+            VERSION="${BASE:-0.0.0}-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Deploying version: $VERSION"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Build and test
+        run: ./gradlew --no-daemon clean test bootJar -PappVersion=${{ steps.version.outputs.version }}
+
+      - name: Copy artifacts to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.API_SERVER_ADDRESS }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          source: "build/libs/app.jar,Dockerfile,docker-compose.yml,.dockerignore"
+          target: ${{ env.DEPLOY_DIR }}
+          overwrite: true
+
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
+          KEEP: ${{ env.RELEASES_TO_KEEP }}
+        with:
+          host: ${{ secrets.API_SERVER_ADDRESS }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          envs: VERSION,DEPLOY_DIR,KEEP
+          script: |
+            set -euo pipefail
+            cd "$DEPLOY_DIR"
+
+            # Archive this build as a versioned, rollback-able release.
+            mkdir -p releases
+            cp build/libs/app.jar "releases/app-${VERSION}.jar"
+
+            # Rebuild the api image from the new jar and (re)start the stack. Redis
+            # and the proxy keep running; compose recreates only what changed.
+            docker compose up -d --build
+
+            # Tag the freshly built image with the version (and latest) for traceability/rollback.
+            IMAGE_ID="$(docker compose images -q api || true)"
+            if [ -n "$IMAGE_ID" ]; then
+              docker tag "$IMAGE_ID" "osparty-api:${VERSION}"
+              docker tag "$IMAGE_ID" "osparty-api:latest"
+            fi
+
+            # Tidy up: drop dangling images and keep only the newest release jars.
+            docker image prune -f >/dev/null 2>&1 || true
+            ls -1t releases/app-*.jar 2>/dev/null | tail -n +"$((KEEP + 1))" | xargs -r rm -f
+
+            echo "Deployed osparty-api ${VERSION}"
+
+      - name: Create GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: build/libs/app.jar

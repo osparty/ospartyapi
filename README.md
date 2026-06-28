@@ -144,36 +144,31 @@ default mode and the tests run without a Redis server.
 
 ## Run the stack with Docker
 
-`docker-compose.yml` runs three services: the **API** (built from `./Dockerfile`),
-**Redis**, and **Nginx Proxy Manager** (reverse proxy + TLS). The Dockerfile
-copies in a **pre-built jar**, so build it first:
+`docker-compose.yml` runs two services: the **API** (built from `./Dockerfile`)
+and **Redis**. The Dockerfile copies in a **pre-built jar**, so build it first:
 
 ```sh
 ./gradlew bootJar          # -> build/libs/app.jar
-docker compose up --build  # builds the image, starts api + redis + nginx-proxy-manager
+docker compose up --build  # builds the image, starts api + redis
 ```
 
 - **API** on `http://localhost:8080`, wired to the `redis` service
   (`APP_STORAGE=redis`) via compose env — no code/config changes needed.
 - **Redis** — ads persist in the `redis-data` volume (`--appendonly yes`), so
   they survive both API and Redis restarts.
-- **Nginx Proxy Manager** — public `80`/`443`, admin UI on `81`.
-- `docker compose down` stops it (add `-v` to also wipe the volumes).
+- `docker compose down` stops it (add `-v` to also wipe the volume).
 
-### Putting the API behind Nginx Proxy Manager
+### TLS / reverse proxy
 
-1. Open the admin UI: `http://<host>:81`. Default login **admin@example.com /
-   changeme** — change these on first sign-in.
-2. **Hosts → Proxy Hosts → Add Proxy Host**:
-   - *Domain Names*: your domain (e.g. `party.example.com`)
-   - *Forward Hostname / IP*: `api`  (the compose service name; reachable on the
-     internal network)
-   - *Forward Port*: `8080`
-   - optionally enable **SSL → Request a new Let's Encrypt certificate**.
-3. Point the plugin's `API base URL` at `https://party.example.com`.
+TLS termination is handled by a **separate Nginx Proxy Manager stack** (not part
+of this compose). The API publishes port `8080` on the host, so point an NPM
+Proxy Host at it:
 
-For a hardened deploy, drop the `api` service's `ports:` mapping so NPM
-(`80`/`443`) is the only public entry point.
+- *Forward Hostname / IP*: the host's address — e.g. `127.0.0.1`, or
+  `host.docker.internal` from inside the NPM container
+- *Forward Port*: `8080`
+- optionally enable **SSL → Request a new Let's Encrypt certificate**, then point
+  the plugin's `API base URL` at `https://party.example.com`.
 
 > The jar is Java 17 bytecode on a `eclipse-temurin:17-jre` base. Rebuild the
 > jar and re-run `up --build` to deploy a new version.

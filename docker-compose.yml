@@ -1,9 +1,13 @@
-# Full stack: the advertising API (built from ./Dockerfile) + Redis.
+# The advertising API (built from ./Dockerfile) + Redis.
 #
 #   ./gradlew bootJar          # produce build/libs/app.jar first
 #   docker compose up --build  # build the image and start the stack
 #
 # API on http://localhost:8080; ads persist in the redis-data volume.
+#
+# TLS / reverse proxy is handled by a separate Nginx Proxy Manager stack: point
+# its Proxy Host at this host's published port (e.g. forward to 127.0.0.1:8080,
+# or host.docker.internal:8080 from inside the NPM container).
 services:
   redis:
     image: redis:7-alpine
@@ -28,31 +32,10 @@ services:
       APP_STORAGE: redis
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
-    # Published for direct access / the plugin's default localhost:8080. Nginx
-    # Proxy Manager reaches it over the internal network as host "api" regardless,
-    # so for a locked-down public deploy you can drop this ports mapping and let
-    # NPM (80/443) be the only public entry point.
+    # Published on the host so the external Nginx Proxy Manager can route to it.
     ports:
       - "8080:8080"
     restart: unless-stopped
 
-  # Reverse proxy + TLS (Let's Encrypt) with a web UI.
-  #   Admin UI:   http://<host>:81   (default login admin@example.com / changeme)
-  #   Then add a Proxy Host -> Forward Hostname "api", Forward Port 8080.
-  nginx-proxy-manager:
-    image: jc21/nginx-proxy-manager:latest
-    depends_on:
-      - api
-    ports:
-      - "80:80"     # public HTTP
-      - "443:443"   # public HTTPS
-      - "81:81"     # admin UI
-    volumes:
-      - npm-data:/data
-      - npm-letsencrypt:/etc/letsencrypt
-    restart: unless-stopped
-
 volumes:
   redis-data:
-  npm-data:
-  npm-letsencrypt:

@@ -110,6 +110,41 @@ class PartyWebSocketTest {
 	}
 
 	@Test
+	void updateOverSocketChangesRolesAndLearner() throws Exception {
+		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
+		WebSocketSession session = connect(messages);
+		try {
+			session.sendMessage(new TextMessage("{\"type\":\"subscribe\"}"));
+			awaitWhere(messages, m -> "snapshot".equals(type(m)), "snapshot");
+
+			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-roles\",\"request\":"
+				+ "{\"activity\":\"cox\",\"host\":\"WsRoles\",\"capacity\":3,\"passphrase\":\"pp-roles\","
+				+ "\"requiredRoles\":[\"melee\",\"fill\",\"fill\"],\"hostRole\":\"melee\",\"learner\":false}}"));
+			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
+			String id = hosted.path("party").path("id").asText();
+
+			awaitWhere(messages, m -> "created".equals(type(m)) && id.equals(m.path("party").path("id").asText()),
+				"created for the hosted ad");
+
+			session.sendMessage(new TextMessage("{\"type\":\"update\",\"id\":\"" + id + "\",\"patch\":"
+				+ "{\"requiredRoles\":[\"mage\",\"fill\",\"fill\"],\"hostRole\":\"mage\",\"learner\":true}}"));
+
+			JsonNode updated = awaitWhere(messages,
+				m -> "updated".equals(type(m)) && id.equals(m.path("party").path("id").asText())
+					&& m.path("party").path("learner").asBoolean(),
+				"updated with new roles + learner");
+			assertThat(updated.path("party").path("hostRole").asText()).isEqualTo("mage");
+			assertThat(updated.path("party").path("requiredRoles").get(0).asText()).isEqualTo("mage");
+			assertThat(updated.path("party").path("learner").asBoolean()).isTrue();
+			// neededRoles re-seeds from the new composition minus the host's role.
+			assertThat(updated.path("party").path("neededRoles").toString()).isEqualTo("[\"fill\",\"fill\"]");
+		}
+		finally {
+			session.close();
+		}
+	}
+
+	@Test
 	void getByCodeReturnsPrivatePartyAndMissCarriesNoParty() throws Exception {
 		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
 		WebSocketSession session = connect(messages);

@@ -18,5 +18,7 @@ public record PartyRequest(
 	boolean hardMode,
 	int invocation,
 	List<String> requiredRoles,
-	String hostRole) {
+	String hostRole,
+	boolean learner,
+	boolean teacher) {
 }

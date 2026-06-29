@@ -28,4 +28,6 @@ public class Party {
 	private List<String> requiredRoles;
 	private String hostRole;
 	private List<String> neededRoles;
+	private boolean learner;
+	private boolean teacher;
 }

@@ -3,15 +3,8 @@ package net.osparty.api.model;
 import java.util.List;
 import lombok.Data;
 
-/**
- * A party advertisement, serialised exactly as the RuneLite plugin's
- * {@code net.osparty.model.Party} expects it. {@code passphrase} is the key to
- * the live peer-to-peer room; {@code members}/{@code size} are advisory only
- * (the authoritative roster lives in that room, not here).
- */
 @Data
-public class Party
-{
+public class Party {
 	private String id;
 	private String activity;
 	private String host;
@@ -19,46 +12,20 @@ public class Party
 	private int size;
 	private int capacity;
 	private String world;
-	/** Live CoX raid layout advertised by the host, or null. */
 	private String layout;
-	/** Raid run as the harder variant: CoX CM / ToB HMT. */
 	private boolean hardMode;
-	/** ToA invocation level (0 = unset/normal), shown in the title as "ToA (n)". */
 	private int invocation;
 	private long createdAt;
 	private String passphrase;
 	private int minKillCount;
 	private int minHardModeKillCount;
 	private List<String> members;
-
-	/** Private parties are not returned by search — they're joined via {@link #inviteCode}. */
 	private boolean privateParty;
-
-	/** Short server-generated code used to look up this party (esp. when private). */
 	private String inviteCode;
-
-	/** Loot rule: FFA / SPLIT / UNSPECIFIED. */
 	private String lootRule;
-
-	/** When true, only ironman accounts should join. */
 	private boolean ironmanOnly;
-
-	/** The host's account type (NORMAL / IRONMAN / …), for display. */
 	private String hostAccountType;
-
-	/**
-	 * The full team composition the host wants, as role ids (a multiset, so e.g.
-	 * two "Range" slots appear twice). Empty/null for activities without roles.
-	 */
 	private List<String> requiredRoles;
-
-	/** The role id the host fills themselves, or null when roles don't apply. */
 	private String hostRole;
-
-	/**
-	 * Roles still open, as role ids (advisory; the host updates this live via the
-	 * heartbeat as members join/leave). Initialised to {@link #requiredRoles} minus
-	 * the {@link #hostRole}.
-	 */
 	private List<String> neededRoles;
 }

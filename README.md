@@ -62,8 +62,11 @@ app:
   rate-limit:
     interval-ms: 5000     # min gap between POSTs per IP (0 disables)
   ads:
-    ttl-ms: 90000         # reap ads not heartbeated within this window
-    evict-interval-ms: 30000
+    ttl-ms: 90000         # ad TTL; refreshed by the host's socket (or legacy heartbeat)
+  ws:
+    enabled: true              # live party-list push (see below); false disables it
+    reconcile-interval-ms: 5000 # how often changes are diffed + pushed to clients
+    touch-interval-ms: 5000    # how often a hosting socket refreshes its ad's TTL
 ```
 
 ### `PartyRequest` (POST body)
@@ -115,6 +118,58 @@ optional (`lootRule` defaults to `UNSPECIFIED`).
 `size`/`members` are advisory only; the real roster lives in the P2P room.
 `inviteCode` is server-generated.
 
+## Live updates (WebSocket)
+
+So clients don't have to poll `GET /api/v1/parties` on a timer, the open list is
+also pushed over a WebSocket at **`/api/v1/ws/parties`** (`wss://` behind TLS).
+
+```
+client → {"type":"subscribe","activity":"cox"}   # activity optional; omit for all public ads
+server → {"type":"snapshot","version":N,"parties":[ … ]}   # current ads, once, on subscribe
+server → {"type":"created","version":N,"party":{ … }}      # then deltas as the set changes
+server → {"type":"updated","version":N,"party":{ … }}
+server → {"type":"removed","version":N,"id":"1000"}
+```
+
+Deltas are **idempotent** (upsert/remove by id) and a reconnect re-sends a full
+snapshot, so a dropped frame self-heals — clients keep a map by id and re-render
+on each frame. `version` is a loose ordering hint. A connection only gets this
+firehose after it `subscribe`s (and can `unsubscribe`), so a host-only socket
+doesn't receive it.
+
+Hosts also **write** over the same socket — these mutate the same store as the
+REST endpoints, so the change reaches searchers through the reconciler above:
+
+```
+client → {"type":"host","key":"<uuid>","request":{ …PartyRequest… }}
+server → {"type":"hosted","party":{ … }}              # directed ack: server-assigned id/inviteCode
+client → {"type":"update","id":"7","key":"<uuid>","patch":{ …PartyUpdate… }}   # partial change
+client → {"type":"resume","id":"7","key":"<uuid>"}    # reclaim the ad after a reconnect
+server → {"type":"gone","id":"7"}                     #   …if the grace window already lapsed
+client → {"type":"unhost","id":"7","key":"<uuid>"}    # disband
+server → {"type":"error","id":"7","detail":"…"}       # directed: a write was rejected
+```
+
+**The socket is the keep-alive.** While a hosting session is open the server
+refreshes that ad's TTL every `app.ws.touch-interval-ms` — no periodic heartbeat.
+A dropped socket leaves the ad in its remaining TTL (the *grace* window, ≈
+`ttl-ms − touch-interval-ms`); the host reconnects and `resume`s by id+key to keep
+the **same** ad, or it lapses and is reaped. Ownership is the session that
+created/reclaimed the ad; the host key is the cross-reconnect credential. (Writes
+also accept the key directly, so a REST-created ad can be adopted by the socket.)
+
+**Why it scales** — a single `PartyReconciler` diffs the ad set every
+`app.ws.reconcile-interval-ms` and pushes the changes to all subscribers, so
+server work is **constant per interval regardless of client count** (vs. every
+client re-fetching the whole list every few seconds). Since the reconciler reads
+the shared store, multiple API instances each reconcile and push to their own
+subscribers with no cross-instance bus — the shared Redis *is* the bus. A change
+reaches clients within one interval; TTL-expired ads surface as `removed`.
+
+The REST endpoints stay fully supported (the plugin falls back to them if the
+socket can't connect — older server / WS blocked), so the contract is additive —
+`POST`/`PUT /{id}`/`DELETE` and the socket are two ways to drive the same store.
+
 ## Run
 
 ```sh
@@ -135,26 +190,22 @@ curl -X POST localhost:8080/api/v1/parties -H 'Content-Type: application/json' \
 
 ## Storage
 
-Two backends, chosen by `app.storage`:
-
-- **`memory`** (default) — in-process map. Fast, zero-ops, but ads are lost on
-  restart. Used by the tests.
-- **`redis`** — persists across restarts and uses Redis' **native key expiry**
-  as the liveness mechanism: each ad is written with a TTL, the host's heartbeat
-  refreshes it (`EXPIRE`), and Redis evicts it automatically when the host goes
-  quiet (so the scheduled evictor is a no-op). Needs a Redis server.
+**Redis only.** Ads persist across restarts and Redis' **native key expiry** is
+the liveness mechanism: each ad is written with a TTL (`app.ads.ttl-ms`), the host
+keeps it fresh (its open WebSocket, or the legacy REST heartbeat), and Redis evicts
+it automatically when the host goes quiet.
 
 ```sh
 # run Redis (e.g. Docker) then start the API pointed at it
 docker run --rm -p 6379:6379 redis:7-alpine
-./gradlew bootRun --args='--app.storage=redis'
+./gradlew bootRun
 # connection: spring.data.redis.host/port (default localhost:6379)
 ```
 
-Keys: `party:{id}` → JSON ad, `partyhost:{host}` → id (enforces one ad per
-host), `party:seq` → id counter. The `spring-boot-starter-data-redis` dependency
-is always present but only connects when `app.storage=redis` (lazy), so the
-default mode and the tests run without a Redis server.
+Keys: `party:{id}` → JSON ad, `partyhost:{host}` → id (enforces one ad per host),
+`partycode:{code}` → id, `partykey:{id}` → host credential, `party:seq` → id
+counter. The test suite runs against an in-memory fake (`@Profile("test")`), so
+`./gradlew test` needs no Redis.
 
 ## Run the stack with Docker
 
@@ -166,8 +217,8 @@ and **Redis**. The Dockerfile copies in a **pre-built jar**, so build it first:
 docker compose up --build  # builds the image, starts api + redis
 ```
 
-- **API** on `http://localhost:8080`, wired to the `redis` service
-  (`APP_STORAGE=redis`) via compose env — no code/config changes needed.
+- **API** on `http://localhost:8080`, wired to the `redis` service via compose env
+  (`SPRING_DATA_REDIS_HOST=redis`) — no code/config changes needed.
 - **Redis** — ads persist in the `redis-data` volume (`--appendonly yes`), so
   they survive both API and Redis restarts.
 - `docker compose down` stops it (add `-v` to also wipe the volume).
@@ -183,6 +234,10 @@ Proxy Host at it:
 - *Forward Port*: `8080`
 - optionally enable **SSL → Request a new Let's Encrypt certificate**, then point
   the plugin's `API base URL` at `https://party.example.com`.
+- **enable "Websockets Support"** on the Proxy Host (Details tab) so the
+  `/api/v1/ws/parties` upgrade is forwarded — otherwise the live push falls back
+  to REST polling. NPM keeps idle upgraded connections for `proxy_read_timeout`
+  (default 60s); the plugin pings every 20s, so the default is fine.
 
 > The jar is Java 17 bytecode on a `eclipse-temurin:17-jre` base. Rebuild the
 > jar and re-run `up --build` to deploy a new version.
@@ -190,7 +245,7 @@ Proxy Host at it:
 ## Test / build
 
 ```sh
-./gradlew test     # MockMvc + unit tests (run in memory mode, no Redis needed)
+./gradlew test     # MockMvc + WebSocket tests (in-memory fake, no Redis needed)
 ./gradlew build    # full build (jar in build/libs)
 ```
 
@@ -221,17 +276,21 @@ v2 on the server.
 ```
 src/main/java/net/osparty/api/
   OsrsPartyApiApplication.java   # Spring Boot entry point (@EnableScheduling)
-  PartyRepository.java           # storage interface
-  InMemoryPartyRepository.java   # default in-process store (one-per-host + lastSeen eviction)
-  RedisPartyRepository.java      # redis store (native TTL; app.storage=redis)
-  PartyFactory.java              # shared Party-building + host normalization
-  StaleAdEvictor.java            # scheduled reaper (no-op for redis)
+  PartyRepository.java           # storage interface (create/list/update/delete/authorize)
+  RedisPartyRepository.java      # the store: native-TTL ads (@Profile("!test"))
+  PartyFactory.java              # shared Party-building, host normalization, patch apply
   model/Party.java               # ad as returned to the plugin
   model/PartyRequest.java        # create-ad payload
-  web/PartyController.java       # GET/POST/PUT-heartbeat/DELETE /api/v1/parties
+  model/PartyUpdate.java         # partial-update payload (PUT /{id} and WS update)
+  web/PartyController.java       # GET/POST / PUT /{id} (+ /heartbeat alias) / DELETE
   web/WebConfig.java             # applies the /api/v1 base path prefix
   web/RateLimitFilter.java       # 1 POST / 5s per client IP -> 429
   web/RequestLoggingFilter.java  # per-request access log (method, IP, status, latency)
+  web/WebSocketConfig.java       # registers the /api/v1/ws/parties handler
+  web/PartyBroadcaster.java      # WS handler: snapshot, deltas, and host writes (host/update/resume/unhost)
+  web/PartyReconciler.java       # scheduled diff of the ad set -> created/updated/removed
+src/test/java/net/osparty/api/
+  FakePartyRepository.java       # in-memory PartyRepository for tests (@Profile("test"))
 ```
 
 > Requires JDK 17+. Compiles to Java 17 bytecode; runs on newer JDKs too.

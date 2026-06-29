@@ -1,0 +1,37 @@
+package net.osparty.api.repository;
+
+import net.osparty.api.model.Party;
+import net.osparty.api.model.PartyRequest;
+import net.osparty.api.model.PartyUpdate;
+import net.osparty.api.service.PartyFactory;
+import java.util.List;
+import java.util.Optional;
+
+public interface PartyRepository {
+	List<Party> list(String activity);
+
+	Optional<Party> findByInviteCode(String code);
+
+	Optional<Party> findByHost(String host);
+
+	Party create(PartyRequest request, String hostKey);
+
+	Optional<Party> update(String id, PartyUpdate patch);
+
+	default Optional<Party> heartbeat(String id, Integer size, String world, String layout, String roles) {
+		PartyUpdate patch = new PartyUpdate();
+		patch.setSize(size);
+		patch.setWorld(world);
+		patch.setLayout(layout);
+		patch.setNeededRoles(PartyFactory.parseRoles(roles));
+		return update(id, patch);
+	}
+
+	Optional<Party> delete(String id);
+
+	Authorization authorize(String id, String hostKey);
+
+	enum Authorization {
+		OK, NOT_FOUND, FORBIDDEN
+	}
+}

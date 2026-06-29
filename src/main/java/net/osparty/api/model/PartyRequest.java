@@ -2,12 +2,6 @@ package net.osparty.api.model;
 
 import java.util.List;
 
-/**
- * Payload the plugin POSTs to advertise a new party. Mirrors the plugin's
- * {@code net.osparty.model.PartyRequest}. The {@code passphrase} is generated
- * client-side (the host's RuneLite party passphrase) and simply stored; the
- * {@code inviteCode} is generated server-side, so it is not part of this request.
- */
 public record PartyRequest(
 	String activity,
 	String host,
@@ -24,6 +18,5 @@ public record PartyRequest(
 	boolean hardMode,
 	int invocation,
 	List<String> requiredRoles,
-	String hostRole)
-{
+	String hostRole) {
 }

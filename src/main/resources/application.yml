@@ -13,17 +13,21 @@ spring:
       # password: ...
 
 app:
-  # Ad storage backend: "memory" (default, in-process) or "redis" (persists
-  # across restarts, native TTL). Redis needs a server reachable at spring.data.redis.*
-  storage: memory
-  rate-limit:
-    # Minimum gap between POSTs from one client IP (ms). 0 disables.
-    interval-ms: 5000
   ads:
-    # An ad is reaped if it hasn't been heartbeated within this window (ms)...
+    # Ad TTL (ms): an ad is reaped if its host stops keeping it alive within this
+    # window. The open WebSocket refreshes it (see app.ws.touch-interval-ms). Redis
+    # evicts it natively when the TTL lapses.
     ttl-ms: 90000
-    # ...checked this often (ms).
-    evict-interval-ms: 30000
+  ws:
+    # Live party-list push over WebSocket (/api/v1/ws/parties). This is the only
+    # transport; disabling it leaves clients with no discovery or hosting path.
+    enabled: true
+    # How often the server diffs the ad set and pushes changes to subscribers (ms).
+    # This is the worst-case latency for a new/updated/removed party to reach clients.
+    reconcile-interval-ms: 5000
+    # How often a hosting socket refreshes its ad's TTL (socket-as-heartbeat). Must be
+    # comfortably below app.ads.ttl-ms; the gap between them is the disconnect grace.
+    touch-interval-ms: 5000
 
 logging:
   level:
@@ -31,3 +35,6 @@ logging:
     net.osparty.api.requests: INFO
     # Flip to DEBUG to also log request bodies (the PartyRequest JSON):
     # net.osparty.api.requests: DEBUG
+    # WebSocket: connect/subscribe/close log at INFO; flip to DEBUG to log every
+    # frame pushed on each live connection (the full snapshot/delta JSON):
+    # net.osparty.api.web.ws.PartyBroadcaster: DEBUG

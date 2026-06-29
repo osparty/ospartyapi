@@ -4,6 +4,7 @@ import net.osparty.api.PartyRepository;
 import net.osparty.api.PartyRepository.Authorization;
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
+import net.osparty.api.model.PartyUpdate;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -96,9 +97,25 @@ public class PartyController
 	}
 
 	/**
-	 * Host keep-alive. The plugin calls this periodically while it hosts so the ad
-	 * isn't reaped as stale. PUT (not POST) so it isn't subject to the create
-	 * rate limit. Requires the host key; 404 if the ad is gone, 403 if the key is wrong.
+	 * General host update: apply a partial change to the ad (any of size, world,
+	 * layout, open roles, description, capacity, loot rule, …). With the socket as the
+	 * keepalive, the host calls this only when something actually changes. PUT (not
+	 * POST) so it isn't subject to the create rate limit. Requires the host key; 404 if
+	 * the ad is gone, 403 if the key is wrong.
+	 */
+	@PutMapping("/{id}")
+	public Party update(@PathVariable String id,
+		@RequestBody(required = false) PartyUpdate patch,
+		@RequestHeader(value = HOST_KEY_HEADER, required = false) String hostKey)
+	{
+		requireHost(id, hostKey);
+		return store.update(id, patch == null ? new PartyUpdate() : patch).orElseThrow(
+			() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No party " + id));
+	}
+
+	/**
+	 * Back-compat keepalive for older plugin clients that still poll-heartbeat over
+	 * REST (query params). Superseded by {@code PUT /{id}} + the socket keepalive.
 	 */
 	@PutMapping("/{id}/heartbeat")
 	public Party heartbeat(@PathVariable String id, @RequestParam(required = false) Integer size,

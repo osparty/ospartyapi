@@ -2,6 +2,7 @@ package net.osparty.api;
 
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
+import net.osparty.api.model.PartyUpdate;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -92,6 +93,91 @@ final class PartyFactory
 			}
 		}
 		return roles;
+	}
+
+	/**
+	 * Apply a partial update's non-null fields to a party in place (identity fields
+	 * excepted). Mirrors the guards the old heartbeat used for size/world/layout/roles.
+	 * @return true if any field actually changed (lets the redis store skip a rewrite).
+	 */
+	static boolean applyUpdate(Party party, PartyUpdate patch)
+	{
+		if (patch == null)
+		{
+			return false;
+		}
+		boolean changed = false;
+		if (patch.getSize() != null && patch.getSize() > 0 && patch.getSize() != party.getSize())
+		{
+			party.setSize(patch.getSize());
+			changed = true;
+		}
+		if (patch.getWorld() != null && !patch.getWorld().isBlank() && !patch.getWorld().equals(party.getWorld()))
+		{
+			party.setWorld(patch.getWorld());
+			changed = true;
+		}
+		if (patch.getLayout() != null && !patch.getLayout().isBlank() && !patch.getLayout().equals(party.getLayout()))
+		{
+			party.setLayout(patch.getLayout());
+			changed = true;
+		}
+		if (patch.getNeededRoles() != null && !patch.getNeededRoles().equals(party.getNeededRoles()))
+		{
+			party.setNeededRoles(patch.getNeededRoles());
+			changed = true;
+		}
+		if (patch.getDescription() != null && !patch.getDescription().equals(party.getDescription()))
+		{
+			party.setDescription(patch.getDescription());
+			changed = true;
+		}
+		if (patch.getCapacity() != null && patch.getCapacity() > 0 && patch.getCapacity() != party.getCapacity())
+		{
+			party.setCapacity(patch.getCapacity());
+			changed = true;
+		}
+		if (patch.getLootRule() != null)
+		{
+			String lootRule = normalizeLootRule(patch.getLootRule());
+			if (!lootRule.equals(party.getLootRule()))
+			{
+				party.setLootRule(lootRule);
+				changed = true;
+			}
+		}
+		if (patch.getIronmanOnly() != null && patch.getIronmanOnly() != party.isIronmanOnly())
+		{
+			party.setIronmanOnly(patch.getIronmanOnly());
+			changed = true;
+		}
+		if (patch.getPrivateParty() != null && patch.getPrivateParty() != party.isPrivateParty())
+		{
+			party.setPrivateParty(patch.getPrivateParty());
+			changed = true;
+		}
+		if (patch.getMinKillCount() != null && patch.getMinKillCount() != party.getMinKillCount())
+		{
+			party.setMinKillCount(patch.getMinKillCount());
+			changed = true;
+		}
+		if (patch.getMinHardModeKillCount() != null
+			&& patch.getMinHardModeKillCount() != party.getMinHardModeKillCount())
+		{
+			party.setMinHardModeKillCount(patch.getMinHardModeKillCount());
+			changed = true;
+		}
+		if (patch.getInvocation() != null && patch.getInvocation() != party.getInvocation())
+		{
+			party.setInvocation(patch.getInvocation());
+			changed = true;
+		}
+		if (patch.getHardMode() != null && patch.getHardMode() != party.isHardMode())
+		{
+			party.setHardMode(patch.getHardMode());
+			changed = true;
+		}
+		return changed;
 	}
 
 	static String newInviteCode()

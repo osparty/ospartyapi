@@ -2,13 +2,13 @@ package net.osparty.api;
 
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
+import net.osparty.api.model.PartyUpdate;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * Storage for party ads. Two implementations: {@link InMemoryPartyRepository}
- * (default; used by tests) and {@link RedisPartyRepository} (selected with
- * {@code app.storage=redis}, survives restarts via native key TTL).
+ * Storage for party ads. The production implementation is {@link RedisPartyRepository}
+ * (persists across restarts, native key TTL for liveness); tests use an in-memory fake.
  */
 public interface PartyRepository
 {
@@ -33,13 +33,29 @@ public interface PartyRepository
 	Party create(PartyRequest request, String hostKey);
 
 	/**
-	 * Host keep-alive: refresh the ad's liveness and, when non-null, update the
-	 * advertised occupancy ({@code size}), the host's current {@code world}, the
-	 * live CoX raid {@code layout}, and the still-open {@code roles} (a
-	 * comma-separated list of role ids the host is still looking for).
+	 * Apply a partial update to an ad (host-only fields). Non-null {@code patch} fields
+	 * are written; identity fields (id/host/activity/passphrase/inviteCode) can't change.
+	 * Always refreshes the ad's liveness/TTL — an update implies the host is alive, and
+	 * an empty patch is a pure liveness touch (the socket-as-heartbeat mechanism).
 	 * @return the ad if it exists.
 	 */
-	Optional<Party> heartbeat(String id, Integer size, String world, String layout, String roles);
+	Optional<Party> update(String id, PartyUpdate patch);
+
+	/**
+	 * Back-compat keepalive behind {@code PUT …/{id}/heartbeat}: a narrow
+	 * {@link #update} over the four fields the old heartbeat carried (roles as a
+	 * comma-separated list). Liveness now comes from the host's socket; this stays
+	 * for older plugin clients still on the REST heartbeat.
+	 */
+	default Optional<Party> heartbeat(String id, Integer size, String world, String layout, String roles)
+	{
+		PartyUpdate patch = new PartyUpdate();
+		patch.setSize(size);
+		patch.setWorld(world);
+		patch.setLayout(layout);
+		patch.setNeededRoles(PartyFactory.parseRoles(roles));
+		return update(id, patch);
+	}
 
 	Optional<Party> delete(String id);
 
@@ -55,14 +71,5 @@ public interface PartyRepository
 	enum Authorization
 	{
 		OK, NOT_FOUND, FORBIDDEN
-	}
-
-	/**
-	 * Drop ads not heard from within {@code maxAgeMs}. Backends with native key
-	 * expiry (Redis) don't need this and return 0.
-	 */
-	default int evictStale(long maxAgeMs)
-	{
-		return 0;
 	}
 }

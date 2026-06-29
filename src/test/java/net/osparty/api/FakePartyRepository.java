@@ -2,7 +2,7 @@ package net.osparty.api;
 
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
-import java.util.ArrayList;
+import net.osparty.api.model.PartyUpdate;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -10,22 +10,20 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Service;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Repository;
 
 /**
- * In-memory ad store (the default). Not persisted — ads are short-lived and
- * disposable. Each ad has a {@code lastSeen} timestamp bumped by the host's
- * heartbeat; stale ones are reaped by {@link #evictStale(long)} via
- * {@link StaleAdEvictor}. Selected unless {@code app.storage=redis}.
+ * In-memory {@link PartyRepository} used only by the test suite ({@code @Profile("test")}),
+ * so the tests stay fast and hermetic without a real Redis. Production is Redis-only
+ * ({@link RedisPartyRepository}); this fake intentionally has no TTL/eviction — tests
+ * that need expiry behaviour drive it explicitly via {@link #delete}.
  */
-@Service
-@ConditionalOnProperty(name = "app.storage", havingValue = "memory", matchIfMissing = true)
-public class InMemoryPartyRepository implements PartyRepository
+@Repository
+@Profile("test")
+public class FakePartyRepository implements PartyRepository
 {
 	private final Map<String, Party> parties = new ConcurrentHashMap<>();
-	private final Map<String, Long> lastSeen = new ConcurrentHashMap<>();
-	/** Party id -> host credential; the secret authorising host-only mutations. */
 	private final Map<String, String> hostKeys = new ConcurrentHashMap<>();
 	private final AtomicLong idSequence = new AtomicLong(1000);
 
@@ -70,13 +68,11 @@ public class InMemoryPartyRepository implements PartyRepository
 		long now = System.currentTimeMillis();
 		Party party = PartyFactory.fromRequest(request, nextId(), uniqueInviteCode(), now);
 
-		// A host can only have one ad at a time — drop any previous one so
-		// re-advertising replaces it instead of piling up.
+		// One ad per host — drop any previous one.
 		parties.values().removeIf(p ->
 		{
 			if (PartyFactory.sameHost(p.getHost(), request.host()))
 			{
-				lastSeen.remove(p.getId());
 				hostKeys.remove(p.getId());
 				return true;
 			}
@@ -84,7 +80,6 @@ public class InMemoryPartyRepository implements PartyRepository
 		});
 
 		parties.put(party.getId(), party);
-		lastSeen.put(party.getId(), now);
 		if (hostKey != null && !hostKey.isBlank())
 		{
 			hostKeys.put(party.getId(), hostKey);
@@ -104,62 +99,22 @@ public class InMemoryPartyRepository implements PartyRepository
 	}
 
 	@Override
-	public Optional<Party> heartbeat(String id, Integer size, String world, String layout, String roles)
+	public Optional<Party> update(String id, PartyUpdate patch)
 	{
 		Party party = parties.get(id);
 		if (party == null)
 		{
 			return Optional.empty();
 		}
-		lastSeen.put(id, System.currentTimeMillis());
-		// Report current occupancy, the host's live world, the CoX raid layout and
-		// the still-open roles (all peer-to-peer; the host tells us).
-		if (size != null && size > 0)
-		{
-			party.setSize(size);
-		}
-		if (world != null && !world.isBlank())
-		{
-			party.setWorld(world);
-		}
-		if (layout != null && !layout.isBlank())
-		{
-			party.setLayout(layout);
-		}
-		List<String> neededRoles = PartyFactory.parseRoles(roles);
-		if (neededRoles != null)
-		{
-			party.setNeededRoles(neededRoles);
-		}
+		PartyFactory.applyUpdate(party, patch);
 		return Optional.of(party);
 	}
 
 	@Override
 	public Optional<Party> delete(String id)
 	{
-		lastSeen.remove(id);
 		hostKeys.remove(id);
 		return Optional.ofNullable(parties.remove(id));
-	}
-
-	@Override
-	public int evictStale(long maxAgeMs)
-	{
-		long cutoff = System.currentTimeMillis() - maxAgeMs;
-		int removed = 0;
-		for (Map.Entry<String, Long> entry : lastSeen.entrySet())
-		{
-			if (entry.getValue() < cutoff)
-			{
-				lastSeen.remove(entry.getKey());
-				hostKeys.remove(entry.getKey());
-				if (parties.remove(entry.getKey()) != null)
-				{
-					removed++;
-				}
-			}
-		}
-		return removed;
 	}
 
 	private String nextId()

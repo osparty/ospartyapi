@@ -22,6 +22,8 @@ repositories {
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // Live party-list push to the plugin (/api/v1/ws/parties); see PartyBroadcaster.
+    implementation 'org.springframework.boot:spring-boot-starter-websocket'
     // Only used when app.storage=redis; the connection is created lazily, so the
     // default in-memory mode (and the tests) run without a Redis server.
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'

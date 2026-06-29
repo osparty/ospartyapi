@@ -4,6 +4,8 @@ services:
     command: ["redis-server", "--appendonly", "yes"]   # durable across restarts
     volumes:
       - redis-data:/data
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -19,7 +21,6 @@ services:
       redis:
         condition: service_healthy
     environment:
-      APP_STORAGE: redis
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
     ports:

@@ -3,6 +3,7 @@ package net.osparty.api;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
+import net.osparty.api.model.PartyUpdate;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -12,22 +13,24 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
 
 /**
- * Redis-backed ad store (selected with {@code app.storage=redis}). Survives API
- * restarts and uses Redis' <b>native key expiry</b> as the liveness/TTL
- * mechanism: an ad is written with a TTL, the host's heartbeat refreshes it, and
- * Redis evicts it automatically when the host goes quiet — so the scheduled
- * evictor is a no-op here.
+ * Redis-backed ad store — the production storage. Survives API restarts and uses
+ * Redis' <b>native key expiry</b> as the liveness/TTL mechanism: an ad is written
+ * with a TTL, the host keeps it fresh (the open WebSocket, or the legacy heartbeat),
+ * and Redis evicts it automatically when the host goes quiet.
  *
  * <p>Keys: {@code party:{id}} -> JSON, {@code partyhost:{normHost}} -> id (a
  * secondary index enforcing one ad per host), {@code party:seq} -> id counter.
+ *
+ * <p>{@code @Profile("!test")} so the test suite uses an in-memory fake instead of
+ * requiring a real Redis.
  */
 @Repository
-@ConditionalOnProperty(name = "app.storage", havingValue = "redis")
+@Profile("!test")
 public class RedisPartyRepository implements PartyRepository
 {
 	private static final Logger log = LoggerFactory.getLogger(RedisPartyRepository.class);
@@ -146,7 +149,7 @@ public class RedisPartyRepository implements PartyRepository
 	}
 
 	@Override
-	public Optional<Party> heartbeat(String id, Integer size, String world, String layout, String roles)
+	public Optional<Party> update(String id, PartyUpdate patch)
 	{
 		String key = PARTY_KEY + id;
 		Party party = read(key);
@@ -154,38 +157,16 @@ public class RedisPartyRepository implements PartyRepository
 		{
 			return Optional.empty();
 		}
-		// Report current occupancy, the host's live world, the CoX raid layout and
-		// the still-open roles (all peer-to-peer; the host tells us). Only rewrite
-		// when something changed.
-		boolean changed = false;
-		if (size != null && size > 0 && size != party.getSize())
-		{
-			party.setSize(size);
-			changed = true;
-		}
-		if (world != null && !world.isBlank() && !world.equals(party.getWorld()))
-		{
-			party.setWorld(world);
-			changed = true;
-		}
-		if (layout != null && !layout.isBlank() && !layout.equals(party.getLayout()))
-		{
-			party.setLayout(layout);
-			changed = true;
-		}
-		List<String> neededRoles = PartyFactory.parseRoles(roles);
-		if (neededRoles != null && !neededRoles.equals(party.getNeededRoles()))
-		{
-			party.setNeededRoles(neededRoles);
-			changed = true;
-		}
+		// Apply changed fields (only rewrite when something actually changed); always
+		// refresh the TTL — an update/touch means the host is alive. With the socket as
+		// the heartbeat, an empty patch is exactly that liveness refresh.
+		boolean changed = PartyFactory.applyUpdate(party, patch);
 		if (changed)
 		{
 			redis.opsForValue().set(key, write(party), ttl);
 		}
 		else
 		{
-			// Native TTL refresh — this is the whole liveness mechanism.
 			redis.expire(key, ttl);
 		}
 		redis.expire(HOST_KEY + PartyFactory.normalizeHost(party.getHost()), ttl);

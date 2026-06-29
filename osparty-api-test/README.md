@@ -40,8 +40,8 @@ drop the published `8081` mapping.
 
 ## Notes
 
-- Config is identical to prod (`APP_STORAGE=redis`, same rate limit / TTL
-  defaults) — it only differs in the stack/Redis it runs against.
+- Config is identical to prod (same rate limit / TTL defaults) — it only differs
+  in the stack/Redis it runs against.
 - Quick check after a deploy: `curl https://testing.osparty.net/api/v1/parties` → `[]`.
 - Manual fallback (rarely needed): on the server, `cd ~/osparty-api-test && docker
   compose up -d --build` after the bundle has been staged there by a CI run.

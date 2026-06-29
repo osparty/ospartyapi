@@ -89,6 +89,12 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			case "unhost":
 				handleUnhost(sub, in);
 				break;
+			case "getByCode":
+				handleGetByCode(sub, in);
+				break;
+			case "getByHost":
+				handleGetByHost(sub, in);
+				break;
 			default:
 				break;
 		}
@@ -104,6 +110,18 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 
 	private void handleUnsubscribe(Subscriber sub) {
 		sub.subscribed = false;
+	}
+
+	private void handleGetByCode(Subscriber sub, Inbound in) {
+		String code = in.code();
+		Party party = code == null ? null : store.findByInviteCode(code).orElse(null);
+		send(sub, Outbound.byCode(version.get(), code, party));
+	}
+
+	private void handleGetByHost(Subscriber sub, Inbound in) {
+		String host = in.host();
+		Party party = host == null ? null : store.findByHost(host).orElse(null);
+		send(sub, Outbound.byHost(version.get(), host, party));
 	}
 
 	private void handleHost(Subscriber sub, Inbound in) {
@@ -309,7 +327,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 	}
 
-	record Inbound(String type, String activity, PartyRequest request, PartyUpdate patch, String id, String key) {
+	record Inbound(String type, String activity, PartyRequest request, PartyUpdate patch, String id, String key,
+		String code, String host) {
 	}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)
@@ -340,6 +359,14 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 
 		static Outbound error(long version, String id, String detail) {
 			return new Outbound("error", version, null, null, id, detail);
+		}
+
+		static Outbound byCode(long version, String code, Party party) {
+			return new Outbound("byCode", version, null, party, code, null);
+		}
+
+		static Outbound byHost(long version, String host, Party party) {
+			return new Outbound("byHost", version, null, party, host, null);
 		}
 	}
 }

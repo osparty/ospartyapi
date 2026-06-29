@@ -13,17 +13,14 @@ spring:
       # password: ...
 
 app:
-  rate-limit:
-    # Minimum gap between POSTs from one client IP (ms). 0 disables.
-    interval-ms: 5000
   ads:
     # Ad TTL (ms): an ad is reaped if its host stops keeping it alive within this
-    # window. The open WebSocket refreshes it (see app.ws.touch-interval-ms); the
-    # legacy REST heartbeat does too. Redis evicts it natively when the TTL lapses.
+    # window. The open WebSocket refreshes it (see app.ws.touch-interval-ms). Redis
+    # evicts it natively when the TTL lapses.
     ttl-ms: 90000
   ws:
-    # Live party-list push over WebSocket (/api/v1/ws/parties). false disables the
-    # socket endpoint and the reconciler; clients then fall back to REST polling.
+    # Live party-list push over WebSocket (/api/v1/ws/parties). This is the only
+    # transport; disabling it leaves clients with no discovery or hosting path.
     enabled: true
     # How often the server diffs the ad set and pushes changes to subscribers (ms).
     # This is the worst-case latency for a new/updated/removed party to reach clients.

@@ -1,4 +1,4 @@
-package net.osparty.api.web;
+package net.osparty.api.web.ws;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

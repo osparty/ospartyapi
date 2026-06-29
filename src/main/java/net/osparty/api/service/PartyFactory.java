@@ -1,4 +1,4 @@
-package net.osparty.api;
+package net.osparty.api.service;
 
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
@@ -9,7 +9,7 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.List;
 
-final class PartyFactory {
+public final class PartyFactory {
 	private static final char[] CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray();
 	private static final int CODE_LENGTH = 6;
 	private static final SecureRandom RANDOM = new SecureRandom();
@@ -17,7 +17,7 @@ final class PartyFactory {
 	private PartyFactory() {
 	}
 
-	static Party fromRequest(PartyRequest request, String id, String inviteCode, long now) {
+	public static Party fromRequest(PartyRequest request, String id, String inviteCode, long now) {
 		Party party = new Party();
 		party.setId(id);
 		party.setActivity(request.activity());
@@ -59,7 +59,7 @@ final class PartyFactory {
 		return needed;
 	}
 
-	static List<String> parseRoles(String csv) {
+	public static List<String> parseRoles(String csv) {
 		if (csv == null || csv.isBlank()) {
 			return null;
 		}
@@ -73,7 +73,7 @@ final class PartyFactory {
 		return roles;
 	}
 
-	static boolean applyUpdate(Party party, PartyUpdate patch) {
+	public static boolean applyUpdate(Party party, PartyUpdate patch) {
 		if (patch == null) {
 			return false;
 		}
@@ -137,7 +137,7 @@ final class PartyFactory {
 		return changed;
 	}
 
-	static String newInviteCode() {
+	public static String newInviteCode() {
 		StringBuilder sb = new StringBuilder(CODE_LENGTH);
 		for (int i = 0; i < CODE_LENGTH; i++) {
 			sb.append(CODE_ALPHABET[RANDOM.nextInt(CODE_ALPHABET.length)]);
@@ -145,7 +145,7 @@ final class PartyFactory {
 		return sb.toString();
 	}
 
-	static String normalizeInviteCode(String code) {
+	public static String normalizeInviteCode(String code) {
 		return code == null ? null : code.trim().toUpperCase();
 	}
 
@@ -156,7 +156,7 @@ final class PartyFactory {
 		return lootRule.trim().toUpperCase();
 	}
 
-	static boolean hostKeyAuthorized(String stored, String supplied) {
+	public static boolean hostKeyAuthorized(String stored, String supplied) {
 		if (stored == null || stored.isBlank()) {
 			return true;
 		}
@@ -167,11 +167,11 @@ final class PartyFactory {
 		return MessageDigest.isEqual(stored.getBytes(StandardCharsets.UTF_8), supplied.getBytes(StandardCharsets.UTF_8));
 	}
 
-	static boolean sameHost(String a, String b) {
+	public static boolean sameHost(String a, String b) {
 		return a != null && b != null && normalizeHost(a).equals(normalizeHost(b));
 	}
 
-	static String normalizeHost(String host) {
+	public static String normalizeHost(String host) {
 		return host.replace(' ', ' ').trim().toLowerCase();
 	}
 }

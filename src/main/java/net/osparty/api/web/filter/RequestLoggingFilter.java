@@ -1,4 +1,4 @@
-package net.osparty.api.web;
+package net.osparty.api.web.filter;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;

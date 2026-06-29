@@ -40,4 +40,4 @@ logging:
     # net.osparty.api.requests: DEBUG
     # WebSocket: connect/subscribe/close log at INFO; flip to DEBUG to log every
     # frame pushed on each live connection (the full snapshot/delta JSON):
-    # net.osparty.api.web.PartyBroadcaster: DEBUG
+    # net.osparty.api.web.ws.PartyBroadcaster: DEBUG

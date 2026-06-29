@@ -1,5 +1,6 @@
-package net.osparty.api.web;
+package net.osparty.api.web.config;
 
+import net.osparty.api.web.ws.PartyBroadcaster;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;

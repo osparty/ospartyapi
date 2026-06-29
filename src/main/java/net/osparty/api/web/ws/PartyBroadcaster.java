@@ -1,9 +1,9 @@
-package net.osparty.api.web;
+package net.osparty.api.web.ws;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import net.osparty.api.PartyRepository;
-import net.osparty.api.PartyRepository.Authorization;
+import net.osparty.api.repository.PartyRepository;
+import net.osparty.api.repository.PartyRepository.Authorization;
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
 import net.osparty.api.model.PartyUpdate;

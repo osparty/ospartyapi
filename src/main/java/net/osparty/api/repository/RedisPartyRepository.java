@@ -1,9 +1,10 @@
-package net.osparty.api;
+package net.osparty.api.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
 import net.osparty.api.model.PartyUpdate;
+import net.osparty.api.service.PartyFactory;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;

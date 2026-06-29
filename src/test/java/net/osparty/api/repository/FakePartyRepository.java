@@ -1,8 +1,9 @@
-package net.osparty.api;
+package net.osparty.api.repository;
 
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
 import net.osparty.api.model.PartyUpdate;
+import net.osparty.api.service.PartyFactory;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;

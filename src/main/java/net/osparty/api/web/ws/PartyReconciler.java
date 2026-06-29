@@ -1,6 +1,6 @@
-package net.osparty.api.web;
+package net.osparty.api.web.ws;
 
-import net.osparty.api.PartyRepository;
+import net.osparty.api.repository.PartyRepository;
 import net.osparty.api.model.Party;
 import java.util.HashMap;
 import java.util.List;

@@ -1,4 +1,4 @@
-package net.osparty.api;
+package net.osparty.api.web.rest;
 
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;

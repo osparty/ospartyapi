@@ -1,4 +1,4 @@
-package net.osparty.api.web;
+package net.osparty.api.web.config;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.bind.annotation.RestController;

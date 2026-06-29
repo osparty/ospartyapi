@@ -1,7 +1,7 @@
-package net.osparty.api.web;
+package net.osparty.api.web.rest;
 
-import net.osparty.api.PartyRepository;
-import net.osparty.api.PartyRepository.Authorization;
+import net.osparty.api.repository.PartyRepository;
+import net.osparty.api.repository.PartyRepository.Authorization;
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
 import net.osparty.api.model.PartyUpdate;

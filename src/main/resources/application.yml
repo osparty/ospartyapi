@@ -1,5 +1,14 @@
 server:
   port: 8080
+  tomcat:
+    # Sized for ~10k concurrent WebSocket clients with headroom. Idle NIO sockets do not hold a
+    # worker thread, but a redeploy reconnect storm bursts subscribe/host work, so the pool and the
+    # accept backlog must absorb it rather than refuse connections.
+    max-connections: 20000
+    accept-count: 2000
+    threads:
+      max: 800
+      min-spare: 50
 
 spring:
   application:

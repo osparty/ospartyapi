@@ -15,6 +15,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
+import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -104,28 +106,49 @@ public class RedisPartyRepository implements PartyRepository {
 		long now = System.currentTimeMillis();
 		String hostIndexKey = HOST_KEY + PartyFactory.normalizeHost(request.host());
 
+		// One ad per host: evict the previous ad. The deletes are independent, so flush them in a
+		// single pipeline round-trip rather than four sequential ones.
 		String previousId = redis.opsForValue().get(hostIndexKey);
 		if (previousId != null) {
 			Party previous = read(PARTY_KEY + previousId);
-			if (previous != null && previous.getInviteCode() != null) {
-				redis.delete(CODE_KEY + previous.getInviteCode());
-			}
-			redis.delete(PARTY_KEY + previousId);
-			redis.delete(CREDENTIAL_KEY + previousId);
-			redis.opsForSet().remove(INDEX_KEY, previousId);
+			String previousCode = previous == null ? null : previous.getInviteCode();
+			redis.executePipelined(new SessionCallback<Object>() {
+				@Override
+				@SuppressWarnings({"unchecked", "rawtypes"})
+				public Object execute(RedisOperations operations) {
+					if (previousCode != null) {
+						operations.delete(CODE_KEY + previousCode);
+					}
+					operations.delete(PARTY_KEY + previousId);
+					operations.delete(CREDENTIAL_KEY + previousId);
+					operations.opsForSet().remove(INDEX_KEY, previousId);
+					return null;
+				}
+			});
 		}
 
 		String id = String.valueOf(redis.opsForValue().increment(SEQ_KEY));
 		String inviteCode = uniqueInviteCode();
 		Party party = PartyFactory.fromRequest(request, id, inviteCode, now);
+		String json = write(party);
 
-		redis.opsForValue().set(PARTY_KEY + id, write(party), ttl);
-		redis.opsForSet().add(INDEX_KEY, id);
-		redis.opsForValue().set(hostIndexKey, id, ttl);
-		redis.opsForValue().set(CODE_KEY + inviteCode, id, ttl);
-		if (hostKey != null && !hostKey.isBlank()) {
-			redis.opsForValue().set(CREDENTIAL_KEY + id, hostKey, ttl);
-		}
+		// All create writes are independent — one pipelined round-trip instead of five sequential
+		// ones, so the request thread blocks on Redis once. This is the hot path measured by the
+		// host->hosted ack latency, so cutting its round-trips directly shortens that ack.
+		redis.executePipelined(new SessionCallback<Object>() {
+			@Override
+			@SuppressWarnings({"unchecked", "rawtypes"})
+			public Object execute(RedisOperations operations) {
+				operations.opsForValue().set(PARTY_KEY + id, json, ttl);
+				operations.opsForSet().add(INDEX_KEY, id);
+				operations.opsForValue().set(hostIndexKey, id, ttl);
+				operations.opsForValue().set(CODE_KEY + inviteCode, id, ttl);
+				if (hostKey != null && !hostKey.isBlank()) {
+					operations.opsForValue().set(CREDENTIAL_KEY + id, hostKey, ttl);
+				}
+				return null;
+			}
+		});
 		return party;
 	}
 

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import net.osparty.api.repository.PartyRepository;
 import net.osparty.api.repository.PartyRepository.Authorization;
 import net.osparty.api.model.Party;
+import net.osparty.api.model.PartyDelta;
 import net.osparty.api.model.PartyRequest;
 import net.osparty.api.model.PartyUpdate;
 import java.io.IOException;
@@ -262,24 +263,104 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		send(sub, Outbound.error(version.get(), id, detail));
 	}
 
-	void created(Party party) {
-		fanOut(party.getActivity(), Outbound.created(version.incrementAndGet(), party));
-	}
-
-	void updated(Party party) {
-		fanOut(party.getActivity(), Outbound.updated(version.incrementAndGet(), party));
-	}
-
-	void removed(String id, String activity) {
-		fanOut(activity, Outbound.removed(version.incrementAndGet(), id));
-	}
-
-	private void fanOut(String activity, Outbound msg) {
+	/**
+	 * Push a whole tick's worth of changes as ONE frame per subscriber instead of
+	 * one frame per changed party per subscriber. Cuts the per-tick message count
+	 * from O(changed x subscribers) to O(subscribers), and serialises at most once
+	 * per distinct activity filter rather than once per send.
+	 */
+	void broadcastBatch(List<Party> created, List<PartyDelta> updated, List<RemovedRef> removed) {
+		if (created.isEmpty() && updated.isEmpty() && removed.isEmpty()) {
+			return;
+		}
+		long v = version.incrementAndGet();
+		Map<String, TextMessage> perActivity = new java.util.HashMap<>();
 		for (Subscriber sub : subscribers.values()) {
-			if (sub.subscribed && (sub.activity == null || sub.activity.equals(activity))) {
-				send(sub, msg);
+			if (!sub.subscribed || !sub.session.isOpen()) {
+				continue;
+			}
+			String cacheKey = sub.activity == null ? " all" : sub.activity;
+			TextMessage frame = perActivity.get(cacheKey);
+			if (frame == null) {
+				frame = buildBatch(v, sub.activity, created, updated, removed);
+				if (frame == null) {
+					continue; // nothing matches this activity filter
+				}
+				perActivity.put(cacheKey, frame);
+			}
+			sendRaw(sub, frame);
+		}
+	}
+
+	private TextMessage buildBatch(long v, String activity, List<Party> created, List<PartyDelta> updated,
+		List<RemovedRef> removed) {
+		List<Party> c = filterCreated(created, activity);
+		List<PartyDelta> u = filterUpdated(updated, activity);
+		List<String> r = new java.util.ArrayList<>();
+		for (RemovedRef ref : removed) {
+			if (activity == null || activity.equals(ref.activity())) {
+				r.add(ref.id());
 			}
 		}
+		if (c.isEmpty() && u.isEmpty() && r.isEmpty()) {
+			return null;
+		}
+		Batch batch = new Batch("batch", v, c.isEmpty() ? null : c, u.isEmpty() ? null : u, r.isEmpty() ? null : r);
+		try {
+			return new TextMessage(mapper.writeValueAsString(batch));
+		}
+		catch (Exception e) {
+			log.warn("Failed to serialise batch frame", e);
+			return null;
+		}
+	}
+
+	private static List<Party> filterCreated(List<Party> parties, String activity) {
+		if (activity == null) {
+			return parties;
+		}
+		List<Party> out = new java.util.ArrayList<>();
+		for (Party p : parties) {
+			if (activity.equals(p.getActivity())) {
+				out.add(p);
+			}
+		}
+		return out;
+	}
+
+	private static List<PartyDelta> filterUpdated(List<PartyDelta> deltas, String activity) {
+		if (activity == null) {
+			return deltas;
+		}
+		List<PartyDelta> out = new java.util.ArrayList<>();
+		for (PartyDelta d : deltas) {
+			if (activity.equals(d.activity())) {
+				out.add(d);
+			}
+		}
+		return out;
+	}
+
+	private void sendRaw(Subscriber sub, TextMessage frame) {
+		if (!sub.session.isOpen()) {
+			return;
+		}
+		try {
+			sub.session.sendMessage(frame);
+		}
+		catch (Exception e) {
+			log.debug("Dropping subscriber {} after send failure: {}", sub.session.getId(), e.toString());
+			subscribers.remove(sub.session.getId());
+			try {
+				sub.session.close(CloseStatus.SERVER_ERROR);
+			}
+			catch (IOException ignored) {
+			}
+		}
+	}
+
+	/** Identifies a removed ad plus the activity it had, so removals can be activity-filtered. */
+	record RemovedRef(String id, String activity) {
 	}
 
 	private void send(Subscriber sub, Outbound msg) {
@@ -337,18 +418,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			return new Outbound("snapshot", version, parties, null, null, null);
 		}
 
-		static Outbound created(long version, Party party) {
-			return new Outbound("created", version, null, party, null, null);
-		}
-
-		static Outbound updated(long version, Party party) {
-			return new Outbound("updated", version, null, party, null, null);
-		}
-
-		static Outbound removed(long version, String id) {
-			return new Outbound("removed", version, null, null, id, null);
-		}
-
 		static Outbound hosted(long version, Party party) {
 			return new Outbound("hosted", version, null, party, null, null);
 		}
@@ -368,5 +437,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		static Outbound byHost(long version, String host, Party party) {
 			return new Outbound("byHost", version, null, party, host, null);
 		}
+	}
+
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	record Batch(String type, long version, List<Party> created, List<PartyDelta> updated, List<String> removed) {
 	}
 }

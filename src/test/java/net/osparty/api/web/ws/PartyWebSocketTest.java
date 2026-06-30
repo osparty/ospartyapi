@@ -43,10 +43,11 @@ class PartyWebSocketTest {
 				+ "{\"activity\":\"cox\",\"host\":\"WsTester\",\"description\":\"trio\","
 				+ "\"capacity\":3,\"world\":\"301\",\"passphrase\":\"wine-of-zamorak\"}}"));
 
-			JsonNode created = awaitWhere(messages,
-				m -> "created".equals(type(m)) && "WsTester".equals(m.path("party").path("host").asText()),
+			JsonNode batch = awaitWhere(messages,
+				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> "WsTester".equals(p.path("host").asText())),
 				"created for WsTester");
-			assertThat(created.get("party").get("activity").asText()).isEqualTo("cox");
+			JsonNode party = firstMatch(batch.path("created"), p -> "WsTester".equals(p.path("host").asText()));
+			assertThat(party.get("activity").asText()).isEqualTo("cox");
 		}
 		finally {
 			session.close();
@@ -70,7 +71,7 @@ class PartyWebSocketTest {
 			assertThat(hosted.path("party").path("inviteCode").asText()).isNotBlank();
 
 			awaitWhere(messages,
-				m -> "created".equals(type(m)) && "WsHost".equals(m.path("party").path("host").asText()),
+				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> "WsHost".equals(p.path("host").asText())),
 				"created for WsHost");
 		}
 		finally {
@@ -92,17 +93,19 @@ class PartyWebSocketTest {
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
 			String id = hosted.path("party").path("id").asText();
 
-			awaitWhere(messages, m -> "created".equals(type(m)) && id.equals(m.path("party").path("id").asText()),
+			awaitWhere(messages,
+				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> id.equals(p.path("id").asText())),
 				"created for the hosted ad");
 
 			session.sendMessage(new TextMessage(
 				"{\"type\":\"update\",\"id\":\"" + id + "\",\"patch\":{\"description\":\"changed!\"}}"));
 
-			JsonNode updated = awaitWhere(messages,
-				m -> "updated".equals(type(m)) && id.equals(m.path("party").path("id").asText())
-					&& "changed!".equals(m.path("party").path("description").asText()),
-				"updated with new description");
-			assertThat(updated.path("party").path("description").asText()).isEqualTo("changed!");
+			JsonNode batch = awaitWhere(messages,
+				m -> "batch".equals(type(m)) && anyMatch(m.path("updated"),
+					d -> id.equals(d.path("id").asText()) && "changed!".equals(d.path("description").asText())),
+				"updated delta with new description");
+			JsonNode delta = firstMatch(batch.path("updated"), d -> id.equals(d.path("id").asText()));
+			assertThat(delta.path("description").asText()).isEqualTo("changed!");
 		}
 		finally {
 			session.close();
@@ -171,6 +174,21 @@ class PartyWebSocketTest {
 
 	private static String type(JsonNode msg) {
 		return msg.path("type").asText();
+	}
+
+	private static boolean anyMatch(JsonNode array, Predicate<JsonNode> match) {
+		return firstMatch(array, match) != null;
+	}
+
+	private static JsonNode firstMatch(JsonNode array, Predicate<JsonNode> match) {
+		if (array != null && array.isArray()) {
+			for (JsonNode node : array) {
+				if (match.test(node)) {
+					return node;
+				}
+			}
+		}
+		return null;
 	}
 
 	private JsonNode awaitWhere(BlockingQueue<JsonNode> messages, Predicate<JsonNode> match, String desc)

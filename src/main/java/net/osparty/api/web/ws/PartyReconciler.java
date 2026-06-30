@@ -2,6 +2,8 @@ package net.osparty.api.web.ws;
 
 import net.osparty.api.repository.PartyRepository;
 import net.osparty.api.model.Party;
+import net.osparty.api.model.PartyDelta;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,7 +17,7 @@ public class PartyReconciler {
 	private final PartyRepository store;
 	private final PartyBroadcaster broadcaster;
 
-	private Map<String, Seen> lastKnown = new HashMap<>();
+	private Map<String, Party> lastKnown = new HashMap<>();
 
 	public PartyReconciler(PartyRepository store, PartyBroadcaster broadcaster) {
 		this.store = store;
@@ -26,29 +28,37 @@ public class PartyReconciler {
 	@Scheduled(fixedDelayString = "${app.ws.reconcile-interval-ms:5000}")
 	public void reconcile() {
 		List<Party> current = store.list(null);
-		Map<String, Seen> currentById = new HashMap<>();
+		// Snapshot copies, never the live repository instances: the fake/in-memory repo mutates ads
+		// in place, so holding a live reference across ticks would alias prev==cur and hide changes.
+		Map<String, Party> currentById = new HashMap<>();
 		for (Party party : current) {
-			currentById.put(party.getId(), new Seen(party.getActivity(), party.toString()));
+			currentById.put(party.getId(), Party.copyOf(party));
 		}
 
-		for (Map.Entry<String, Seen> entry : lastKnown.entrySet()) {
+		// One batch per tick: full Party for new ads, a minimal field delta for changed ads, ids for
+		// removed ads. The broadcaster fans this out as a single frame per subscriber.
+		List<Party> created = new ArrayList<>();
+		List<PartyDelta> updated = new ArrayList<>();
+		List<PartyBroadcaster.RemovedRef> removed = new ArrayList<>();
+		for (Map.Entry<String, Party> entry : lastKnown.entrySet()) {
 			if (!currentById.containsKey(entry.getKey())) {
-				broadcaster.removed(entry.getKey(), entry.getValue().activity());
+				removed.add(new PartyBroadcaster.RemovedRef(entry.getKey(), entry.getValue().getActivity()));
 			}
 		}
 		for (Party party : current) {
-			Seen previous = lastKnown.get(party.getId());
+			Party previous = lastKnown.get(party.getId());
 			if (previous == null) {
-				broadcaster.created(party);
+				created.add(party);
 			}
-			else if (!previous.fingerprint().equals(currentById.get(party.getId()).fingerprint())) {
-				broadcaster.updated(party);
+			else {
+				PartyDelta delta = PartyDelta.diff(previous, party);
+				if (delta != null) {
+					updated.add(delta);
+				}
 			}
 		}
+		broadcaster.broadcastBatch(created, updated, removed);
 
 		lastKnown = currentById;
-	}
-
-	private record Seen(String activity, String fingerprint) {
 	}
 }

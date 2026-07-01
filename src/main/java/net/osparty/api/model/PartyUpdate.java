@@ -6,6 +6,8 @@ import lombok.Data;
 @Data
 public class PartyUpdate {
 	private Integer size;
+	/** Live roster the host advertises (host first), so members can be block/favourite-matched in search. */
+	private List<Member> members;
 	private String world;
 	private String layout;
 	private List<String> neededRoles;

@@ -85,6 +85,13 @@ public final class PartyFactory {
 			party.setSize(patch.getSize());
 			changed = true;
 		}
+		// Roster: the host advertises the live members (host first) so search clients can
+		// block/favourite-match any member. Only replace when it actually changed.
+		if (patch.getMembers() != null && !patch.getMembers().isEmpty()
+			&& !patch.getMembers().equals(party.getMembers())) {
+			party.setMembers(patch.getMembers());
+			changed = true;
+		}
 		if (patch.getWorld() != null && !patch.getWorld().isBlank() && !patch.getWorld().equals(party.getWorld())) {
 			party.setWorld(patch.getWorld());
 			changed = true;

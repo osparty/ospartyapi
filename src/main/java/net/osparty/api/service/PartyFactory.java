@@ -39,6 +39,8 @@ public final class PartyFactory {
 		party.setRequiredRoles(request.requiredRoles());
 		party.setHostRole(request.hostRole());
 		party.setNeededRoles(initialNeededRoles(request.requiredRoles(), request.hostRole()));
+		party.setLearner(request.learner());
+		party.setTeacher(request.teacher());
 		party.setSize(1);
 		List<String> members = new ArrayList<>();
 		if (request.host() != null) {
@@ -132,6 +134,30 @@ public final class PartyFactory {
 		}
 		if (patch.getHardMode() != null && patch.getHardMode() != party.isHardMode()) {
 			party.setHardMode(patch.getHardMode());
+			changed = true;
+		}
+		// Roles: when the required composition or host role changes, re-seed neededRoles
+		// from it (the live host's heartbeat then keeps it accurate against admitted members).
+		boolean rolesChanged = false;
+		if (patch.getRequiredRoles() != null && !patch.getRequiredRoles().equals(party.getRequiredRoles())) {
+			party.setRequiredRoles(patch.getRequiredRoles());
+			changed = true;
+			rolesChanged = true;
+		}
+		if (patch.getHostRole() != null && !patch.getHostRole().equals(party.getHostRole())) {
+			party.setHostRole(patch.getHostRole());
+			changed = true;
+			rolesChanged = true;
+		}
+		if (rolesChanged) {
+			party.setNeededRoles(initialNeededRoles(party.getRequiredRoles(), party.getHostRole()));
+		}
+		if (patch.getLearner() != null && patch.getLearner() != party.isLearner()) {
+			party.setLearner(patch.getLearner());
+			changed = true;
+		}
+		if (patch.getTeacher() != null && patch.getTeacher() != party.isTeacher()) {
+			party.setTeacher(patch.getTeacher());
 			changed = true;
 		}
 		return changed;

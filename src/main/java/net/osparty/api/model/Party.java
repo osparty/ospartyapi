@@ -28,6 +28,8 @@ public class Party {
 	private List<String> requiredRoles;
 	private String hostRole;
 	private List<String> neededRoles;
+	private boolean learner;
+	private boolean teacher;
 
 	/**
 	 * A shallow field copy. Used by the reconciler to retain an immutable snapshot of an ad for the
@@ -58,6 +60,8 @@ public class Party {
 		c.requiredRoles = src.requiredRoles;
 		c.hostRole = src.hostRole;
 		c.neededRoles = src.neededRoles;
+		c.learner = src.learner;
+		c.teacher = src.teacher;
 		return c;
 	}
 }

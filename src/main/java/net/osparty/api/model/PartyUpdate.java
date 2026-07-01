@@ -18,4 +18,8 @@ public class PartyUpdate {
 	private Integer minHardModeKillCount;
 	private Integer invocation;
 	private Boolean hardMode;
+	private List<String> requiredRoles;
+	private String hostRole;
+	private Boolean learner;
+	private Boolean teacher;
 }

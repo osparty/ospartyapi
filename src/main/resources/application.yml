@@ -37,6 +37,19 @@ app:
     # How often a hosting socket refreshes its ad's TTL (socket-as-heartbeat). Must be
     # comfortably below app.ads.ttl-ms; the gap between them is the disconnect grace.
     touch-interval-ms: 5000
+  discord:
+    # Level-1 voice-channel provisioning. Off by default: with no bot token the app (and the
+    # whole test suite) runs a no-op VoiceChannelService. Turn on in the deployed backend only.
+    enabled: ${DISCORD_ENABLED:false}
+    # Bot token — inject from the environment/secret store, NEVER commit it.
+    token: ${DISCORD_TOKEN:}
+    # The single guild the bot operates in, and the category new party channels are created under
+    # (0 = create at the guild root). Both are Discord snowflake ids.
+    guild-id: ${DISCORD_GUILD_ID:0}
+    category-id: ${DISCORD_CATEGORY_ID:0}
+    # Invite lifetime and cap. maxAge in seconds (default 24h); maxUses 0 = unlimited.
+    invite-max-age-seconds: ${DISCORD_INVITE_MAX_AGE_SECONDS:86400}
+    invite-max-uses: ${DISCORD_INVITE_MAX_USES:0}
 
 logging:
   level:

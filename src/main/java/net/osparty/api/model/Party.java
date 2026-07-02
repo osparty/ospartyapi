@@ -31,6 +31,9 @@ public class Party {
 	private List<String> neededRoles;
 	private boolean learner;
 	private boolean teacher;
+	/** Discord voice channel provisioned for this party (id + invite URL), or null if none created. */
+	private String discordChannelId;
+	private String discordInviteUrl;
 
 	/**
 	 * A shallow field copy. Used by the reconciler to retain an immutable snapshot of an ad for the
@@ -63,6 +66,8 @@ public class Party {
 		c.neededRoles = src.neededRoles;
 		c.learner = src.learner;
 		c.teacher = src.teacher;
+		c.discordChannelId = src.discordChannelId;
+		c.discordInviteUrl = src.discordInviteUrl;
 		return c;
 	}
 }

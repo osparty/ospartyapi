@@ -8,6 +8,7 @@ import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyDelta;
 import net.osparty.api.model.PartyRequest;
 import net.osparty.api.model.PartyUpdate;
+import net.osparty.api.service.VoiceChannelService;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 
 	private final PartyRepository store;
 	private final ObjectMapper mapper;
+	private final net.osparty.api.service.VoiceChannelService voice;
 	private final Map<String, Subscriber> subscribers = new ConcurrentHashMap<>();
 	private final Map<String, String> hostedBy = new ConcurrentHashMap<>();
 	private final Map<String, String> ownerSession = new ConcurrentHashMap<>();
@@ -43,9 +45,11 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	/** Last active-user count pushed to clients; {@code -1} until the first broadcast. */
 	private volatile int lastPresence = -1;
 
-	public PartyBroadcaster(PartyRepository store, ObjectMapper mapper) {
+	public PartyBroadcaster(PartyRepository store, ObjectMapper mapper,
+		net.osparty.api.service.VoiceChannelService voice) {
 		this.store = store;
 		this.mapper = mapper;
+		this.voice = voice;
 	}
 
 	@Override
@@ -101,6 +105,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				break;
 			case "getByHost":
 				handleGetByHost(sub, in);
+				break;
+			case "createVoiceChannel":
+				handleCreateVoiceChannel(sub, in);
 				break;
 			default:
 				break;
@@ -191,9 +198,51 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		if (!authorizeWrite(sub, id, in.key())) {
 			return;
 		}
-		store.delete(id);
+		// Delete here (not only via the reconciler) because the reconciler's list() excludes private
+		// parties, so a private party's channel would otherwise never be cleaned up on disband. The
+		// reconciler still covers the public TTL/crash path; a double delete is a harmless no-op.
+		Party deleted = store.delete(id).orElse(null);
+		if (deleted != null && deleted.getDiscordChannelId() != null) {
+			voice.delete(deleted.getDiscordChannelId());
+		}
 		unbind(sub.session.getId());
 		log.info("WS unhost: session={} party={}", sub.session.getId(), id);
+	}
+
+	/**
+	 * Host action: provision a Discord voice channel for the hosted party and return its invite URL.
+	 * Idempotent — if a channel already exists we just echo its URL back, so a double-click (or a
+	 * resume after reconnect) never creates a second channel. The host then re-broadcasts the URL to
+	 * its actual party members over the RuneLite peer bus; the ad firehose never carries it.
+	 */
+	private void handleCreateVoiceChannel(Subscriber sub, Inbound in) {
+		String id = in.id();
+		if (id == null) {
+			sendError(sub, null, "missing id");
+			return;
+		}
+		if (!authorizeWrite(sub, id, in.key())) {
+			return;
+		}
+		Party party = store.findById(id).orElse(null);
+		if (party == null) {
+			sendError(sub, id, "gone");
+			unbind(sub.session.getId());
+			return;
+		}
+		if (party.getDiscordInviteUrl() != null) {
+			send(sub, Outbound.voiceChannel(version.get(), id, party.getDiscordInviteUrl()));
+			return;
+		}
+		Optional<VoiceChannelService.VoiceChannelInfo> channel = voice.createForParty(party);
+		if (channel.isEmpty()) {
+			sendError(sub, id, "voice unavailable");
+			return;
+		}
+		store.attachVoiceChannel(id, channel.get().channelId(), channel.get().inviteUrl());
+		log.info("WS voice channel: session={} party={} channel={}", sub.session.getId(), id,
+			channel.get().channelId());
+		send(sub, Outbound.voiceChannel(version.get(), id, channel.get().inviteUrl()));
 	}
 
 	private boolean authorizeWrite(Subscriber sub, String id, String key) {
@@ -441,34 +490,39 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	record Outbound(String type, long version, List<Party> parties, Party party, String id, String detail,
-		Integer online) {
+		Integer online, String url) {
 		static Outbound snapshot(long version, List<Party> parties) {
-			return new Outbound("snapshot", version, parties, null, null, null, null);
+			return new Outbound("snapshot", version, parties, null, null, null, null, null);
 		}
 
 		static Outbound hosted(long version, Party party) {
-			return new Outbound("hosted", version, null, party, null, null, null);
+			return new Outbound("hosted", version, null, party, null, null, null, null);
 		}
 
 		static Outbound gone(long version, String id) {
-			return new Outbound("gone", version, null, null, id, null, null);
+			return new Outbound("gone", version, null, null, id, null, null, null);
 		}
 
 		static Outbound error(long version, String id, String detail) {
-			return new Outbound("error", version, null, null, id, detail, null);
+			return new Outbound("error", version, null, null, id, detail, null, null);
 		}
 
 		static Outbound byCode(long version, String code, Party party) {
-			return new Outbound("byCode", version, null, party, code, null, null);
+			return new Outbound("byCode", version, null, party, code, null, null, null);
 		}
 
 		static Outbound byHost(long version, String host, Party party) {
-			return new Outbound("byHost", version, null, party, host, null, null);
+			return new Outbound("byHost", version, null, party, host, null, null, null);
 		}
 
 		/** Global count of connected plugin clients ("active users"). */
 		static Outbound presence(long version, int online) {
-			return new Outbound("presence", version, null, null, null, null, online);
+			return new Outbound("presence", version, null, null, null, null, online, null);
+		}
+
+		/** Reply to createVoiceChannel: the party id and the Discord invite URL to share with members. */
+		static Outbound voiceChannel(long version, String id, String url) {
+			return new Outbound("voiceChannel", version, null, null, id, null, null, url);
 		}
 	}
 

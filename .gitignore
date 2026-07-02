@@ -6,3 +6,7 @@ bin/
 *.iml
 *.log
 .DS_Store
+# Local secrets (Discord bot token + guild ids) — never committed.
+*.local.env
+application-local.yml
+application-local.yaml

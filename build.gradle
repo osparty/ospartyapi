@@ -28,6 +28,11 @@ dependencies {
     // default in-memory mode (and the tests) run without a Redis server.
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
+    // Discord bot (voice-channel provisioning). Audio (opus) is not used, so exclude it.
+    implementation('net.dv8tion:JDA:5.2.1') {
+        exclude module: 'opus-java'
+    }
+
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
 

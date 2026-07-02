@@ -10,6 +10,8 @@ import java.util.Optional;
 public interface PartyRepository {
 	List<Party> list(String activity);
 
+	Optional<Party> findById(String id);
+
 	Optional<Party> findByInviteCode(String code);
 
 	Optional<Party> findByHost(String host);
@@ -28,6 +30,13 @@ public interface PartyRepository {
 	}
 
 	Optional<Party> delete(String id);
+
+	/**
+	 * Attach a provisioned Discord voice channel (id + invite URL) to an existing party and persist
+	 * it. Returns the updated party, or empty if the party no longer exists. Unlike {@link #update},
+	 * these fields are not part of {@link PartyUpdate}, so they never travel the ad-delta firehose.
+	 */
+	Optional<Party> attachVoiceChannel(String id, String channelId, String inviteUrl);
 
 	Authorization authorize(String id, String hostKey);
 

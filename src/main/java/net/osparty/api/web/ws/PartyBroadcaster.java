@@ -367,8 +367,11 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				id, in.accountHash());
 			return;
 		}
-		log.info("kickVoiceMember party={} accountHash={} -> disconnecting Discord user {} from channel {}",
+		log.info("kickVoiceMember party={} accountHash={} -> revoking + disconnecting Discord user {} from channel {}",
 			id, in.accountHash(), discordId, party.getDiscordChannelId());
+		// Revoke their per-user view access (so the channel disappears for them) and disconnect them if
+		// they're currently in it.
+		voice.revokeAccess(party.getDiscordChannelId(), discordId);
 		voice.disconnectFromChannel(party.getDiscordChannelId(), discordId);
 	}
 

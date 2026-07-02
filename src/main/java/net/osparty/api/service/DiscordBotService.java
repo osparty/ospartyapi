@@ -156,6 +156,31 @@ public class DiscordBotService implements VoiceChannelService {
 	}
 
 	@Override
+	public void revokeAccess(String channelId, String discordId) {
+		if (channelId == null || discordId == null) {
+			return;
+		}
+		try {
+			VoiceChannel channel = jda.getVoiceChannelById(channelId);
+			if (channel == null) {
+				return;
+			}
+			channel.getGuild().retrieveMemberById(Long.parseLong(discordId)).queue(member -> {
+				net.dv8tion.jda.api.entities.PermissionOverride override = channel.getPermissionOverride(member);
+				if (override == null) {
+					return; // no per-user grant to remove
+				}
+				override.delete().queue(
+					ok -> log.info("Revoked Discord user {} access to channel {}", discordId, channelId),
+					err -> log.warn("Revoke access failed for {}: {}", discordId, err.toString()));
+			}, err -> log.debug("retrieveMember {} failed: {}", discordId, err.toString()));
+		}
+		catch (Exception e) {
+			log.warn("revokeAccess threw for {}: {}", discordId, e.toString());
+		}
+	}
+
+	@Override
 	public void disconnectFromChannel(String channelId, String discordId) {
 		if (channelId == null || discordId == null) {
 			return;

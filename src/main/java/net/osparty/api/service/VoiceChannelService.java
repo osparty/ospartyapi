@@ -22,6 +22,12 @@ public interface VoiceChannelService {
 	/** Grant a linked member per-user access to an existing channel (for someone who joined/linked later). */
 	void grantAccess(String channelId, String discordId);
 
+	/**
+	 * Revoke a member's per-user access to a channel by deleting their permission override, so with
+	 * {@code @everyone} denied they can no longer see it at all. Used when kicking them from the party.
+	 */
+	void revokeAccess(String channelId, String discordId);
+
 	/** Delete a previously created channel by id. Best-effort; never throws. */
 	void delete(String channelId);
 

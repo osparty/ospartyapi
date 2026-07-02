@@ -72,6 +72,11 @@ class VoiceChannelSocketTest {
 		}
 
 		@Override
+		public void revokeAccess(String channelId, String discordId) {
+			// not exercised here
+		}
+
+		@Override
 		public void delete(String channelId) {
 			deleted.set(channelId);
 		}

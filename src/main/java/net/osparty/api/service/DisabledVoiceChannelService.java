@@ -30,6 +30,11 @@ public class DisabledVoiceChannelService {
 			}
 
 			@Override
+			public void revokeAccess(String channelId, String discordId) {
+				// no-op
+			}
+
+			@Override
 			public void delete(String channelId) {
 				// no-op
 			}

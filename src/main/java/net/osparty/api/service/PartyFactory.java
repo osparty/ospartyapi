@@ -1,5 +1,6 @@
 package net.osparty.api.service;
 
+import net.osparty.api.model.Member;
 import net.osparty.api.model.Party;
 import net.osparty.api.model.PartyRequest;
 import net.osparty.api.model.PartyUpdate;
@@ -42,9 +43,9 @@ public final class PartyFactory {
 		party.setLearner(request.learner());
 		party.setTeacher(request.teacher());
 		party.setSize(1);
-		List<String> members = new ArrayList<>();
+		List<Member> members = new ArrayList<>();
 		if (request.host() != null) {
-			members.add(request.host());
+			members.add(new Member(request.host(), request.hostAccountHash()));
 		}
 		party.setMembers(members);
 		return party;
@@ -82,6 +83,13 @@ public final class PartyFactory {
 		boolean changed = false;
 		if (patch.getSize() != null && patch.getSize() > 0 && patch.getSize() != party.getSize()) {
 			party.setSize(patch.getSize());
+			changed = true;
+		}
+		// Roster: the host advertises the live members (host first) so search clients can
+		// block/favourite-match any member. Only replace when it actually changed.
+		if (patch.getMembers() != null && !patch.getMembers().isEmpty()
+			&& !patch.getMembers().equals(party.getMembers())) {
+			party.setMembers(patch.getMembers());
 			changed = true;
 		}
 		if (patch.getWorld() != null && !patch.getWorld().isBlank() && !patch.getWorld().equals(party.getWorld())) {

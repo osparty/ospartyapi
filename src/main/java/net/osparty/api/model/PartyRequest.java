@@ -5,6 +5,7 @@ import java.util.List;
 public record PartyRequest(
 	String activity,
 	String host,
+	long hostAccountHash,
 	String description,
 	int capacity,
 	String world,

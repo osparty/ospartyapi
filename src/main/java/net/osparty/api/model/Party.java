@@ -19,7 +19,8 @@ public class Party {
 	private String passphrase;
 	private int minKillCount;
 	private int minHardModeKillCount;
-	private List<String> members;
+	/** Host is the first entry. Each carries the member's name plus stable accountHash. */
+	private List<Member> members;
 	private boolean privateParty;
 	private String inviteCode;
 	private String lootRule;

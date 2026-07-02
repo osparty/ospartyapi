@@ -213,9 +213,15 @@ counter. The test suite runs against an in-memory fake (`@Profile("test")`), so
 and **Redis**. The Dockerfile copies in a **pre-built jar**, so build it first:
 
 ```sh
-./gradlew bootJar          # -> build/libs/app.jar
-docker compose up --build  # builds the image, starts api + redis
+./gradlew bootJar             # -> build/libs/app.jar  (ALWAYS run this first)
+docker compose up --build -d  # builds the image, starts api + redis
 ```
+
+> ⚠️ **`--build` alone does not recompile your source.** The Dockerfile only
+> `COPY`s `build/libs/app.jar`, so `docker compose up --build` just re-copies
+> whatever jar is already there. If you skip `./gradlew bootJar`, the container
+> silently runs **stale code** — the image rebuilds, the app starts fine, but your
+> latest changes aren't in it. Always run `bootJar` before `docker compose up --build`.
 
 - **API** on `http://localhost:8080`, wired to the `redis` service via compose env
   (`SPRING_DATA_REDIS_HOST=redis`) — no code/config changes needed.

@@ -20,8 +20,13 @@ public class DisabledVoiceChannelService {
 	public VoiceChannelService noOpVoiceChannelService() {
 		return new VoiceChannelService() {
 			@Override
-			public Optional<VoiceChannelInfo> createForParty(Party party) {
+			public Optional<VoiceChannelInfo> createForParty(Party party, java.util.Collection<String> allowedDiscordIds) {
 				return Optional.empty();
+			}
+
+			@Override
+			public void grantAccess(String channelId, String discordId) {
+				// no-op
 			}
 
 			@Override

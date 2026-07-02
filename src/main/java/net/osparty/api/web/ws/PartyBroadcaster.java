@@ -122,6 +122,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			case "kickVoiceMember":
 				handleKickVoiceMember(sub, in);
 				break;
+			case "requestVoiceAccess":
+				handleRequestVoiceAccess(sub, in);
+				break;
 			default:
 				break;
 		}
@@ -247,7 +250,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			send(sub, Outbound.voiceChannel(version.get(), id, party.getDiscordInviteUrl()));
 			return;
 		}
-		Optional<VoiceChannelService.VoiceChannelInfo> channel = voice.createForParty(party);
+		Optional<VoiceChannelService.VoiceChannelInfo> channel =
+			voice.createForParty(party, linkedDiscordIds(party));
 		if (channel.isEmpty()) {
 			sendError(sub, id, "voice unavailable");
 			return;
@@ -287,6 +291,54 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			link == null ? null : link.discordId(), link == null ? null : link.username()));
 	}
 
+	/** The linked Discord ids of a party's current members, for per-user channel access. */
+	private List<String> linkedDiscordIds(Party party) {
+		List<String> ids = new java.util.ArrayList<>();
+		if (party.getMembers() != null) {
+			for (net.osparty.api.model.Member member : party.getMembers()) {
+				if (member.getAccountHash() != 0) {
+					discordLinks.discordIdForAccountHash(member.getAccountHash()).ifPresent(ids::add);
+				}
+			}
+		}
+		return ids;
+	}
+
+	/**
+	 * Member self-service: grant the caller per-user access to the party's voice channel before they open
+	 * the invite, so someone who joined or linked after the channel was created can still get in. Verified
+	 * by the caller's accountHash being in the party roster (cooperative trust) and being Discord-linked.
+	 */
+	private void handleRequestVoiceAccess(Subscriber sub, Inbound in) {
+		String id = in.id();
+		if (id == null) {
+			sendError(sub, null, "missing id");
+			return;
+		}
+		if (in.accountHash() == null || in.accountHash() == 0) {
+			sendError(sub, id, "missing accountHash");
+			return;
+		}
+		Party party = store.findById(id).orElse(null);
+		if (party == null || party.getDiscordChannelId() == null) {
+			sendError(sub, id, "no channel");
+			return;
+		}
+		boolean inParty = party.getMembers() != null && party.getMembers().stream()
+			.anyMatch(m -> m.getAccountHash() == in.accountHash());
+		if (!inParty) {
+			sendError(sub, id, "not in party");
+			return;
+		}
+		String discordId = discordLinks.discordIdForAccountHash(in.accountHash()).orElse(null);
+		if (discordId == null) {
+			sendError(sub, id, "not linked");
+			return;
+		}
+		voice.grantAccess(party.getDiscordChannelId(), discordId);
+		send(sub, Outbound.voiceAccess(version.get(), id));
+	}
+
 	/**
 	 * Host action: disconnect a kicked member from the party's voice channel. Requires host auth; no-ops
 	 * unless the party has a channel and the member's accountHash is linked to a Discord user. The bot
@@ -306,10 +358,18 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		Party party = store.findById(id).orElse(null);
 		if (party == null || party.getDiscordChannelId() == null) {
+			log.info("kickVoiceMember party={} accountHash={}: no channel, skipping", id, in.accountHash());
 			return; // no channel to remove them from
 		}
-		discordLinks.discordIdForAccountHash(in.accountHash())
-			.ifPresent(discordId -> voice.disconnectFromChannel(party.getDiscordChannelId(), discordId));
+		String discordId = discordLinks.discordIdForAccountHash(in.accountHash()).orElse(null);
+		if (discordId == null) {
+			log.info("kickVoiceMember party={} accountHash={}: member not Discord-linked, skipping",
+				id, in.accountHash());
+			return;
+		}
+		log.info("kickVoiceMember party={} accountHash={} -> disconnecting Discord user {} from channel {}",
+			id, in.accountHash(), discordId, party.getDiscordChannelId());
+		voice.disconnectFromChannel(party.getDiscordChannelId(), discordId);
 	}
 
 	private boolean authorizeWrite(Subscriber sub, String id, String key) {
@@ -601,6 +661,11 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		static Outbound discordLink(long version, long accountHash, String discordId, String username) {
 			return new Outbound("discordLink", version, null, null, discordId, null, null, null, username,
 				accountHash);
+		}
+
+		/** Ack to requestVoiceAccess: the caller has been granted access; the plugin may open the invite. */
+		static Outbound voiceAccess(long version, String id) {
+			return new Outbound("voiceAccess", version, null, null, id, null, null, null, null, null);
 		}
 	}
 

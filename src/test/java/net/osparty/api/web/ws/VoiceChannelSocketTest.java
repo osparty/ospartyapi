@@ -60,9 +60,15 @@ class VoiceChannelSocketTest {
 		int creates;
 
 		@Override
-		public synchronized Optional<VoiceChannelInfo> createForParty(Party party) {
+		public synchronized Optional<VoiceChannelInfo> createForParty(Party party,
+			java.util.Collection<String> allowedDiscordIds) {
 			creates++;
 			return Optional.of(new VoiceChannelInfo("chan-" + party.getId(), "https://discord.gg/stub-" + party.getId()));
+		}
+
+		@Override
+		public void grantAccess(String channelId, String discordId) {
+			// not exercised here
 		}
 
 		@Override

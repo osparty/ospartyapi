@@ -11,11 +11,16 @@ import java.util.Optional;
  */
 public interface VoiceChannelService {
 	/**
-	 * Create a voice channel for the party and mint an invite to it.
+	 * Create a voice channel for the party and mint an invite to it. {@code allowedDiscordIds} are the
+	 * linked members granted per-user {@code VIEW_CHANNEL}/{@code CONNECT} on top of the {@code @everyone}
+	 * deny, so the channel is truly locked to exactly those people.
 	 *
 	 * @return the channel id and invite URL, or empty when disabled or the create failed.
 	 */
-	Optional<VoiceChannelInfo> createForParty(Party party);
+	Optional<VoiceChannelInfo> createForParty(Party party, java.util.Collection<String> allowedDiscordIds);
+
+	/** Grant a linked member per-user access to an existing channel (for someone who joined/linked later). */
+	void grantAccess(String channelId, String discordId);
 
 	/** Delete a previously created channel by id. Best-effort; never throws. */
 	void delete(String channelId);

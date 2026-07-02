@@ -60,27 +60,43 @@ public class DiscordBotService implements VoiceChannelService {
 		this.categoryId = categoryId;
 		this.inviteMaxAgeSeconds = inviteMaxAgeSeconds;
 		this.inviteMaxUses = inviteMaxUses;
-		// createLight: no member/message cache and no privileged intents. We add GUILD_VOICE_STATES
-		// (non-privileged) + the VOICE_STATE cache so we can tell whether a kicked member is currently
-		// sitting in the party's channel before disconnecting them.
+		// createLight: no message cache and no privileged intents. We add GUILD_VOICE_STATES
+		// (non-privileged) + the VOICE_STATE cache and a VOICE member-cache policy so members currently
+		// in a voice channel are cached — otherwise getMemberById() is null and we can't check which
+		// channel a kicked member is in before disconnecting them.
 		this.jda = JDABuilder.createLight(token, GatewayIntent.GUILD_VOICE_STATES)
 			.enableCache(CacheFlag.VOICE_STATE)
+			.setMemberCachePolicy(net.dv8tion.jda.api.utils.MemberCachePolicy.VOICE)
 			.build().awaitReady();
 		log.info("Discord bot connected as {} (guild={}, category={})",
 			jda.getSelfUser().getName(), guildId, categoryId);
 	}
 
 	@Override
-	public Optional<VoiceChannelInfo> createForParty(Party party) {
+	public Optional<VoiceChannelInfo> createForParty(Party party, java.util.Collection<String> allowedDiscordIds) {
 		Guild guild = jda.getGuildById(guildId);
 		if (guild == null) {
 			log.warn("Discord guild {} not found; cannot create channel for party {}", guildId, party.getId());
 			return Optional.empty();
 		}
 		try {
-			VoiceChannel channel = newChannelAction(guild, channelName(party))
-				// Unlisted: @everyone cannot even see the channel; only the invite reveals it.
-				.addPermissionOverride(guild.getPublicRole(), null, EnumSet.of(Permission.VIEW_CHANNEL))
+			net.dv8tion.jda.api.requests.restaction.ChannelAction<VoiceChannel> action =
+				newChannelAction(guild, channelName(party))
+					// Unlisted: @everyone cannot even see the channel; only the invite reveals it.
+					.addPermissionOverride(guild.getPublicRole(), null, EnumSet.of(Permission.VIEW_CHANNEL));
+			// Lock it to exactly the linked party members: grant each per-user view + connect.
+			if (allowedDiscordIds != null) {
+				for (String discordId : allowedDiscordIds) {
+					try {
+						action = action.addMemberPermissionOverride(Long.parseLong(discordId),
+							EnumSet.of(Permission.VIEW_CHANNEL, Permission.VOICE_CONNECT), null);
+					}
+					catch (NumberFormatException ignored) {
+						// skip a malformed id rather than fail the whole create
+					}
+				}
+			}
+			VoiceChannel channel = action
 				.reason("OSParty voice channel for party " + party.getId())
 				.complete();
 			String url = ((IInviteContainer) channel).createInvite()
@@ -117,6 +133,29 @@ public class DiscordBotService implements VoiceChannelService {
 	}
 
 	@Override
+	public void grantAccess(String channelId, String discordId) {
+		if (channelId == null || discordId == null) {
+			return;
+		}
+		try {
+			VoiceChannel channel = jda.getVoiceChannelById(channelId);
+			if (channel == null) {
+				return;
+			}
+			// The member may not be cached; fetch them, then upsert a per-user allow overwrite.
+			channel.getGuild().retrieveMemberById(Long.parseLong(discordId)).queue(
+				member -> channel.upsertPermissionOverride(member)
+					.grant(Permission.VIEW_CHANNEL, Permission.VOICE_CONNECT)
+					.queue(ok -> log.info("Granted Discord user {} access to channel {}", discordId, channelId),
+						err -> log.debug("grant override failed for {}: {}", discordId, err.toString())),
+				err -> log.debug("retrieveMember {} failed: {}", discordId, err.toString()));
+		}
+		catch (Exception e) {
+			log.debug("grantAccess threw: {}", e.toString());
+		}
+	}
+
+	@Override
 	public void disconnectFromChannel(String channelId, String discordId) {
 		if (channelId == null || discordId == null) {
 			return;
@@ -126,21 +165,30 @@ public class DiscordBotService implements VoiceChannelService {
 			if (guild == null) {
 				return;
 			}
-			// A member in voice is cached (via VOICE_STATE) even under createLight; null => not in voice.
+			// With MemberCachePolicy.VOICE, a member currently in any voice channel is cached; null here
+			// means they aren't connected to voice at all, so there's nothing to disconnect.
 			Member member = guild.getMemberById(discordId);
 			if (member == null) {
+				log.info("Discord user {} not in voice (not cached); nothing to disconnect", discordId);
 				return;
 			}
 			GuildVoiceState state = member.getVoiceState();
-			if (state == null || state.getChannel() == null || !channelId.equals(state.getChannel().getId())) {
-				return; // not in this party's channel — leave them alone
+			if (state == null || state.getChannel() == null) {
+				log.info("Discord user {} has no active voice channel; nothing to disconnect", discordId);
+				return;
+			}
+			if (!channelId.equals(state.getChannel().getId())) {
+				log.info("Discord user {} is in a different channel ({}); leaving them alone",
+					discordId, state.getChannel().getId());
+				return;
 			}
 			guild.kickVoiceMember(member).queue(
 				ok -> log.info("Disconnected Discord user {} from channel {}", discordId, channelId),
-				err -> log.debug("Voice disconnect failed for {}: {}", discordId, err.toString()));
+				err -> log.warn("Voice disconnect failed for {} (does the bot have Move Members?): {}",
+					discordId, err.toString()));
 		}
 		catch (Exception e) {
-			log.debug("disconnectFromChannel threw: {}", e.toString());
+			log.warn("disconnectFromChannel threw for {}: {}", discordId, e.toString());
 		}
 	}
 

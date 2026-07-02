@@ -28,6 +28,11 @@ public class DisabledVoiceChannelService {
 			public void delete(String channelId) {
 				// no-op
 			}
+
+			@Override
+			public void disconnectFromChannel(String channelId, String discordId) {
+				// no-op
+			}
 		};
 	}
 }

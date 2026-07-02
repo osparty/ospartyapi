@@ -9,6 +9,10 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.GuildVoiceState;
+import net.dv8tion.jda.api.entities.Member;
+import net.dv8tion.jda.api.requests.GatewayIntent;
+import net.dv8tion.jda.api.utils.cache.CacheFlag;
 import net.dv8tion.jda.api.entities.channel.attribute.IInviteContainer;
 import net.dv8tion.jda.api.entities.channel.concrete.Category;
 import net.dv8tion.jda.api.entities.channel.concrete.VoiceChannel;
@@ -56,8 +60,12 @@ public class DiscordBotService implements VoiceChannelService {
 		this.categoryId = categoryId;
 		this.inviteMaxAgeSeconds = inviteMaxAgeSeconds;
 		this.inviteMaxUses = inviteMaxUses;
-		// createLight: no member/message cache and no privileged intents — we only manage channels.
-		this.jda = JDABuilder.createLight(token).build().awaitReady();
+		// createLight: no member/message cache and no privileged intents. We add GUILD_VOICE_STATES
+		// (non-privileged) + the VOICE_STATE cache so we can tell whether a kicked member is currently
+		// sitting in the party's channel before disconnecting them.
+		this.jda = JDABuilder.createLight(token, GatewayIntent.GUILD_VOICE_STATES)
+			.enableCache(CacheFlag.VOICE_STATE)
+			.build().awaitReady();
 		log.info("Discord bot connected as {} (guild={}, category={})",
 			jda.getSelfUser().getName(), guildId, categoryId);
 	}
@@ -105,6 +113,34 @@ public class DiscordBotService implements VoiceChannelService {
 		}
 		catch (Exception e) {
 			log.debug("Discord channel {} delete threw: {}", channelId, e.toString());
+		}
+	}
+
+	@Override
+	public void disconnectFromChannel(String channelId, String discordId) {
+		if (channelId == null || discordId == null) {
+			return;
+		}
+		try {
+			Guild guild = jda.getGuildById(guildId);
+			if (guild == null) {
+				return;
+			}
+			// A member in voice is cached (via VOICE_STATE) even under createLight; null => not in voice.
+			Member member = guild.getMemberById(discordId);
+			if (member == null) {
+				return;
+			}
+			GuildVoiceState state = member.getVoiceState();
+			if (state == null || state.getChannel() == null || !channelId.equals(state.getChannel().getId())) {
+				return; // not in this party's channel — leave them alone
+			}
+			guild.kickVoiceMember(member).queue(
+				ok -> log.info("Disconnected Discord user {} from channel {}", discordId, channelId),
+				err -> log.debug("Voice disconnect failed for {}: {}", discordId, err.toString()));
+		}
+		catch (Exception e) {
+			log.debug("disconnectFromChannel threw: {}", e.toString());
 		}
 	}
 

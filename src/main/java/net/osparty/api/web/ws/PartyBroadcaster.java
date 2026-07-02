@@ -119,6 +119,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			case "getDiscordLink":
 				handleGetDiscordLink(sub, in);
 				break;
+			case "kickVoiceMember":
+				handleKickVoiceMember(sub, in);
+				break;
 			default:
 				break;
 		}
@@ -282,6 +285,31 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		DiscordLinkService.Link link = discordLinks.getByAccountHash(in.accountHash()).orElse(null);
 		send(sub, Outbound.discordLink(version.get(), in.accountHash(),
 			link == null ? null : link.discordId(), link == null ? null : link.username()));
+	}
+
+	/**
+	 * Host action: disconnect a kicked member from the party's voice channel. Requires host auth; no-ops
+	 * unless the party has a channel and the member's accountHash is linked to a Discord user. The bot
+	 * itself only disconnects them if they're actually sitting in that channel. Fire-and-forget.
+	 */
+	private void handleKickVoiceMember(Subscriber sub, Inbound in) {
+		String id = in.id();
+		if (id == null) {
+			sendError(sub, null, "missing id");
+			return;
+		}
+		if (!authorizeWrite(sub, id, in.key())) {
+			return;
+		}
+		if (in.accountHash() == null || in.accountHash() == 0) {
+			return;
+		}
+		Party party = store.findById(id).orElse(null);
+		if (party == null || party.getDiscordChannelId() == null) {
+			return; // no channel to remove them from
+		}
+		discordLinks.discordIdForAccountHash(in.accountHash())
+			.ifPresent(discordId -> voice.disconnectFromChannel(party.getDiscordChannelId(), discordId));
 	}
 
 	private boolean authorizeWrite(Subscriber sub, String id, String key) {

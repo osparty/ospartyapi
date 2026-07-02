@@ -20,6 +20,13 @@ public interface VoiceChannelService {
 	/** Delete a previously created channel by id. Best-effort; never throws. */
 	void delete(String channelId);
 
+	/**
+	 * Disconnect a Discord user from the given voice channel, but only if they are currently in it.
+	 * Used to boot a kicked party member. Best-effort; never throws, and no-ops when disabled or the
+	 * user isn't in that channel.
+	 */
+	void disconnectFromChannel(String channelId, String discordId);
+
 	/** A provisioned channel: its Discord id (for later deletion) and the shareable invite URL. */
 	record VoiceChannelInfo(String channelId, String inviteUrl) {
 	}

@@ -69,6 +69,11 @@ class VoiceChannelSocketTest {
 		public void delete(String channelId) {
 			deleted.set(channelId);
 		}
+
+		@Override
+		public void disconnectFromChannel(String channelId, String discordId) {
+			// not exercised here
+		}
 	}
 
 	@Test

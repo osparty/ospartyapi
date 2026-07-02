@@ -50,6 +50,14 @@ app:
     # Invite lifetime and cap. maxAge in seconds (default 24h); maxUses 0 = unlimited.
     invite-max-age-seconds: ${DISCORD_INVITE_MAX_AGE_SECONDS:86400}
     invite-max-uses: ${DISCORD_INVITE_MAX_USES:0}
+    oauth:
+      # Account linking (accountHash <-> Discord user) via OAuth2. Linking is offered only when
+      # client-id and redirect-uri are set. client-id is the Discord application id; the redirect-uri
+      # must be registered under OAuth2 -> Redirects in the Developer Portal and match exactly.
+      client-id: ${DISCORD_CLIENT_ID:}
+      client-secret: ${DISCORD_CLIENT_SECRET:}
+      # e.g. https://api.osparty.net/api/v1/discord/link/callback (or http://localhost:8080/... for dev)
+      redirect-uri: ${DISCORD_REDIRECT_URI:}
 
 logging:
   level:

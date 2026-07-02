@@ -40,6 +40,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private final Map<String, String> hostedBy = new ConcurrentHashMap<>();
 	private final Map<String, String> ownerSession = new ConcurrentHashMap<>();
 	private final AtomicLong version = new AtomicLong();
+	/** Last active-user count pushed to clients; {@code -1} until the first broadcast. */
+	private volatile int lastPresence = -1;
 
 	public PartyBroadcaster(PartyRepository store, ObjectMapper mapper) {
 		this.store = store;
@@ -50,9 +52,13 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	public void afterConnectionEstablished(WebSocketSession session) {
 		WebSocketSession guarded = new ConcurrentWebSocketSessionDecorator(
 			session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT);
-		subscribers.put(session.getId(), new Subscriber(guarded));
+		Subscriber sub = new Subscriber(guarded);
+		subscribers.put(session.getId(), sub);
 		log.info("WS connected: session={} remote={} (subscribers={})",
 			session.getId(), remoteOf(session), subscribers.size());
+		// Give the newcomer the current active-user count right away; everyone else learns
+		// of the change via the throttled scheduled broadcast below.
+		send(sub, Outbound.presence(version.get(), subscribers.size()));
 	}
 
 	@Override
@@ -228,6 +234,27 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		unbind(session.getId());
 		log.info("WS closed: session={} status={} (subscribers={})",
 			session.getId(), status, subscribers.size());
+	}
+
+	/**
+	 * Push the current active-user count to every connected client, but only when it has
+	 * changed since the last push. Throttling to a scheduled tick (rather than firing on
+	 * every connect/disconnect) keeps this O(subscribers) per interval instead of
+	 * O(subscribers) per churn event, which matters under heavy connection turnover.
+	 */
+	@Scheduled(fixedDelayString = "${app.ws.presence-interval-ms:5000}")
+	public void broadcastPresence() {
+		int online = subscribers.size();
+		if (online == lastPresence) {
+			return;
+		}
+		lastPresence = online;
+		Outbound frame = Outbound.presence(version.get(), online);
+		for (Subscriber sub : subscribers.values()) {
+			if (sub.session.isOpen()) {
+				send(sub, frame);
+			}
+		}
 	}
 
 	@Scheduled(fixedDelayString = "${app.ws.touch-interval-ms:5000}")
@@ -413,29 +440,35 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)
-	record Outbound(String type, long version, List<Party> parties, Party party, String id, String detail) {
+	record Outbound(String type, long version, List<Party> parties, Party party, String id, String detail,
+		Integer online) {
 		static Outbound snapshot(long version, List<Party> parties) {
-			return new Outbound("snapshot", version, parties, null, null, null);
+			return new Outbound("snapshot", version, parties, null, null, null, null);
 		}
 
 		static Outbound hosted(long version, Party party) {
-			return new Outbound("hosted", version, null, party, null, null);
+			return new Outbound("hosted", version, null, party, null, null, null);
 		}
 
 		static Outbound gone(long version, String id) {
-			return new Outbound("gone", version, null, null, id, null);
+			return new Outbound("gone", version, null, null, id, null, null);
 		}
 
 		static Outbound error(long version, String id, String detail) {
-			return new Outbound("error", version, null, null, id, detail);
+			return new Outbound("error", version, null, null, id, detail, null);
 		}
 
 		static Outbound byCode(long version, String code, Party party) {
-			return new Outbound("byCode", version, null, party, code, null);
+			return new Outbound("byCode", version, null, party, code, null, null);
 		}
 
 		static Outbound byHost(long version, String host, Party party) {
-			return new Outbound("byHost", version, null, party, host, null);
+			return new Outbound("byHost", version, null, party, host, null, null);
+		}
+
+		/** Global count of connected plugin clients ("active users"). */
+		static Outbound presence(long version, int online) {
+			return new Outbound("presence", version, null, null, null, null, online);
 		}
 	}
 

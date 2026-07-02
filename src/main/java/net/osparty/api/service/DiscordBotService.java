@@ -167,13 +167,21 @@ public class DiscordBotService implements VoiceChannelService {
 			}
 			channel.getGuild().retrieveMemberById(Long.parseLong(discordId)).queue(member -> {
 				net.dv8tion.jda.api.entities.PermissionOverride override = channel.getPermissionOverride(member);
-				if (override == null) {
-					return; // no per-user grant to remove
+				if (override != null) {
+					override.delete().queue(
+						ok -> log.info("Revoked Discord user {} access to channel {} (deleted override)",
+							discordId, channelId),
+						err -> log.warn("Revoke (delete) failed for {}: {}", discordId, err.toString()));
 				}
-				override.delete().queue(
-					ok -> log.info("Revoked Discord user {} access to channel {}", discordId, channelId),
-					err -> log.warn("Revoke access failed for {}: {}", discordId, err.toString()));
-			}, err -> log.debug("retrieveMember {} failed: {}", discordId, err.toString()));
+				else {
+					// The allow override isn't in cache; explicitly DENY view so they lose access anyway
+					// (with @everyone already denied, an explicit member deny hides the channel).
+					channel.upsertPermissionOverride(member).deny(Permission.VIEW_CHANNEL).queue(
+						ok -> log.info("Revoked Discord user {} access to channel {} (denied view)",
+							discordId, channelId),
+						err -> log.warn("Revoke (deny) failed for {}: {}", discordId, err.toString()));
+				}
+			}, err -> log.warn("Revoke: retrieveMember {} failed: {}", discordId, err.toString()));
 		}
 		catch (Exception e) {
 			log.warn("revokeAccess threw for {}: {}", discordId, e.toString());

@@ -91,6 +91,23 @@ public class DiscordLinkService {
 		redis.opsForValue().set(DISCORD_KEY + discordId, Long.toString(accountHash));
 	}
 
+	/** Remove the binding for an accountHash, both directions (by hash and by Discord id). */
+	public void unlink(long accountHash) {
+		String json = redis.opsForValue().get(HASH_KEY + accountHash);
+		if (json != null) {
+			try {
+				Link link = mapper.readValue(json, Link.class);
+				if (link.discordId() != null) {
+					redis.delete(DISCORD_KEY + link.discordId());
+				}
+			}
+			catch (Exception ignored) {
+				// couldn't parse the stored value; still drop the forward mapping below
+			}
+		}
+		redis.delete(HASH_KEY + accountHash);
+	}
+
 	public Optional<Link> getByAccountHash(long accountHash) {
 		String json = redis.opsForValue().get(HASH_KEY + accountHash);
 		if (json == null) {

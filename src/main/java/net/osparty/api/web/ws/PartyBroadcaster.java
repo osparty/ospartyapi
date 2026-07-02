@@ -119,6 +119,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			case "getDiscordLink":
 				handleGetDiscordLink(sub, in);
 				break;
+			case "unlinkDiscord":
+				handleUnlinkDiscord(sub, in);
+				break;
 			case "kickVoiceMember":
 				handleKickVoiceMember(sub, in);
 				break;
@@ -278,6 +281,17 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		String url = discordLinks.beginLink(in.accountHash());
 		send(sub, Outbound.discordLinkUrl(version.get(), url));
+	}
+
+	/** Remove the caller's Discord binding (both directions). Reply with an unlinked status for confirmation. */
+	private void handleUnlinkDiscord(Subscriber sub, Inbound in) {
+		if (in.accountHash() == null || in.accountHash() == 0) {
+			sendError(sub, null, "missing accountHash");
+			return;
+		}
+		discordLinks.unlink(in.accountHash());
+		log.info("Unlinked Discord for accountHash {}", in.accountHash());
+		send(sub, Outbound.discordLink(version.get(), in.accountHash(), null, null));
 	}
 
 	/** Report whether an accountHash is linked, echoing the hash so the poller can match the reply. */

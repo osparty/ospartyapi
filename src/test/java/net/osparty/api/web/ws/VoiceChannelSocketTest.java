@@ -65,7 +65,7 @@ class VoiceChannelSocketTest {
 			creates++;
 			return Optional.of(new VoiceChannelInfo("chan-" + party.getId(),
 				"https://discord.gg/stub-" + party.getId(),
-				"https://discord.com/channels/stub/chan-" + party.getId()));
+				"discord://-/channels/stub/chan-" + party.getId()));
 		}
 
 		@Override
@@ -103,13 +103,13 @@ class VoiceChannelSocketTest {
 			session.sendMessage(new TextMessage("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
 			JsonNode reply = awaitWhere(messages, m -> "voiceChannel".equals(type(m)), "voiceChannel reply");
 			assertThat(reply.path("id").asText()).isEqualTo(id);
-			assertThat(reply.path("url").asText()).isEqualTo("https://discord.com/channels/stub/chan-" + id);
+			assertThat(reply.path("url").asText()).isEqualTo("discord://-/channels/stub/chan-" + id);
 			assertThat(voice.creates).isEqualTo(1);
 
 			// Second request must not create a second channel — it echoes the stored URL.
 			session.sendMessage(new TextMessage("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
 			JsonNode again = awaitWhere(messages, m -> "voiceChannel".equals(type(m)), "voiceChannel reply (2)");
-			assertThat(again.path("url").asText()).isEqualTo("https://discord.com/channels/stub/chan-" + id);
+			assertThat(again.path("url").asText()).isEqualTo("discord://-/channels/stub/chan-" + id);
 			assertThat(voice.creates).isEqualTo(1);
 		}
 		finally {

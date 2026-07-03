@@ -105,11 +105,11 @@ public class DiscordBotService implements VoiceChannelService {
 				.setUnique(true)
 				.complete()
 				.getUrl();
-			// Deep link straight to the voice channel — opens the app on the channel itself (one click to
-			// join), rather than the invite which only drops an existing member at the server.
-			String channelUrl = "https://discord.com/channels/" + guildId + "/" + channel.getId();
+			// discord:// protocol deep link — opens the desktop app directly on the channel, cross-platform
+			// (the installer registers this scheme on Windows/macOS/Linux).
+			String joinUrl = "discord://-/channels/" + guildId + "/" + channel.getId();
 			log.info("Created Discord voice channel {} for party {}", channel.getId(), party.getId());
-			return Optional.of(new VoiceChannelInfo(channel.getId(), inviteUrl, channelUrl));
+			return Optional.of(new VoiceChannelInfo(channel.getId(), inviteUrl, joinUrl));
 		}
 		catch (Exception e) {
 			log.warn("Failed to create Discord voice channel for party {}: {}", party.getId(), e.toString());

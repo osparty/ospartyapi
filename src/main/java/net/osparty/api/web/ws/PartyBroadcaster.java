@@ -259,12 +259,12 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			sendError(sub, id, "voice unavailable");
 			return;
 		}
-		// Store + broadcast the discord:// deep link as the "Join voice" URL, so it opens the desktop app
-		// straight on the channel (works cross-platform; the plain web link didn't on Windows).
-		store.attachVoiceChannel(id, channel.get().channelId(), channel.get().joinUrl());
+		// Store + broadcast the invite URL as the "Join voice" link. Its "Open Discord" page launches the
+		// desktop app (the approach that worked in the first iteration).
+		store.attachVoiceChannel(id, channel.get().channelId(), channel.get().inviteUrl());
 		log.info("WS voice channel: session={} party={} channel={}", sub.session.getId(), id,
 			channel.get().channelId());
-		send(sub, Outbound.voiceChannel(version.get(), id, channel.get().joinUrl()));
+		send(sub, Outbound.voiceChannel(version.get(), id, channel.get().inviteUrl()));
 	}
 
 	/**

@@ -38,12 +38,7 @@ public interface VoiceChannelService {
 	 */
 	void disconnectFromChannel(String channelId, String discordId);
 
-	/**
-	 * A provisioned channel: its Discord id (for later deletion), the shareable invite URL, and the
-	 * {@code discord://} deep link the plugin opens for "Join voice" — that protocol is registered by the
-	 * Discord desktop installer on every OS, so it opens the app straight on the channel (a
-	 * {@code discord.com/channels} link only opens the web client, and inconsistently across platforms).
-	 */
-	record VoiceChannelInfo(String channelId, String inviteUrl, String joinUrl) {
+	/** A provisioned channel: its Discord id (for later deletion) and the shareable invite URL. */
+	record VoiceChannelInfo(String channelId, String inviteUrl) {
 	}
 }

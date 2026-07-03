@@ -31,6 +31,11 @@ public class FakePartyRepository implements PartyRepository {
 	}
 
 	@Override
+	public Optional<Party> findById(String id) {
+		return id == null ? Optional.empty() : Optional.ofNullable(parties.get(id));
+	}
+
+	@Override
 	public Optional<Party> findByInviteCode(String code) {
 		String normalized = PartyFactory.normalizeInviteCode(code);
 		if (normalized == null) {
@@ -87,6 +92,17 @@ public class FakePartyRepository implements PartyRepository {
 			return Optional.empty();
 		}
 		PartyFactory.applyUpdate(party, patch);
+		return Optional.of(party);
+	}
+
+	@Override
+	public Optional<Party> attachVoiceChannel(String id, String channelId, String inviteUrl) {
+		Party party = parties.get(id);
+		if (party == null) {
+			return Optional.empty();
+		}
+		party.setDiscordChannelId(channelId);
+		party.setDiscordInviteUrl(inviteUrl);
 		return Optional.of(party);
 	}
 

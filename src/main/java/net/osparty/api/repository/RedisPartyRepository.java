@@ -83,6 +83,11 @@ public class RedisPartyRepository implements PartyRepository {
 	}
 
 	@Override
+	public Optional<Party> findById(String id) {
+		return id == null ? Optional.empty() : Optional.ofNullable(read(PARTY_KEY + id));
+	}
+
+	@Override
 	public Optional<Party> findByInviteCode(String code) {
 		String normalized = PartyFactory.normalizeInviteCode(code);
 		if (normalized == null) {
@@ -181,6 +186,22 @@ public class RedisPartyRepository implements PartyRepository {
 		if (party.getInviteCode() != null) {
 			redis.expire(CODE_KEY + party.getInviteCode(), ttl);
 		}
+		return Optional.of(party);
+	}
+
+	@Override
+	public Optional<Party> attachVoiceChannel(String id, String channelId, String inviteUrl) {
+		String key = PARTY_KEY + id;
+		Party party = read(key);
+		if (party == null) {
+			return Optional.empty();
+		}
+		party.setDiscordChannelId(channelId);
+		party.setDiscordInviteUrl(inviteUrl);
+		// Rewrite in place; preserve the remaining TTL rather than resetting it (a KEEPTTL-style set).
+		Long remaining = redis.getExpire(key, java.util.concurrent.TimeUnit.MILLISECONDS);
+		Duration ttlToUse = (remaining != null && remaining > 0) ? Duration.ofMillis(remaining) : ttl;
+		redis.opsForValue().set(key, write(party), ttlToUse);
 		return Optional.of(party);
 	}
 

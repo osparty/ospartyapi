@@ -25,6 +25,19 @@ services:
     environment:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
+      # Discord voice-channel bot. Values come from the .env file on the server (in this deploy dir);
+      # Compose substitutes ${...} from it. Defaults mirror application.yml, so if .env is absent the
+      # bot stays off and the app runs exactly as before.
+      DISCORD_ENABLED: "${DISCORD_ENABLED:-false}"
+      DISCORD_TOKEN: "${DISCORD_TOKEN:-}"
+      DISCORD_GUILD_ID: "${DISCORD_GUILD_ID:-0}"
+      DISCORD_CATEGORY_ID: "${DISCORD_CATEGORY_ID:-0}"
+      DISCORD_INVITE_MAX_AGE_SECONDS: "${DISCORD_INVITE_MAX_AGE_SECONDS:-86400}"
+      DISCORD_INVITE_MAX_USES: "${DISCORD_INVITE_MAX_USES:-0}"
+      # OAuth2 account linking (blank = linking disabled).
+      DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID:-}"
+      DISCORD_CLIENT_SECRET: "${DISCORD_CLIENT_SECRET:-}"
+      DISCORD_REDIRECT_URI: "${DISCORD_REDIRECT_URI:-}"
     ports:
       - "8081:8080"
     restart: unless-stopped

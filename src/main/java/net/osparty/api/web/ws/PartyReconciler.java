@@ -16,12 +16,15 @@ import org.springframework.stereotype.Component;
 public class PartyReconciler {
 	private final PartyRepository store;
 	private final PartyBroadcaster broadcaster;
+	private final net.osparty.api.service.VoiceChannelService voice;
 
 	private Map<String, Party> lastKnown = new HashMap<>();
 
-	public PartyReconciler(PartyRepository store, PartyBroadcaster broadcaster) {
+	public PartyReconciler(PartyRepository store, PartyBroadcaster broadcaster,
+		net.osparty.api.service.VoiceChannelService voice) {
 		this.store = store;
 		this.broadcaster = broadcaster;
+		this.voice = voice;
 	}
 
 	// TODO(scale): list() scans every ad each tick (KEYS on Redis); back it with a SCAN/index if one instance ever holds enough ads to bite.
@@ -43,6 +46,13 @@ public class PartyReconciler {
 		for (Map.Entry<String, Party> entry : lastKnown.entrySet()) {
 			if (!currentById.containsKey(entry.getKey())) {
 				removed.add(new PartyBroadcaster.RemovedRef(entry.getKey(), entry.getValue().getActivity()));
+				// The party is gone (disbanded or TTL'd out): tear down its Discord channel if it had
+				// one. No-op when Discord is disabled. A separate sweeper should catch any we miss here
+				// (e.g. an event lost across a restart).
+				String channelId = entry.getValue().getDiscordChannelId();
+				if (channelId != null) {
+					voice.delete(channelId);
+				}
 			}
 		}
 		for (Party party : current) {

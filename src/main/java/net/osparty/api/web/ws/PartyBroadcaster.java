@@ -259,10 +259,12 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			sendError(sub, id, "voice unavailable");
 			return;
 		}
-		store.attachVoiceChannel(id, channel.get().channelId(), channel.get().inviteUrl());
+		// Store + broadcast the direct channel deep link (not the invite) as the "Join voice" URL, so a
+		// linked member lands on the voice channel itself instead of the server root.
+		store.attachVoiceChannel(id, channel.get().channelId(), channel.get().channelUrl());
 		log.info("WS voice channel: session={} party={} channel={}", sub.session.getId(), id,
 			channel.get().channelId());
-		send(sub, Outbound.voiceChannel(version.get(), id, channel.get().inviteUrl()));
+		send(sub, Outbound.voiceChannel(version.get(), id, channel.get().channelUrl()));
 	}
 
 	/**

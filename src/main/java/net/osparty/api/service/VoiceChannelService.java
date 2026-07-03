@@ -38,7 +38,12 @@ public interface VoiceChannelService {
 	 */
 	void disconnectFromChannel(String channelId, String discordId);
 
-	/** A provisioned channel: its Discord id (for later deletion) and the shareable invite URL. */
-	record VoiceChannelInfo(String channelId, String inviteUrl) {
+	/**
+	 * A provisioned channel: its Discord id (for later deletion), the shareable invite URL (gets a
+	 * non-member into the guild), and the direct channel deep link the plugin opens for "Join voice"
+	 * — that link takes an existing guild member straight to the voice channel, whereas an invite just
+	 * lands them at the server.
+	 */
+	record VoiceChannelInfo(String channelId, String inviteUrl, String channelUrl) {
 	}
 }

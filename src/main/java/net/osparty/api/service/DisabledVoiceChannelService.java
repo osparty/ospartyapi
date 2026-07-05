@@ -25,8 +25,8 @@ public class DisabledVoiceChannelService {
 			}
 
 			@Override
-			public void grantAccess(String channelId, String discordId) {
-				// no-op
+			public boolean grantAccess(String channelId, String discordId) {
+					return false;
 			}
 
 			@Override

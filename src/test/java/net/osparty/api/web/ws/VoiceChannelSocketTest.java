@@ -68,8 +68,9 @@ class VoiceChannelSocketTest {
 		}
 
 		@Override
-		public void grantAccess(String channelId, String discordId) {
+		public boolean grantAccess(String channelId, String discordId) {
 			// not exercised here
+			return true;
 		}
 
 		@Override

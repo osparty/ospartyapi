@@ -44,6 +44,14 @@ public class DiscordBotService implements VoiceChannelService {
 	/** Discord hard limit on channel-name length. */
 	private static final int MAX_CHANNEL_NAME = 100;
 
+	/**
+	 * What a party member is granted on their channel: see it, connect, and actually talk. {@code VOICE_SPEAK}
+	 * and {@code VOICE_USE_VAD} matter because guilds commonly disable those on {@code @everyone}, so without an
+	 * explicit per-user allow a member could join but be muted (or forced to push-to-talk).
+	 */
+	private static final EnumSet<Permission> MEMBER_PERMS = EnumSet.of(
+		Permission.VIEW_CHANNEL, Permission.VOICE_CONNECT, Permission.VOICE_SPEAK, Permission.VOICE_USE_VAD);
+
 	private final JDA jda;
 	private final long guildId;
 	private final long categoryId;
@@ -89,7 +97,7 @@ public class DiscordBotService implements VoiceChannelService {
 				for (String discordId : allowedDiscordIds) {
 					try {
 						action = action.addMemberPermissionOverride(Long.parseLong(discordId),
-							EnumSet.of(Permission.VIEW_CHANNEL, Permission.VOICE_CONNECT), null);
+							MEMBER_PERMS, null);
 					}
 					catch (NumberFormatException ignored) {
 						// skip a malformed id rather than fail the whole create
@@ -133,25 +141,30 @@ public class DiscordBotService implements VoiceChannelService {
 	}
 
 	@Override
-	public void grantAccess(String channelId, String discordId) {
+	public boolean grantAccess(String channelId, String discordId) {
 		if (channelId == null || discordId == null) {
-			return;
+			return false;
 		}
 		try {
 			VoiceChannel channel = jda.getVoiceChannelById(channelId);
 			if (channel == null) {
-				return;
+				return false;
 			}
-			// The member may not be cached; fetch them, then upsert a per-user allow overwrite.
-			channel.getGuild().retrieveMemberById(Long.parseLong(discordId)).queue(
-				member -> channel.upsertPermissionOverride(member)
-					.grant(Permission.VIEW_CHANNEL, Permission.VOICE_CONNECT)
-					.queue(ok -> log.info("Granted Discord user {} access to channel {}", discordId, channelId),
-						err -> log.debug("grant override failed for {}: {}", discordId, err.toString())),
-				err -> log.debug("retrieveMember {} failed: {}", discordId, err.toString()));
+			// Run synchronously (complete()) so we only report success once the override has actually
+			// landed on Discord's side — the caller opens the invite the moment we reply, and if the
+			// grant were still in flight the member would find the channel invisible on their first try
+			// and have to retry. The member may not be cached, so fetch them first.
+			Member member = channel.getGuild().retrieveMemberById(Long.parseLong(discordId)).complete();
+			channel.upsertPermissionOverride(member)
+				.grant(MEMBER_PERMS)
+				.reason("OSParty voice access")
+				.complete();
+			log.info("Granted Discord user {} access to channel {}", discordId, channelId);
+			return true;
 		}
 		catch (Exception e) {
-			log.debug("grantAccess threw: {}", e.toString());
+			log.warn("grantAccess failed for {} on {}: {}", discordId, channelId, e.toString());
+			return false;
 		}
 	}
 

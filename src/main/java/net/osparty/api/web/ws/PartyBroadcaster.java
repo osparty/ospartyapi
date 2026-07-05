@@ -351,7 +351,12 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			sendError(sub, id, "not linked");
 			return;
 		}
-		voice.grantAccess(party.getDiscordChannelId(), discordId);
+		// Synchronous: only tell the client "you're in" once the override is actually live, so the plugin
+		// doesn't open the invite to a still-invisible channel (which forced the old see-nothing-then-retry).
+		if (!voice.grantAccess(party.getDiscordChannelId(), discordId)) {
+			sendError(sub, id, "voice access failed");
+			return;
+		}
 		send(sub, Outbound.voiceAccess(version.get(), id));
 	}
 

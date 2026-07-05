@@ -19,8 +19,14 @@ public interface VoiceChannelService {
 	 */
 	Optional<VoiceChannelInfo> createForParty(Party party, java.util.Collection<String> allowedDiscordIds);
 
-	/** Grant a linked member per-user access to an existing channel (for someone who joined/linked later). */
-	void grantAccess(String channelId, String discordId);
+	/**
+	 * Grant a linked member per-user access (view/connect/speak) to an existing channel, for someone who
+	 * joined or linked after it was created. Runs synchronously so a {@code true} return means the
+	 * permission override is already live — the caller can hand out the invite without a race.
+	 *
+	 * @return true when the grant was applied; false when disabled, the channel/member is missing, or it failed.
+	 */
+	boolean grantAccess(String channelId, String discordId);
 
 	/**
 	 * Revoke a member's per-user access to a channel by deleting their permission override, so with

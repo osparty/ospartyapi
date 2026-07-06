@@ -59,6 +59,23 @@ app:
       # e.g. https://api.osparty.net/api/v1/discord/link/callback (or http://localhost:8080/... for dev)
       redirect-uri: ${DISCORD_REDIRECT_URI:}
 
+# Production monitoring. Actuator runs on its OWN port (9090), which docker-compose does NOT
+# publish to the host — only the prometheus container (same compose network) can reach it, so
+# the scrape endpoint is never exposed to the public internet. The main API stays on 8080.
+# Locally (gradle bootRun) this just binds 9090 on localhost, unused and harmless.
+management:
+  server:
+    port: 9090
+  endpoints:
+    web:
+      exposure:
+        # Only health + the Prometheus scrape endpoint; nothing else is opened up.
+        include: health,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
 logging:
   level:
     # One INFO line per request (method, path, IP, status, latency).

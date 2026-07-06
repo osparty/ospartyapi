@@ -38,7 +38,59 @@ services:
       DISCORD_REDIRECT_URI: "${DISCORD_REDIRECT_URI:-}"
     ports:
       - "8080:8080"
+    # Actuator/Prometheus metrics port. NOT published to the host — only reachable by the
+    # prometheus service on this compose network, so the scrape endpoint stays private.
+    expose:
+      - "9090"
+    restart: unless-stopped
+
+  # ---- Monitoring (production only) --------------------------------------------------------
+  # Prometheus scrapes the API's /actuator/prometheus (JVM, Tomcat, Lettuce/Redis, active
+  # WebSocket connections) and the redis-exporter (server-side Redis load); Grafana renders it.
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # Client-app Redis latency comes from Lettuce metrics on the API; this exporter adds the
+  # server side: ops/sec, memory, connected clients, keyspace hit ratio, blocked clients.
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    depends_on:
+      - prometheus
+    environment:
+      # Set GRAFANA_ADMIN_PASSWORD in the server's .env (see .env.example). Defaults to "admin".
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    # Bound to localhost only: reach it over an SSH tunnel
+    #   ssh -L 3000:localhost:3000 <server>   then open http://localhost:3000
+    # To expose it publicly, point the Nginx Proxy Manager stack at 127.0.0.1:3000 (it has its
+    # own login) instead of publishing the port here.
+    ports:
+      - "127.0.0.1:3000:3000"
     restart: unless-stopped
 
 volumes:
   redis-data:
+  prometheus-data:
+  grafana-data:

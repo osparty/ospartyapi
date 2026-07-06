@@ -248,6 +248,39 @@ Proxy Host at it:
 > The jar is Java 17 bytecode on a `eclipse-temurin:17-jre` base. Rebuild the
 > jar and re-run `up --build` to deploy a new version.
 
+## Monitoring (production)
+
+The production `docker-compose.yml` runs a **Prometheus + Grafana** stack alongside the API.
+It's not in the test stack — monitoring is production-only.
+
+What's collected:
+
+- **JVM** — heap/non-heap, GC pause rate, live threads, CPU (Actuator + Micrometer, automatic).
+- **Active socket connections** — the `osparty_ws_connections_active` gauge, read live off
+  `PartyBroadcaster`'s subscriber map (see `MetricsConfig`).
+- **Redis query time** — Lettuce per-command latency timers (`lettuce_command_completion_*`),
+  tagged by command. Only populated when `app.storage=redis` (i.e. in the deployed stack).
+- **Redis server load** — a `redis-exporter` sidecar: ops/sec, memory, connected clients,
+  keyspace hit ratio.
+
+How it's wired (all private by default):
+
+- The app exposes `/actuator/prometheus` on a **separate management port `9090`** that
+  docker-compose does **not** publish — only the `prometheus` container reaches it over the
+  compose network. It is never served on the public `8080` port.
+- **Grafana** is bound to `127.0.0.1:3000` on the server. Reach it over an SSH tunnel:
+
+  ```sh
+  ssh -L 3000:localhost:3000 <server>    # then open http://localhost:3000
+  ```
+
+  Login is `admin` / `GRAFANA_ADMIN_PASSWORD` (set it in the server's `.env`; see `.env.example`).
+  The Prometheus datasource and an **OSParty API** dashboard are auto-provisioned on first boot.
+  To expose Grafana publicly instead, point the Nginx Proxy Manager stack at `127.0.0.1:3000`.
+
+The `monitoring/` directory (scrape config + Grafana provisioning) is shipped to the server by
+the deploy workflow alongside the jar and compose file.
+
 ## Test / build
 
 ```sh

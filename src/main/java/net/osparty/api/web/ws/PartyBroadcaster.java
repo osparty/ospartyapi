@@ -56,6 +56,11 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		this.discordLinks = discordLinks;
 	}
 
+	/** Currently connected WebSocket clients, exported as a Micrometer gauge (see MetricsConfig). */
+	public int activeConnections() {
+		return subscribers.size();
+	}
+
 	@Override
 	public void afterConnectionEstablished(WebSocketSession session) {
 		WebSocketSession guarded = new ConcurrentWebSocketSessionDecorator(

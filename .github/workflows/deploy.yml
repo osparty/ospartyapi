@@ -73,7 +73,8 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || '22' }}
-          source: "build/libs/app.jar,Dockerfile,docker-compose.yml,.dockerignore"
+          # `monitoring` carries the prometheus + grafana config the compose stack mounts.
+          source: "build/libs/app.jar,Dockerfile,docker-compose.yml,.dockerignore,monitoring/**"
           target: ${{ env.DEPLOY_DIR }}
           overwrite: true
 

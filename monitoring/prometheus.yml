@@ -1,0 +1,23 @@
+# Prometheus scrape config for the OSParty API stack. Mounted read-only into the prometheus
+# container by docker-compose. Targets are resolved over the compose network by service name.
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  # The Spring Boot API: JVM (heap/GC/threads), Tomcat, Lettuce/Redis command latency, and the
+  # custom osparty_ws_connections_active gauge. Actuator runs on the unpublished mgmt port 9090.
+  - job_name: osparty-api
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["api:9090"]
+
+  # Server-side Redis load (ops/sec, memory, connected clients, keyspace hits/misses).
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  # Prometheus scraping itself.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

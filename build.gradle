@@ -28,6 +28,12 @@ dependencies {
     // default in-memory mode (and the tests) run without a Redis server.
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
+    // Production monitoring: Actuator exposes a Prometheus scrape endpoint (JVM, Tomcat,
+    // Redis/Lettuce and our custom WebSocket-connection gauge). Scraped by the prometheus
+    // service in docker-compose and visualised in Grafana. See MetricsConfig + monitoring/.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+
     // Discord bot (voice-channel provisioning). Audio (opus) is not used, so exclude it.
     implementation('net.dv8tion:JDA:5.2.1') {
         exclude module: 'opus-java'

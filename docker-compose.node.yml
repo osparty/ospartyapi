@@ -58,7 +58,6 @@ services:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     command:
       - '--housekeeping_interval=15s'
-      - '--docker_only=true'
     privileged: true
     devices:
       - /dev/kmsg

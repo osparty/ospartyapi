@@ -102,7 +102,6 @@ services:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     command:
       - '--housekeeping_interval=15s'
-      - '--docker_only=true'
     privileged: true
     devices:
       - /dev/kmsg
@@ -120,6 +119,11 @@ services:
     image: prom/blackbox-exporter:v0.25.0
     volumes:
       - ./monitoring/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    # api.osparty.net resolves to MAIN's PUBLIC IP; a container can't reach its own host's public IP
+    # (no NAT hairpin). Map the hostname to the docker host gateway so the probe hits NPM's 443 locally —
+    # NPM still matches the SNI (api.osparty.net), serves the real LE cert, and routes through the LB.
+    extra_hosts:
+      - "api.osparty.net:host-gateway"
     restart: unless-stopped
 
   grafana:

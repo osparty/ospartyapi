@@ -55,11 +55,20 @@ Already set from the single-server phase: `API_SERVER_ADDRESS` (→ MAIN), `SSH_
    - NODE-2 `~/osparty-api/.env` ← `.env.node.example` with `NODE_PRIVATE_IP=10.0.0.4`.
    - `REDIS_PASSWORD` and `DISCORD_INTERNAL_TOKEN` must be **identical** across MAIN + both nodes (and the
      bot's token matches the API's on MAIN).
-4. **NPM** — mount custom config and load-balance:
-   - Add `- ./npm-custom:/data/nginx/custom:ro` to the NPM stack's compose; put `deploy/npm/http_top.conf`
-     at `./npm-custom/http_top.conf`.
-   - On the `api.osparty.net` Proxy Host, paste `deploy/npm/api-proxy-host-advanced.conf` into the
-     Advanced tab. `docker exec <npm> nginx -t` then reload.
+4. **NPM** — the container is part of `docker-compose.main.yml` (deployed automatically) and mounts
+   `deploy/npm/http_top.conf` as the LB upstream; the deploy runs `nginx -s reload` after each MAIN deploy
+   so upstream edits take effect. Open `80`/`443` publicly and restrict `81` (admin UI) to your IP. The
+   rest is a **one-time UI setup** (persisted in the `npm-data`/`npm-letsencrypt` volumes):
+   - Admin UI `http://<main-public-ip>:81` → log in (`admin@example.com` / `changeme`), change the password.
+   - Add a Proxy Host for `api.osparty.net`: Forward `10.0.0.2:8080`, **Websockets Support ON**, request a
+     Let's Encrypt cert + Force SSL. Then paste `deploy/npm/api-proxy-host-advanced.conf` into its
+     **Advanced** tab (points it at the `osparty_api` pool). Save.
+   - (Optional) `monitoring.osparty.net` → `host.docker.internal:3001` for Grafana.
+
+   You never edit the upstream by hand: the deploy regenerates `http_top.conf` on the MAIN leg to include
+   MAIN + any node whose `NODE_*_ADDRESS` secret is set, then reloads nginx. Add a node's secret and it
+   joins the pool on the next deploy; a node briefly down during its own rolling deploy is handled by
+   nginx's passive health checks.
 
 ## Deploy
 

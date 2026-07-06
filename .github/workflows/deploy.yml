@@ -1,17 +1,21 @@
 name: Deploy API
 
-# Versioned, tag-driven GHCR deploys. Pushing a semver tag (e.g. v1.2.3) builds the image, pushes it to
-# ghcr.io/osparty/osparty-api, then logs in + pulls + restarts the prod stack on the server. A
-# workflow_dispatch run deploys on demand (versioned <gradle version>-<sha> unless you pass a version).
+# Versioned, tag-driven GHCR deploy across the fleet. Pushing a semver tag (e.g. v1.2.3) builds the image
+# ONCE, pushes it to ghcr.io/osparty/osparty-api, then rolls it out to MAIN + the two worker nodes:
+# each host pulls the same immutable tag. A workflow_dispatch run deploys on demand.
 #
-# Required repository secrets:
-#   API_SERVER_ADDRESS  - server host/IP to SSH into
-#   SSH_USER            - SSH user (must be able to run docker / docker compose)
-#   SSH_KEY             - private SSH key for that user (PEM, no passphrase)
-#   GHCR_USERNAME       - GitHub username for the server's GHCR pull login
-#   GHCR_TOKEN          - PAT with read:packages for that user (internal package)
+#   MAIN   (docker-compose.main.yml) — redis + prometheus + grafana + redis-exporter + api #1
+#   NODE-A (docker-compose.node.yml) — api only, points at MAIN's private Redis + bot
+#   NODE-B (docker-compose.node.yml) — api only
+#
+# Required repository/org secrets:
+#   API_SERVER_ADDRESS   - MAIN server host/IP to SSH into
+#   NODE_A_ADDRESS       - worker node A host/IP
+#   NODE_B_ADDRESS       - worker node B host/IP
+#   SSH_USER, SSH_KEY    - SSH user + private key (PEM, no passphrase); same on all three hosts
+#   GHCR_USERNAME, GHCR_TOKEN - GitHub username + PAT (read:packages) for the servers' pull login
 # Optional:
-#   SSH_PORT            - SSH port (defaults to 22)
+#   SSH_PORT             - SSH port (defaults to 22)
 on:
   push:
     tags:
@@ -26,18 +30,20 @@ permissions:
   contents: write   # create the GitHub release
   packages: write   # push the image to GHCR
 
-# Never run two deploys at once.
 concurrency:
   group: deploy-api
   cancel-in-progress: false
 
 env:
   IMAGE: ghcr.io/osparty/osparty-api
-  DEPLOY_DIR: osparty-api      # directory on the server, under the SSH user's home
+  DEPLOY_DIR: osparty-api      # directory on each server, under the SSH user's home
 
 jobs:
-  deploy:
+  # ---- Build + push the image once ---------------------------------------------------------------
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -56,7 +62,7 @@ jobs:
             VERSION="${BASE:-0.0.0}-$(git rev-parse --short HEAD)"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Deploying version: $VERSION"
+          echo "Building version: $VERSION"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -84,56 +90,96 @@ jobs:
             ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
             ${{ env.IMAGE }}:latest
 
-      - name: Copy compose + monitoring to server
+  # ---- Roll the new tag out to every host, one at a time -----------------------------------------
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1   # rolling: one host at a time, so the fleet never all-bounces at once
+      matrix:
+        include:
+          - role: main
+            host: API_SERVER_ADDRESS
+            compose: docker-compose.main.yml
+          - role: node
+            host: NODE_A_ADDRESS
+            compose: docker-compose.node.yml
+          - role: node
+            host: NODE_B_ADDRESS
+            compose: docker-compose.node.yml
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Copy compose to ${{ matrix.role }} (${{ matrix.host }})
+        # Skip a host whose address secret isn't set yet, so you can deploy MAIN before the nodes exist;
+        # each node lights up automatically once you add its NODE_*_ADDRESS secret.
+        if: ${{ secrets[matrix.host] != '' }}
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.API_SERVER_ADDRESS }}
+          host: ${{ secrets[matrix.host] }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || '22' }}
-          # The image ships via GHCR; only the compose file + the prometheus/grafana config it mounts
-          # need to reach the server.
-          source: "docker-compose.yml,monitoring/**"
+          source: ${{ matrix.compose }}
           target: ${{ env.DEPLOY_DIR }}
           overwrite: true
 
-      - name: Deploy on server
-        uses: appleboy/ssh-action@v1.2.0
-        env:
-          IMAGE_TAG: ${{ steps.version.outputs.version }}
-          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+      - name: Copy monitoring config (MAIN only)
+        if: ${{ matrix.role == 'main' && secrets[matrix.host] != '' }}
+        uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.API_SERVER_ADDRESS }}
+          host: ${{ secrets[matrix.host] }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || '22' }}
-          envs: IMAGE_TAG,DEPLOY_DIR,GHCR_USERNAME,GHCR_TOKEN
+          source: "monitoring/**"
+          target: ${{ env.DEPLOY_DIR }}
+          overwrite: true
+
+      - name: Deploy on ${{ matrix.role }}
+        if: ${{ secrets[matrix.host] != '' }}
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.version }}
+          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
+          COMPOSE_FILE: ${{ matrix.compose }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        with:
+          host: ${{ secrets[matrix.host] }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          envs: IMAGE_TAG,DEPLOY_DIR,COMPOSE_FILE,GHCR_USERNAME,GHCR_TOKEN
           script: |
             set -euo pipefail
             cd "$DEPLOY_DIR"
 
-            # Authenticate to GHCR (internal package) so the api pull works, incl. on a fresh node.
+            # Authenticate to GHCR (internal package) so the pull works, incl. on a fresh node.
             if [ -n "${GHCR_TOKEN:-}" ]; then
               echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
             fi
 
-            # Pull the exact api version (read by docker-compose.yml as IMAGE_TAG) and (re)start. Redis
-            # and the proxy keep running; compose recreates only what changed. Rollback = redeploy an
-            # older tag: IMAGE_TAG=<old> docker compose up -d
-            export IMAGE_TAG
+            # COMPOSE_FILE selects main vs node compose. Pull the exact tag and (re)start; on MAIN the
+            # shared services keep running and only the api container is recreated.
+            export IMAGE_TAG COMPOSE_FILE
             docker compose pull
             docker compose up -d
 
             docker image prune -f >/dev/null 2>&1 || true
-            echo "Deployed osparty-api ${IMAGE_TAG}"
+            echo "Deployed osparty-api ${IMAGE_TAG} to ${COMPOSE_FILE}"
 
+  # ---- Cut the GitHub release once, after the rollout --------------------------------------------
+  release:
+    needs: [build, deploy]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
       - name: Create GitHub release
-        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: build/libs/app.jar

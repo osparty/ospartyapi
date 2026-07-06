@@ -1,21 +1,42 @@
-# Prometheus scrape config for the OSParty API stack. Mounted read-only into the prometheus
-# container by docker-compose. Targets are resolved over the compose network by service name.
+# Prometheus scrape config for the OSParty stack. Mounted read-only into the prometheus container on the
+# MAIN server. MAIN's own API is reached over the compose network by service name; the two worker nodes
+# are scraped over the PRIVATE network by IP.
+#
+# >>> Replace the 10.0.0.x node IPs below with your real Hetzner private IPs. <<<
 global:
   scrape_interval: 15s
   scrape_timeout: 10s
 
 scrape_configs:
-  # The Spring Boot API: JVM (heap/GC/threads), Tomcat, Lettuce/Redis command latency, and the
-  # custom osparty_ws_connections_active gauge. Actuator runs on the unpublished mgmt port 9090.
+  # The Spring Boot API across all instances: JVM (heap/GC/threads), Tomcat, Lettuce/Redis command
+  # latency, and the custom osparty_ws_connections_active gauge. Actuator runs on the mgmt port 9090.
+  # In Grafana, sum(osparty_ws_connections_active) across instances for the fleet-wide connection count.
+  # Private IPs: MAIN 10.0.0.2 · node-1 10.0.0.3 · node-2 10.0.0.4.
   - job_name: osparty-api
     metrics_path: /actuator/prometheus
     static_configs:
+      # MAIN — api #1, reached over the compose network by service name.
       - targets: ["api:9090"]
+        labels:
+          node: main
+      # Worker nodes — reached over the private network (9090 bound to each node's private IP).
+      - targets: ["10.0.0.3:9090"]
+        labels:
+          node: node-1
+      - targets: ["10.0.0.4:9090"]
+        labels:
+          node: node-2
 
-  # Server-side Redis load (ops/sec, memory, connected clients, keyspace hits/misses).
+  # Server-side Redis load (ops/sec, memory, connected clients, keyspace hits/misses). One Redis on MAIN.
   - job_name: redis
     static_configs:
       - targets: ["redis-exporter:9121"]
+
+  # The Discord bot service on MAIN (JVM + health). Reached over the private network (MAIN = 10.0.0.2).
+  - job_name: osparty-discord
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["10.0.0.2:8090"]
 
   # Prometheus scraping itself.
   - job_name: prometheus

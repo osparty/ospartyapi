@@ -1,0 +1,97 @@
+# PROD — MAIN server (16GB/8vCPU). Runs the shared infrastructure plus one API instance:
+#   redis (shared bus, private-net only) · prometheus · grafana · redis-exporter · api #1
+# NPM (ingress/TLS) and the discord-bot run as their own stacks on this same box.
+# The two 4GB nodes run docker-compose.node.yml (api only) and point at this box's private IP.
+#
+# Requires a .env next to this file with at least: REDIS_PASSWORD, MAIN_PRIVATE_IP, DISCORD_INTERNAL_TOKEN,
+# GRAFANA_ADMIN_PASSWORD (see .env.main.example). IMAGE_TAG is exported by the deploy workflow.
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    environment:
+      # redis-cli picks this up so the healthcheck can AUTH without putting the password on the cmdline.
+      REDISCLI_AUTH: "${REDIS_PASSWORD}"
+    volumes:
+      - redis-data:/data
+    # Published ONLY on the private network so the remote API nodes can reach it; never public. api #1 on
+    # this box reaches it by the compose service name `redis`, not this published port.
+    ports:
+      - target: 6379
+        published: 6379
+        host_ip: "${MAIN_PRIVATE_IP}"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    image: ghcr.io/osparty/osparty-api:${IMAGE_TAG:-latest}
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      # Voice provisioning -> the discord-bot stack on this box (published on the private IP:8090).
+      DISCORD_SERVICE_URL: "http://${MAIN_PRIVATE_IP}:8090"
+      DISCORD_INTERNAL_TOKEN: "${DISCORD_INTERNAL_TOKEN:-}"
+      # OAuth2 account linking (blank = disabled). Nodes carry the same values (any node can serve the callback).
+      DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID:-}"
+      DISCORD_CLIENT_SECRET: "${DISCORD_CLIENT_SECRET:-}"
+      DISCORD_REDIRECT_URI: "${DISCORD_REDIRECT_URI:-}"
+    ports:
+      # Bind to the private IP only — NPM (on this host) load-balances to it at 10.0.0.2:8080 over the
+      # private net, uniform with the worker nodes. Nothing but NPM's 443 (+ SSH) is public.
+      - target: 8080
+        published: 8080
+        host_ip: "${MAIN_PRIVATE_IP}"
+    # Actuator/Prometheus metrics — reachable only on the compose network (prometheus scrapes api:9090).
+    expose:
+      - "9090"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "${GRAFANA_ROOT_URL:-https://monitoring.osparty.net}"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_HTTP_PORT:-3001}:3000"
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:

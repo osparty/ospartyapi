@@ -40,20 +40,23 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private final ObjectMapper mapper;
 	private final net.osparty.api.service.VoiceChannelService voice;
 	private final net.osparty.api.service.DiscordLinkService discordLinks;
+	private final PresenceRegistry presence;
 	private final Map<String, Subscriber> subscribers = new ConcurrentHashMap<>();
 	private final Map<String, String> hostedBy = new ConcurrentHashMap<>();
 	private final Map<String, String> ownerSession = new ConcurrentHashMap<>();
 	private final AtomicLong version = new AtomicLong();
-	/** Last active-user count pushed to clients; {@code -1} until the first broadcast. */
+	/** Last GLOBAL active-user count pushed to clients; {@code -1} until the first broadcast. */
 	private volatile int lastPresence = -1;
 
 	public PartyBroadcaster(PartyRepository store, ObjectMapper mapper,
 		net.osparty.api.service.VoiceChannelService voice,
-		net.osparty.api.service.DiscordLinkService discordLinks) {
+		net.osparty.api.service.DiscordLinkService discordLinks,
+		PresenceRegistry presence) {
 		this.store = store;
 		this.mapper = mapper;
 		this.voice = voice;
 		this.discordLinks = discordLinks;
+		this.presence = presence;
 	}
 
 	/** Currently connected WebSocket clients, exported as a Micrometer gauge (see MetricsConfig). */
@@ -69,9 +72,10 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		subscribers.put(session.getId(), sub);
 		log.info("WS connected: session={} remote={} (subscribers={})",
 			session.getId(), remoteOf(session), subscribers.size());
-		// Give the newcomer the current active-user count right away; everyone else learns
-		// of the change via the throttled scheduled broadcast below.
-		send(sub, Outbound.presence(version.get(), subscribers.size()));
+		// Give the newcomer the current active-user count right away — the last known GLOBAL total if we
+		// have one (so a multi-node deployment doesn't flash this node's local count), else our local size.
+		// Everyone else learns of the change via the throttled scheduled broadcast below.
+		send(sub, Outbound.presence(version.get(), lastPresence >= 0 ? lastPresence : subscribers.size()));
 	}
 
 	@Override
@@ -449,7 +453,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	 */
 	@Scheduled(fixedDelayString = "${app.ws.presence-interval-ms:5000}")
 	public void broadcastPresence() {
-		int online = subscribers.size();
+		// Report this node's local count to the shared registry and get back the GLOBAL total across all
+		// instances, so every client sees the same "active users" number regardless of which node it's on.
+		int online = presence.record(subscribers.size());
 		if (online == lastPresence) {
 			return;
 		}

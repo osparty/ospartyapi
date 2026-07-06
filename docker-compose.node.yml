@@ -1,0 +1,29 @@
+# PROD — worker NODE (4GB/2vCPU). Runs ONLY an API instance; no Redis, no monitoring, no bot. It reaches
+# the shared Redis and the discord-bot on the MAIN server over the private network.
+#
+# Requires a .env next to this file with: MAIN_PRIVATE_IP, NODE_PRIVATE_IP, REDIS_PASSWORD,
+# DISCORD_INTERNAL_TOKEN, and the OAuth vars (see .env.node.example). IMAGE_TAG is exported by the deploy.
+services:
+  api:
+    image: ghcr.io/osparty/osparty-api:${IMAGE_TAG:-latest}
+    environment:
+      # Shared Redis + bot live on MAIN, reached over the private network.
+      SPRING_DATA_REDIS_HOST: "${MAIN_PRIVATE_IP}"
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      DISCORD_SERVICE_URL: "http://${MAIN_PRIVATE_IP}:8090"
+      DISCORD_INTERNAL_TOKEN: "${DISCORD_INTERNAL_TOKEN:-}"
+      # OAuth2 linking — the NPM upstream may route a callback here, so nodes need the same values as MAIN.
+      DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID:-}"
+      DISCORD_CLIENT_SECRET: "${DISCORD_CLIENT_SECRET:-}"
+      DISCORD_REDIRECT_URI: "${DISCORD_REDIRECT_URI:-}"
+    # Bind BOTH ports to this node's PRIVATE interface only — nothing on this box is public. NPM on MAIN
+    # load-balances to :8080 over the private net; Prometheus on MAIN scrapes the metrics port :9090.
+    ports:
+      - target: 8080
+        published: 8080
+        host_ip: "${NODE_PRIVATE_IP}"
+      - target: 9090
+        published: 9090
+        host_ip: "${NODE_PRIVATE_IP}"
+    restart: unless-stopped

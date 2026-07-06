@@ -94,6 +94,10 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    # Map this host's address secret into an env var: the `secrets` context is NOT allowed in step `if:`
+    # conditions (only `env` is), so this is how a host with no configured address skips cleanly.
+    env:
+      HOST: ${{ secrets[matrix.host] }}
     strategy:
       fail-fast: false
       max-parallel: 1   # rolling: one host at a time, so the fleet never all-bounces at once
@@ -115,10 +119,10 @@ jobs:
       - name: Copy compose to ${{ matrix.role }} (${{ matrix.host }})
         # Skip a host whose address secret isn't set yet, so you can deploy MAIN before the nodes exist;
         # each node lights up automatically once you add its NODE_*_ADDRESS secret.
-        if: ${{ secrets[matrix.host] != '' }}
+        if: ${{ env.HOST != '' }}
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets[matrix.host] }}
+          host: ${{ env.HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || '22' }}
@@ -127,10 +131,10 @@ jobs:
           overwrite: true
 
       - name: Copy monitoring config (MAIN only)
-        if: ${{ matrix.role == 'main' && secrets[matrix.host] != '' }}
+        if: ${{ matrix.role == 'main' && env.HOST != '' }}
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets[matrix.host] }}
+          host: ${{ env.HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || '22' }}
@@ -139,7 +143,7 @@ jobs:
           overwrite: true
 
       - name: Deploy on ${{ matrix.role }}
-        if: ${{ secrets[matrix.host] != '' }}
+        if: ${{ env.HOST != '' }}
         uses: appleboy/ssh-action@v1.2.0
         env:
           IMAGE_TAG: ${{ needs.build.outputs.version }}
@@ -148,7 +152,7 @@ jobs:
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         with:
-          host: ${{ secrets[matrix.host] }}
+          host: ${{ env.HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || '22' }}

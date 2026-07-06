@@ -13,10 +13,12 @@ name: Deploy API (test)
 #   GHCR_TOKEN          - PAT with read:packages for that user (internal package)
 # Optional:
 #   SSH_PORT            - SSH port (defaults to 22)
+# Auto test-deploy on push to main is DISABLED for now — this only runs when triggered manually from the
+# Actions tab. Re-enable by restoring the `push: branches: [main]` trigger below.
 on:
-  push:
-    branches:
-      - main
+  # push:
+  #   branches:
+  #     - main
   workflow_dispatch:
 
 permissions:

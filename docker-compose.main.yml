@@ -52,6 +52,15 @@ services:
     # Actuator/Prometheus metrics — reachable only on the compose network (prometheus scrapes api:9090).
     expose:
       - "9090"
+    # Each WebSocket client is a file descriptor; the default container limit (often 1024) caps throughput
+    # long before the app's max-connections: 20000. Raise it so the API can actually hold many sockets.
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    sysctls:
+      # Bigger accept backlog for connection/reconnect bursts (pairs with Tomcat's accept-count).
+      net.core.somaxconn: "65535"
     restart: unless-stopped
 
   prometheus:
@@ -73,6 +82,44 @@ services:
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
     depends_on:
       - redis
+    restart: unless-stopped
+
+  # Host metrics (CPU, memory, disk, network, load) for THIS server. Prometheus scrapes it by service
+  # name over the compose network. Reads real host stats via the / and host-PID mounts.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    restart: unless-stopped
+
+  # Per-container metrics (CPU, memory, running state) for every container on this host — including ones
+  # with no metrics endpoint of their own (npm, grafana, redis). This is how NPM shows up in the dashboard.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    command:
+      - '--housekeeping_interval=15s'
+      - '--docker_only=true'
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    restart: unless-stopped
+
+  # Synthetic HTTP probe: Prometheus hits /probe with a public URL and blackbox reports up/latency/cert
+  # expiry. Probing https://api.osparty.net gives a TRUE end-to-end healthcheck THROUGH NPM + TLS + the LB.
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    volumes:
+      - ./monitoring/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
     restart: unless-stopped
 
   grafana:
@@ -105,8 +152,23 @@ services:
     volumes:
       - npm-data:/data
       - npm-letsencrypt:/etc/letsencrypt
-      # The LB upstream include — version-controlled and shipped with the deploy. Read-only.
-      - ./deploy/npm/http_top.conf:/data/nginx/custom/http_top.conf:ro
+      # Custom nginx includes, version-controlled and shipped with the deploy. NOT :ro — NPM's startup
+      # chowns everything under /data, and a read-only mount makes that fail and the container never boots.
+      - ./deploy/npm/http_top.conf:/data/nginx/custom/http_top.conf   # the LB upstream
+      - ./deploy/npm/events.conf:/data/nginx/custom/events.conf       # raises worker_connections
+    # nginx needs a high fd ceiling to hold many proxied WebSockets (2 fds each). Must be >= what
+    # worker_connections implies, or nginx caps at the lower of the two.
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    sysctls:
+      # Each proxied WebSocket is a dedicated NPM->upstream connection using an ephemeral SOURCE port, so
+      # the source-port range caps concurrent connections PER upstream. Widen it (~28k -> ~64k) and reuse
+      # TIME_WAIT ports faster during reconnect storms. Namespaced sysctls, applied to this container.
+      net.ipv4.ip_local_port_range: "1024 65535"
+      net.ipv4.tcp_tw_reuse: "1"
+      net.core.somaxconn: "65535"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

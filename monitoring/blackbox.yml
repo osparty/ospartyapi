@@ -1,0 +1,11 @@
+# blackbox-exporter probe modules. The http_2xx module does a plain GET and passes on a 2xx response —
+# used by Prometheus to probe the public endpoints THROUGH NPM (end-to-end health incl. TLS + the LB).
+modules:
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      fail_if_not_ssl: true          # the public endpoints must be HTTPS
+      preferred_ip_protocol: ip4

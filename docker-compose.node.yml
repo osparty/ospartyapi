@@ -26,4 +26,50 @@ services:
       - target: 9090
         published: 9090
         host_ip: "${NODE_PRIVATE_IP}"
+    # Each WebSocket client is a file descriptor — raise the limit so this instance can hold its share of
+    # the fleet's sockets (the default ~1024 caps throughput far below the app's max-connections: 20000).
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    sysctls:
+      # Bigger accept backlog for connection/reconnect bursts (pairs with Tomcat's accept-count).
+      net.core.somaxconn: "65535"
+    restart: unless-stopped
+
+  # Host metrics for this node — published on the private IP so MAIN's Prometheus can scrape it.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    ports:
+      - target: 9100
+        published: 9100
+        host_ip: "${NODE_PRIVATE_IP}"
+    restart: unless-stopped
+
+  # Per-container metrics for this node — published on the private IP (cadvisor's internal 8080 -> 9200,
+  # since the api already uses 8080). Optional: drop this service if the node is resource-constrained.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    command:
+      - '--housekeeping_interval=15s'
+      - '--docker_only=true'
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - target: 8080
+        published: 9200
+        host_ip: "${NODE_PRIVATE_IP}"
     restart: unless-stopped

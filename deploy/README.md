@@ -44,8 +44,8 @@ Already set from the single-server phase: `API_SERVER_ADDRESS` (→ MAIN), `SSH_
    - MAIN inbound (public): `443` (NPM), `22` (SSH, restrict to your IP). Nothing else public.
    - Nodes inbound (public): `22` only.
    - Private subnet (`10.0.0.0/24`): allow between the three — `6379` (Redis), `8090` (bot), `8080` (API,
-     from NPM), `9090` (API metrics, to Prometheus). All API/redis/bot ports bind to private IPs, so the
-     firewall is defence-in-depth.
+     from NPM), `9090` (API metrics), `9100` (node-exporter), `9200` (cadvisor) — the last three scraped
+     by Prometheus on MAIN. All these ports bind to private IPs, so the firewall is defence-in-depth.
 3. **Server dirs + `.env` files** (under the SSH user's home):
    - MAIN `~/osparty-api/.env` ← from `.env.main.example` (`MAIN_PRIVATE_IP=10.0.0.2`, `REDIS_PASSWORD`,
      `DISCORD_INTERNAL_TOKEN`, OAuth, Grafana).
@@ -63,7 +63,8 @@ Already set from the single-server phase: `API_SERVER_ADDRESS` (→ MAIN), `SSH_
    - Add a Proxy Host for `api.osparty.net`: Forward `10.0.0.2:8080`, **Websockets Support ON**, request a
      Let's Encrypt cert + Force SSL. Then paste `deploy/npm/api-proxy-host-advanced.conf` into its
      **Advanced** tab (points it at the `osparty_api` pool). Save.
-   - (Optional) `monitoring.osparty.net` → `host.docker.internal:3001` for Grafana.
+   - (Optional) `monitoring.osparty.net` → Forward `grafana:3000` (NPM and Grafana share this compose
+     network, so route by service name — no host hairpin/published port needed), Websockets ON.
 
    You never edit the upstream by hand: the deploy regenerates `http_top.conf` on the MAIN leg to include
    MAIN + any node whose `NODE_*_ADDRESS` secret is set, then reloads nginx. Add a node's secret and it
@@ -93,3 +94,27 @@ The bot deploys from its own repo (`osparty-discord`, MAIN only). Order for a fi
 - Prometheus → Status → Targets: `osparty-api` shows 3 UP (labels `node=main|node-1|node-2`).
 - Grafana: `sum(osparty_ws_connections_active)` = fleet-wide connections; the plugin's "active users" count
   is now a global total (Redis-aggregated) regardless of which node a client hit.
+
+## Scaling limits & tuning
+
+Load-testing the WebSocket firehose hits a few ceilings, in this order:
+
+1. **nginx `worker_connections`** (~2048 proxied clients on defaults). Fixed by `deploy/npm/events.conf`
+   (raised to 200000) + the `nofile` ulimit on the npm container.
+2. **Ephemeral source ports, NPM → a single upstream** (~28k). Each proxied WebSocket is a dedicated
+   NPM→upstream TCP connection using one source port, so a *single* node caps around the port-range size.
+   **The primary fix is horizontal: more upstreams.** Each node is a distinct `(dest IP:port)` tuple with
+   its own port pool, so the ceiling scales with the fleet. `net.ipv4.ip_local_port_range` (set per-container
+   in compose, ~28k→~64k) roughly doubles each node's share.
+3. **conntrack table full + accept backlog** under tens of thousands of sockets. Host-global sysctls in
+   `deploy/sysctl/99-osparty.conf` (`nf_conntrack_max`, `somaxconn`, `tcp_max_syn_backlog`, `file-max`);
+   install on **every** host: `sudo cp deploy/sysctl/99-osparty.conf /etc/sysctl.d/ && sudo sysctl --system`.
+
+The container-namespaced sysctls (port range, TIME_WAIT reuse, per-service `somaxconn`) and `nofile` ulimits
+ride in the compose files and deploy automatically; only the host-global `99-osparty.conf` is a manual
+per-server step.
+
+**Advanced (single-box ingress lever):** running NPM with `network_mode: host` removes the docker
+bridge SNAT/DNAT layer (less conntrack pressure, no double port allocation) and is the standard setup for
+a very-high-connection proxy. Trade-off: NPM then can't use docker DNS, so the Grafana proxy host must
+target `10.0.0.2:3001` instead of `grafana:3000`. Worth it only past very high connection counts.

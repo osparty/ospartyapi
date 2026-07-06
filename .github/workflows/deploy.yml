@@ -159,8 +159,9 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || '22' }}
-          # monitoring/ = prometheus + grafana config; deploy/npm/http_top.conf = the LB upstream NPM mounts.
-          source: "monitoring/**,deploy/npm/http_top.conf"
+          # monitoring/ = prometheus + grafana config; deploy/npm/ = LB upstream + nginx tuning NPM mounts;
+          # deploy/sysctl/ = host-tuning reference (applied manually with sudo, see deploy/README.md).
+          source: "monitoring/**,deploy/npm/**,deploy/sysctl/**"
           target: ${{ env.DEPLOY_DIR }}
           overwrite: true
 
@@ -202,6 +203,11 @@ jobs:
                 && docker compose exec -T npm nginx -s reload \
                 && echo "Reloaded NPM" \
                 || echo "NPM reload skipped (not ready or config invalid)"
+              # up -d won't restart Prometheus when only its mounted config changed, so SIGHUP it to pick
+              # up new scrape targets/rules. Prometheus keeps the old config if the new one is invalid.
+              docker compose kill -s SIGHUP prometheus >/dev/null 2>&1 \
+                && echo "Reloaded Prometheus config" \
+                || echo "Prometheus reload skipped"
             fi
 
             docker image prune -f >/dev/null 2>&1 || true

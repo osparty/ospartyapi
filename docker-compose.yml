@@ -78,16 +78,20 @@ services:
       # Set GRAFANA_ADMIN_PASSWORD in the server's .env (see .env.example). Defaults to "admin".
       GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # Public URL Grafana is served on (behind Nginx Proxy Manager). Needed so login redirects
+      # and generated links use https://monitoring.osparty.net instead of localhost.
+      GF_SERVER_ROOT_URL: "${GRAFANA_ROOT_URL:-https://monitoring.osparty.net}"
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
-    # Bound to localhost only: reach it over an SSH tunnel
-    #   ssh -L 3000:localhost:3000 <server>   then open http://localhost:3000
-    # To expose it publicly, point the Nginx Proxy Manager stack at 127.0.0.1:3000 (it has its
-    # own login) instead of publishing the port here.
+    # Published on the host so the separate Nginx Proxy Manager stack can reach it the same way it
+    # reaches the API: an NPM Proxy Host for monitoring.osparty.net forwards to
+    # host.docker.internal:3000 (scheme http), with Let's Encrypt SSL + "Websockets Support" on.
+    # Grafana has its own admin login, so the published port sits behind auth.
+    # (For SSH-tunnel-only access instead, change this to "127.0.0.1:3000:3000".)
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
     restart: unless-stopped
 
 volumes:

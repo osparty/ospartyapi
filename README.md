@@ -268,15 +268,17 @@ How it's wired (all private by default):
 - The app exposes `/actuator/prometheus` on a **separate management port `9090`** that
   docker-compose does **not** publish — only the `prometheus` container reaches it over the
   compose network. It is never served on the public `8080` port.
-- **Grafana** is bound to `127.0.0.1:3000` on the server. Reach it over an SSH tunnel:
-
-  ```sh
-  ssh -L 3000:localhost:3000 <server>    # then open http://localhost:3000
-  ```
+- **Grafana** is published on host port `3000` and served at `https://monitoring.osparty.net`
+  through the same Nginx Proxy Manager stack as the API. Add a Proxy Host in NPM:
+  - *Domain*: `monitoring.osparty.net`
+  - *Forward Hostname/IP*: `host.docker.internal` — *Forward Port*: `3000` — scheme **http**
+  - Details tab: enable **Websockets Support**
+  - SSL tab: request a Let's Encrypt certificate + Force SSL
 
   Login is `admin` / `GRAFANA_ADMIN_PASSWORD` (set it in the server's `.env`; see `.env.example`).
   The Prometheus datasource and an **OSParty API** dashboard are auto-provisioned on first boot.
-  To expose Grafana publicly instead, point the Nginx Proxy Manager stack at `127.0.0.1:3000`.
+  Prefer SSH-tunnel-only access? Change the port mapping to `127.0.0.1:3000:3000` and
+  `ssh -L 3000:localhost:3000 <server>`.
 
 The `monitoring/` directory (scrape config + Grafana provisioning) is shipped to the server by
 the deploy workflow alongside the jar and compose file.

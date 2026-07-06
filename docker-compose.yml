@@ -85,13 +85,15 @@ services:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
-    # Published on the host so the separate Nginx Proxy Manager stack can reach it the same way it
-    # reaches the API: an NPM Proxy Host for monitoring.osparty.net forwards to
-    # host.docker.internal:3000 (scheme http), with Let's Encrypt SSL + "Websockets Support" on.
-    # Grafana has its own admin login, so the published port sits behind auth.
-    # (For SSH-tunnel-only access instead, change this to "127.0.0.1:3000:3000".)
+    # Published on ALL interfaces (not 127.0.0.1) so the separate Nginx Proxy Manager stack can
+    # reach it via host.docker.internal, the same way it reaches the API on 8080. The host port is
+    # configurable because 3000 is often already taken on a shared box (NPM serves test + prod
+    # here) — pick a free one via GRAFANA_HTTP_PORT and point the NPM Proxy Host at it:
+    #   Forward Hostname host.docker.internal, Forward Port ${GRAFANA_HTTP_PORT}, scheme http,
+    #   Websockets Support on, Let's Encrypt SSL. External access to this port stays firewalled;
+    #   only NPM reaches it over the docker bridge.
     ports:
-      - "3000:3000"
+      - "${GRAFANA_HTTP_PORT:-3001}:3000"
     restart: unless-stopped
 
 volumes:

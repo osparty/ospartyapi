@@ -268,10 +268,12 @@ How it's wired (all private by default):
 - The app exposes `/actuator/prometheus` on a **separate management port `9090`** that
   docker-compose does **not** publish — only the `prometheus` container reaches it over the
   compose network. It is never served on the public `8080` port.
-- **Grafana** is published on host port `3000` and served at `https://monitoring.osparty.net`
-  through the same Nginx Proxy Manager stack as the API. Add a Proxy Host in NPM:
+- **Grafana** is published on host port `${GRAFANA_HTTP_PORT}` (default `3001` — `3000` is often
+  already taken on this shared box) and served at `https://monitoring.osparty.net` through the
+  same Nginx Proxy Manager stack as the API. Add a Proxy Host in NPM:
   - *Domain*: `monitoring.osparty.net`
-  - *Forward Hostname/IP*: `host.docker.internal` — *Forward Port*: `3000` — scheme **http**
+  - *Forward Hostname/IP*: `host.docker.internal` — *Forward Port*: `3001` — scheme **http**
+    (NOT NPM's own host/port — pointing it at NPM returns NPM's `{"status":"OK"...}` API JSON)
   - Details tab: enable **Websockets Support**
   - SSL tab: request a Let's Encrypt certificate + Force SSL
 

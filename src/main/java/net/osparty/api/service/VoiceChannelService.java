@@ -5,9 +5,10 @@ import java.util.Optional;
 
 /**
  * Provisions and tears down a temporary voice channel for a party. Backed by
- * {@link DiscordBotService} when {@code app.discord.enabled=true}; otherwise a
- * {@link DisabledVoiceChannelService} no-op stands in so the wiring is always satisfied
- * (dev boxes and tests run without a Discord bot token).
+ * {@link HttpVoiceChannelService} (which calls the separate osparty-discord service) when
+ * {@code app.discord.service-url} is set; otherwise a {@link DisabledVoiceChannelService} no-op stands in
+ * so the wiring is always satisfied (dev boxes and tests run without the bot). Selected by
+ * {@link VoiceChannelServiceConfig}.
  */
 public interface VoiceChannelService {
 	/**

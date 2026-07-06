@@ -34,10 +34,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'io.micrometer:micrometer-registry-prometheus'
 
-    // Discord bot (voice-channel provisioning). Audio (opus) is not used, so exclude it.
-    implementation('net.dv8tion:JDA:5.2.1') {
-        exclude module: 'opus-java'
-    }
+    // Voice-channel provisioning is delegated over HTTP to the separate osparty-discord service
+    // (github.com/osparty/osparty-discord); JDA no longer lives here. See HttpVoiceChannelService.
 
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'

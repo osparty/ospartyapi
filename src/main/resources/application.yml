@@ -38,18 +38,12 @@ app:
     # comfortably below app.ads.ttl-ms; the gap between them is the disconnect grace.
     touch-interval-ms: 5000
   discord:
-    # Level-1 voice-channel provisioning. Off by default: with no bot token the app (and the
-    # whole test suite) runs a no-op VoiceChannelService. Turn on in the deployed backend only.
-    enabled: ${DISCORD_ENABLED:false}
-    # Bot token — inject from the environment/secret store, NEVER commit it.
-    token: ${DISCORD_TOKEN:}
-    # The single guild the bot operates in, and the category new party channels are created under
-    # (0 = create at the guild root). Both are Discord snowflake ids.
-    guild-id: ${DISCORD_GUILD_ID:0}
-    category-id: ${DISCORD_CATEGORY_ID:0}
-    # Invite lifetime and cap. maxAge in seconds (default 24h); maxUses 0 = unlimited.
-    invite-max-age-seconds: ${DISCORD_INVITE_MAX_AGE_SECONDS:86400}
-    invite-max-uses: ${DISCORD_INVITE_MAX_USES:0}
+    # Voice-channel provisioning is delegated over HTTP to the separate osparty-discord service
+    # (github.com/osparty/osparty-discord), which owns the single JDA gateway connection. Set service-url
+    # to enable it; when unset, a no-op VoiceChannelService stands in (dev/tests). internal-token must
+    # match the bot's configured shared secret. See VoiceChannelServiceConfig / HttpVoiceChannelService.
+    service-url: ${DISCORD_SERVICE_URL:}
+    internal-token: ${DISCORD_INTERNAL_TOKEN:}
     oauth:
       # Account linking (accountHash <-> Discord user) via OAuth2. Linking is offered only when
       # client-id and redirect-uri are set. client-id is the Discord application id; the redirect-uri

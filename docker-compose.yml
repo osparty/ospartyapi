@@ -14,6 +14,9 @@ services:
     restart: unless-stopped
 
   api:
+    # Image is built + pushed to GHCR by the deploy workflow; the server pulls it (see IMAGE_TAG).
+    # For a local build instead, run: ./gradlew bootJar && docker compose up --build
+    image: ghcr.io/osparty/osparty-api:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -23,19 +26,19 @@ services:
     environment:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
-      # Discord voice-channel bot. Values come from a .env file placed next to this compose file
-      # on the server (Compose substitutes ${...} from it). Defaults mirror application.yml, so if
-      # .env is absent the bot stays off and the app runs exactly as before.
-      DISCORD_ENABLED: "${DISCORD_ENABLED:-false}"
-      DISCORD_TOKEN: "${DISCORD_TOKEN:-}"
-      DISCORD_GUILD_ID: "${DISCORD_GUILD_ID:-0}"
-      DISCORD_CATEGORY_ID: "${DISCORD_CATEGORY_ID:-0}"
-      DISCORD_INVITE_MAX_AGE_SECONDS: "${DISCORD_INVITE_MAX_AGE_SECONDS:-86400}"
-      DISCORD_INVITE_MAX_USES: "${DISCORD_INVITE_MAX_USES:-0}"
-      # OAuth2 account linking (blank = linking disabled).
+      # Voice-channel provisioning is delegated to the separate osparty-discord service. Point this at
+      # the bot (e.g. http://host.docker.internal:8090 locally, or http://<main-private-ip>:8090 on the
+      # private network); leave it blank to run without voice (a no-op VoiceChannelService stands in).
+      # DISCORD_INTERNAL_TOKEN must match the bot's shared secret.
+      DISCORD_SERVICE_URL: "${DISCORD_SERVICE_URL:-}"
+      DISCORD_INTERNAL_TOKEN: "${DISCORD_INTERNAL_TOKEN:-}"
+      # OAuth2 account linking stays in the API (Redis-backed; needs no bot). Blank = linking disabled.
       DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID:-}"
       DISCORD_CLIENT_SECRET: "${DISCORD_CLIENT_SECRET:-}"
       DISCORD_REDIRECT_URI: "${DISCORD_REDIRECT_URI:-}"
+    # The bot runs as its own stack (osparty-discord); reach it on the host via host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
     # Actuator/Prometheus metrics port. NOT published to the host — only reachable by the

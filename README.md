@@ -294,25 +294,25 @@ the deploy workflow alongside the jar and compose file.
 
 ## Deploy
 
-CI deploys are **tag-driven** (`.github/workflows/deploy.yml`). Pushing a semver
-tag builds that version, ships the jar to the server over SSH, and runs
-`docker compose up -d --build` there:
+CI deploys are **tag-driven** (`.github/workflows/deploy.yml`) and image-based via **GitHub Container
+Registry**. Pushing a semver tag builds the image, pushes it to `ghcr.io/osparty/osparty-api`, then SSHes
+to the server and runs `docker compose pull && up -d`:
 
 ```sh
 git tag v1.2.3 && git push origin v1.2.3   # builds + deploys version 1.2.3
 ```
 
-The build version comes from the tag (`v1.2.3` -> `1.2.3`, via
-`-PappVersion`), each release jar is archived on the server under
-`releases/app-<version>.jar` (last 5 kept for rollback), the built image is
-tagged `osparty-api:<version>` and `:latest`, and a GitHub Release is cut for the
-tag. You can also trigger a manual deploy from the Actions tab (**Run workflow**),
-optionally passing a version label.
+The build version comes from the tag (`v1.2.3` -> `1.2.3`, via `-PappVersion`); the image is tagged
+`:<version>` and `:latest`, the compose file pins it via `${IMAGE_TAG}`, and a GitHub Release is cut for
+the tag. **Rollback** is just redeploying an older tag on the server: `IMAGE_TAG=1.2.2 docker compose up -d`.
+You can also trigger a manual deploy from the Actions tab (**Run workflow**), optionally passing a version
+label. Every push to `main` publishes a `:test` image and updates the test stack (`deploy-test.yml`).
 
-Required repository **secrets**: `API_SERVER_ADDRESS`, `SSH_USER`, `SSH_KEY`
-(PEM private key, no passphrase). Optional: `SSH_PORT` (defaults to 22). The SSH
-user must be able to run `docker` / `docker compose`, which needs Docker Compose
-v2 on the server.
+Required repository **secrets**: `API_SERVER_ADDRESS`, `SSH_USER`, `SSH_KEY` (PEM private key, no
+passphrase), and `GHCR_USERNAME` + `GHCR_TOKEN` (a PAT with `read:packages` for the server's pull login).
+Optional: `SSH_PORT` (defaults to 22). One-time on GitHub, set the GHCR package visibility to **internal**
+under the org's package settings. The SSH user must be able to run `docker` / `docker compose` (Compose v2).
+Only the compose file + `monitoring/` are shipped to the server; the app image comes from GHCR.
 
 ## Layout
 

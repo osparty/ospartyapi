@@ -111,6 +111,9 @@ services:
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
+      # Explicit docker socket: without it cadvisor can't resolve container NAMES (only cgroup ids), so
+      # the dashboard's name!="" filter drops everything. Read-only.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
 
   # Synthetic HTTP probe: Prometheus hits /probe with a public URL and blackbox reports up/latency/cert

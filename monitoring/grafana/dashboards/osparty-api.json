@@ -189,7 +189,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "targets": [
         { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "up{job=~\"osparty-api|osparty-discord|redis|node|cadvisor\"}", "legendFormat": "{{job}} {{node}}" },
-        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "probe_success{job=\"blackbox-http\"}", "legendFormat": "probe api.osparty.net" }
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "probe_success{job=\"blackbox-health\"}", "legendFormat": "health {{svc}} {{node}}" }
       ]
     },
     {

@@ -208,6 +208,10 @@ jobs:
               docker compose kill -s SIGHUP prometheus >/dev/null 2>&1 \
                 && echo "Reloaded Prometheus config" \
                 || echo "Prometheus reload skipped"
+              # blackbox re-reads its mounted module config on SIGHUP too.
+              docker compose kill -s SIGHUP blackbox-exporter >/dev/null 2>&1 \
+                && echo "Reloaded blackbox config" \
+                || echo "blackbox reload skipped"
             fi
 
             docker image prune -f >/dev/null 2>&1 || true

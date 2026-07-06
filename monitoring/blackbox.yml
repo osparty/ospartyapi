@@ -1,5 +1,6 @@
-# blackbox-exporter probe modules. The http_2xx module does a plain GET and passes on a 2xx response —
-# used by Prometheus to probe the public endpoints THROUGH NPM (end-to-end health incl. TLS + the LB).
+# blackbox-exporter probe modules. http_2xx does a plain GET and passes on a 200 — used by Prometheus to
+# probe each instance's actuator /health endpoint (200 = UP; actuator returns 503 if a health indicator
+# like Redis is DOWN, so this is a real health signal, not just "the port answered").
 modules:
   http_2xx:
     prober: http
@@ -7,5 +8,4 @@ modules:
     http:
       method: GET
       valid_status_codes: [200]
-      fail_if_not_ssl: true          # the public endpoints must be HTTPS
       preferred_ip_protocol: ip4

@@ -64,15 +64,23 @@ scrape_configs:
         labels:
           node: node-2
 
-  # End-to-end HTTP health THROUGH NPM (TLS + LB): blackbox probes the public URLs. `probe_success` is the
-  # true "is the whole thing serving" signal that a bare app scrape can't see past the proxy.
-  - job_name: blackbox-http
+  # Application health per instance via blackbox probing actuator /health (:9090 for the API, :8090 for
+  # the bot). probe_success = the app reports UP (200); it drops to 0 on a 503 (e.g. Redis unhealthy),
+  # which the plain `up` scrape can't distinguish. The app is WebSocket-only, so there is no public REST
+  # path to probe through NPM — this checks the real app health on each node instead.
+  - job_name: blackbox-health
     metrics_path: /probe
     params:
       module: [http_2xx]
     static_configs:
-      - targets:
-          - https://api.osparty.net/api/v1/parties
+      - targets: ["http://api:9090/actuator/health"]
+        labels: { node: main, svc: api }
+      - targets: ["http://10.0.0.3:9090/actuator/health"]
+        labels: { node: node-1, svc: api }
+      - targets: ["http://10.0.0.4:9090/actuator/health"]
+        labels: { node: node-2, svc: api }
+      - targets: ["http://10.0.0.2:8090/actuator/health"]
+        labels: { node: main, svc: discord-bot }
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

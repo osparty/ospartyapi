@@ -67,6 +67,8 @@ services:
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
+      # Explicit docker socket so cadvisor can resolve container NAMES (see the main compose note).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
       - target: 8080
         published: 9200

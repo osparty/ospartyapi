@@ -1,0 +1,67 @@
+# Grafana Alloy Helm values — the log collector (Promtail's successor; Promtail is EOL). Runs as a
+# DaemonSet: each instance tails the pods on ITS node via the Kubernetes API and pushes to Loki with
+# namespace/pod/container/app/node labels. Install/upgrade (on api01):
+#
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm upgrade --install alloy grafana/alloy -n monitoring -f k8s/cluster/alloy-values.yaml
+controller:
+  type: daemonset
+
+alloy:
+  # Downward-API env so each instance only discovers pods on its own node (a DaemonSet without this
+  # filter would ship every log line once per node).
+  extraEnv:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  configMap:
+    content: |
+      discovery.kubernetes "pods" {
+        role = "pod"
+        selectors {
+          role  = "pod"
+          field = "spec.nodeName=" + sys.env("NODE_NAME")
+        }
+      }
+
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          target_label  = "node"
+        }
+      }
+
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.write.default.receiver]
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.monitoring.svc:3100/loki/api/v1/push"
+        }
+      }

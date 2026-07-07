@@ -45,6 +45,50 @@ grafana:
     existingSecret: grafana-admin
     userKey: admin-user
     passwordKey: admin-password
+  # Injects DISCORD_ALERT_WEBHOOK_URL for the alerting contact point below. Create BEFORE upgrading
+  # (Grafana won't start with the secret missing):
+  #   kubectl -n monitoring create secret generic grafana-env \
+  #     --from-literal=DISCORD_ALERT_WEBHOOK_URL='https://discord.com/api/webhooks/<id>/<token>'
+  envFromSecret: grafana-env
+  # Loki (k8s/cluster/loki-values.yaml) — same namespace, so plain service DNS. The uid is referenced
+  # by the dashboard's Logs panel.
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      uid: loki
+      access: proxy
+      url: http://loki:3100
+  # Discord notifications: a provisioned contact point (webhook from the env var above) set as the
+  # root notification policy — every Grafana alert rule fires into Discord with a readable message,
+  # no per-rule wiring needed. Alert RULES are created in the UI (persisted in the grafana PVC).
+  alerting:
+    contactpoints.yaml:
+      apiVersion: 1
+      contactPoints:
+        - orgId: 1
+          name: discord
+          receivers:
+            - uid: discord
+              type: discord
+              settings:
+                url: ${DISCORD_ALERT_WEBHOOK_URL}
+                use_discord_username: true
+                # The outer {{ ` ... ` }} is HELM escaping (the grafana chart tpl-renders these values);
+                # what Grafana receives is just the inner Go template.
+                message: |-
+                  {{ `{{ range .Alerts.Firing }}🔥 **{{ .Labels.alertname }}**{{ if .Annotations.summary }} — {{ .Annotations.summary }}{{ end }}
+                  {{ if .Annotations.description }}{{ .Annotations.description }}
+                  {{ end }}{{ end }}{{ range .Alerts.Resolved }}✅ **Resolved:** {{ .Labels.alertname }}
+                  {{ end }}` }}
+    policies.yaml:
+      apiVersion: 1
+      policies:
+        - orgId: 1
+          receiver: discord
+          group_by: ['alertname']
+          group_wait: 30s
+          group_interval: 5m
+          repeat_interval: 4h
   grafana.ini:
     server:
       root_url: https://monitoring.osparty.net

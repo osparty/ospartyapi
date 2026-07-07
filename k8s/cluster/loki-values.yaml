@@ -1,0 +1,64 @@
+# Loki Helm values — log storage behind Grafana's Explore + the dashboard's Logs panel. Single-binary
+# mode with filesystem storage on api01 (right-sized for a 3-node cluster; the chart's default scalable
+# mode wants S3-style object storage and a memcached fleet we don't need). Install/upgrade (on api01):
+#
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm upgrade --install loki grafana/loki -n monitoring -f k8s/cluster/loki-values.yaml
+#
+# Logs are shipped to it by the Alloy DaemonSet (k8s/cluster/alloy-values.yaml); Grafana reaches it at
+# http://loki:3100 (same namespace — the datasource is provisioned in kube-prometheus-stack-values.yaml).
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false   # single-tenant, cluster-internal only
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    retention_period: 336h   # 14d, matching Prometheus' 15d ballpark
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+
+singleBinary:
+  replicas: 1
+  nodeSelector:
+    osparty.net/role: main   # api01, same pinning as the other stateful monitoring parts
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# Everything below is scalable-mode machinery the chart enables by default — off for single-binary.
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+gateway:
+  enabled: false
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false

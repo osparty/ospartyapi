@@ -14,8 +14,8 @@ images:
     newTag: latest   # overwritten by CI with the immutable release tag
 
 patches:
-  # Voice provisioning: the bot still runs as its compose stack on MAIN until Phase 5, reached over the
-  # private net. When the bot migrates into the cluster, change this to http://osparty-discord:8090.
+  # Voice provisioning: the bot runs in-cluster (osparty-discord repo, same namespace), reached by
+  # Service DNS. Before the bot's k8s migration this pointed at its compose stack on 10.0.0.2:8090.
   - patch: |-
       apiVersion: apps/v1
       kind: Deployment
@@ -28,4 +28,4 @@ patches:
               - name: api
                 env:
                   - name: DISCORD_SERVICE_URL
-                    value: http://10.0.0.2:8090
+                    value: http://osparty-discord:8090

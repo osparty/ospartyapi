@@ -61,13 +61,13 @@
     },
     {
       "type": "row",
-      "title": "Fleet (per node)",
+      "title": "Per node",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 }
     },
     {
       "type": "stat",
-      "title": "API instances up",
-      "description": "Number of osparty-api targets Prometheus sees as UP (expect 3: main, node-1, node-2).",
+      "title": "API pods up",
+      "description": "Number of osparty-api scrape targets Prometheus sees as UP (expect 3 pods, spread over api01/api02/api03).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 6, "x": 0, "y": 8 },
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 1 }, { "color": "green", "value": 3 } ] } } },
@@ -83,7 +83,7 @@
       "gridPos": { "h": 8, "w": 9, "x": 6, "y": 8 },
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } } } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (node) (osparty_ws_connections_active{application=\"osrs-party-api\"})", "legendFormat": "{{node}}" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (node) (osparty_ws_connections_active{application=\"osrs-party-api\"})", "legendFormat": "OSParty API ({{node}})" }
       ]
     },
     {
@@ -93,7 +93,7 @@
       "gridPos": { "h": 8, "w": 9, "x": 15, "y": 8 },
       "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 10 }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 } ] } } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "100 * sum by (node) (jvm_memory_used_bytes{application=\"osrs-party-api\",area=\"heap\"}) / sum by (node) (jvm_memory_max_bytes{application=\"osrs-party-api\",area=\"heap\"})", "legendFormat": "{{node}}" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "100 * sum by (node) (jvm_memory_used_bytes{application=\"osrs-party-api\",area=\"heap\"}) / sum by (node) (jvm_memory_max_bytes{application=\"osrs-party-api\",area=\"heap\"})", "legendFormat": "OSParty API ({{node}})" }
       ]
     },
     {
@@ -172,24 +172,24 @@
     },
     {
       "type": "row",
-      "title": "Fleet health & resources",
+      "title": "Cluster health & resources",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 }
     },
     {
       "type": "stat",
       "title": "Service status",
-      "description": "up = Prometheus scrape succeeded (per service/node). probe = end-to-end HTTPS GET of api.osparty.net THROUGH NPM+TLS+LB — the healthcheck a bare app scrape can't see past the proxy.",
+      "description": "One card per running instance (instant query — only pods that exist right now). Green = Prometheus scrape succeeded, red = down. The 'API pods up' stat catches a missing replica.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 43 },
       "fieldConfig": { "defaults": {
         "color": { "mode": "thresholds" },
-        "mappings": [ { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } } ],
         "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
       } },
-      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "name", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "up{job=~\"osparty-api|osparty-discord|redis|node|cadvisor\"}", "legendFormat": "{{job}} {{node}}" },
-        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "probe_success{job=\"blackbox-health\"}", "legendFormat": "health {{svc}} {{node}}" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "up{job=\"osparty-api\"}", "legendFormat": "OSParty API ({{node}})", "instant": true, "range": false },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "up{job=\"osparty-discord\"}", "legendFormat": "OSParty Discord", "instant": true, "range": false },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "up{job=\"redis\"}", "legendFormat": "Redis", "instant": true, "range": false }
       ]
     },
     {
@@ -199,7 +199,7 @@
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 43 },
       "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 10 }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 } ] } } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "100 - (avg by (node) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)", "legendFormat": "{{node}}" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"}[5m])) * 100)", "legendFormat": "{{instance}}" }
       ]
     },
     {
@@ -209,32 +209,47 @@
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 43 },
       "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 10 }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 92 } ] } } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "{{node}}" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"node-exporter\"} / node_memory_MemTotal_bytes{job=\"node-exporter\"})", "legendFormat": "{{instance}}" }
       ]
     },
     {
       "type": "row",
-      "title": "Docker containers",
+      "title": "Pods (kubelet cadvisor)",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 51 }
     },
     {
       "type": "timeseries",
-      "title": "Container CPU (cores) by server/container",
+      "title": "Pod CPU (cores) by namespace/pod",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 52 },
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (node, name) (rate(container_cpu_usage_seconds_total{name!=\"\"}[5m]))", "legendFormat": "{{node}}/{{name}}" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{job=\"kubelet\",metrics_path=\"/metrics/cadvisor\",container!=\"\",container!=\"POD\",namespace=~\"osparty|traefik|monitoring\"}[5m]))", "legendFormat": "{{namespace}}/{{pod}}" }
       ]
     },
     {
       "type": "timeseries",
-      "title": "Container memory by server/container",
+      "title": "Pod memory (working set) by namespace/pod",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 52 },
       "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (node, name) (container_memory_working_set_bytes{name!=\"\"})", "legendFormat": "{{node}}/{{name}}" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (namespace, pod) (container_memory_working_set_bytes{job=\"kubelet\",metrics_path=\"/metrics/cadvisor\",container!=\"\",container!=\"POD\",namespace=~\"osparty|traefik|monitoring\"})", "legendFormat": "{{namespace}}/{{pod}}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Logs",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 61 }
+    },
+    {
+      "type": "logs",
+      "title": "API + bot logs (Loki)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 62 },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "loki", "uid": "loki" }, "expr": "{namespace=\"osparty\"}" }
       ]
     }
   ]

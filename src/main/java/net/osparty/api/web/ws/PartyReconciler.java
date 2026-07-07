@@ -17,20 +17,25 @@ public class PartyReconciler {
 	private final PartyRepository store;
 	private final PartyBroadcaster broadcaster;
 	private final net.osparty.api.service.VoiceChannelService voice;
+	private final net.osparty.api.service.DiscordBadgeService badges;
 
 	private Map<String, Party> lastKnown = new HashMap<>();
 
 	public PartyReconciler(PartyRepository store, PartyBroadcaster broadcaster,
-		net.osparty.api.service.VoiceChannelService voice) {
+		net.osparty.api.service.VoiceChannelService voice,
+		net.osparty.api.service.DiscordBadgeService badges) {
 		this.store = store;
 		this.broadcaster = broadcaster;
 		this.voice = voice;
+		this.badges = badges;
 	}
 
 	// TODO(scale): list() scans every ad each tick (KEYS on Redis); back it with a SCAN/index if one instance ever holds enough ads to bite.
 	@Scheduled(fixedDelayString = "${app.ws.reconcile-interval-ms:5000}")
 	public void reconcile() {
-		List<Party> current = store.list(null);
+		// Badge enrichment happens on the reconciler's view (enriched copies, storage untouched), so a
+		// role change surfaces as an ordinary members diff on the next tick.
+		List<Party> current = badges.enrichParties(store.list(null));
 		// Snapshot copies, never the live repository instances: the fake/in-memory repo mutates ads
 		// in place, so holding a live reference across ticks would alias prev==cur and hide changes.
 		Map<String, Party> currentById = new HashMap<>();

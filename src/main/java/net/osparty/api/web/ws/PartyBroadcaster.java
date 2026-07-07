@@ -40,6 +40,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private final ObjectMapper mapper;
 	private final net.osparty.api.service.VoiceChannelService voice;
 	private final net.osparty.api.service.DiscordLinkService discordLinks;
+	private final net.osparty.api.service.DiscordBadgeService badges;
 	private final PresenceRegistry presence;
 	private final Map<String, Subscriber> subscribers = new ConcurrentHashMap<>();
 	private final Map<String, String> hostedBy = new ConcurrentHashMap<>();
@@ -51,11 +52,13 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	public PartyBroadcaster(PartyRepository store, ObjectMapper mapper,
 		net.osparty.api.service.VoiceChannelService voice,
 		net.osparty.api.service.DiscordLinkService discordLinks,
+		net.osparty.api.service.DiscordBadgeService badges,
 		PresenceRegistry presence) {
 		this.store = store;
 		this.mapper = mapper;
 		this.voice = voice;
 		this.discordLinks = discordLinks;
+		this.badges = badges;
 		this.presence = presence;
 	}
 
@@ -157,13 +160,13 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private void handleGetByCode(Subscriber sub, Inbound in) {
 		String code = in.code();
 		Party party = code == null ? null : store.findByInviteCode(code).orElse(null);
-		send(sub, Outbound.byCode(version.get(), code, party));
+		send(sub, Outbound.byCode(version.get(), code, enriched(party)));
 	}
 
 	private void handleGetByHost(Subscriber sub, Inbound in) {
 		String host = in.host();
 		Party party = host == null ? null : store.findByHost(host).orElse(null);
-		send(sub, Outbound.byHost(version.get(), host, party));
+		send(sub, Outbound.byHost(version.get(), host, enriched(party)));
 	}
 
 	private void handleHost(Subscriber sub, Inbound in) {
@@ -174,7 +177,12 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		Party party = store.create(in.request(), in.key());
 		bind(sub.session.getId(), party.getId());
 		log.info("WS host: session={} party={} host={}", sub.session.getId(), party.getId(), party.getHost());
-		send(sub, Outbound.hosted(version.get(), party));
+		send(sub, Outbound.hosted(version.get(), enriched(party)));
+	}
+
+	/** Badge-enrich a single outbound party (see {@code DiscordBadgeService.enrichParties}). */
+	private Party enriched(Party party) {
+		return party == null ? null : badges.enrichParties(List.of(party)).get(0);
 	}
 
 	private void handleUpdate(Subscriber sub, Inbound in) {
@@ -214,7 +222,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		bind(sub.session.getId(), id);
 		log.info("WS resume: session={} party={}", sub.session.getId(), id);
-		send(sub, Outbound.hosted(version.get(), party.get()));
+		send(sub, Outbound.hosted(version.get(), enriched(party.get())));
 	}
 
 	private void handleUnhost(Subscriber sub, Inbound in) {
@@ -492,7 +500,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	}
 
 	private void sendSnapshot(Subscriber sub) {
-		List<Party> list = store.list(sub.activity);
+		List<Party> list = badges.enrichParties(store.list(sub.activity));
 		log.debug("WS snapshot -> {} ({} parties)", sub.session.getId(), list.size());
 		send(sub, Outbound.snapshot(version.get(), list));
 	}

@@ -5,7 +5,12 @@ import java.nio.charset.StandardCharsets;
 import java.net.URLEncoder;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -124,6 +129,42 @@ public class DiscordLinkService {
 	/** The linked Discord user id for a member's accountHash, or empty when not linked. */
 	public Optional<String> discordIdForAccountHash(long accountHash) {
 		return getByAccountHash(accountHash).map(Link::discordId);
+	}
+
+	/**
+	 * Batch form of {@link #discordIdForAccountHash}: one Redis round-trip for a whole roster.
+	 * Unlinked (or unparseable) hashes are simply absent from the result.
+	 */
+	public Map<Long, String> discordIdsForAccountHashes(Collection<Long> accountHashes) {
+		if (accountHashes == null || accountHashes.isEmpty()) {
+			return Map.of();
+		}
+		List<Long> ordered = new ArrayList<>(accountHashes);
+		List<String> keys = new ArrayList<>(ordered.size());
+		for (Long hash : ordered) {
+			keys.add(HASH_KEY + hash);
+		}
+		List<String> values = redis.opsForValue().multiGet(keys);
+		Map<Long, String> out = new HashMap<>();
+		if (values == null) {
+			return out;
+		}
+		for (int i = 0; i < values.size(); i++) {
+			String json = values.get(i);
+			if (json == null) {
+				continue;
+			}
+			try {
+				Link link = mapper.readValue(json, Link.class);
+				if (link.discordId() != null) {
+					out.put(ordered.get(i), link.discordId());
+				}
+			}
+			catch (Exception ignored) {
+				// unparseable stored link; treat as unlinked
+			}
+		}
+		return out;
 	}
 
 	private static String newNonce() {

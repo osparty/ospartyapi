@@ -1,5 +1,6 @@
 package net.osparty.api.model;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.DeserializationContext;
@@ -7,6 +8,7 @@ import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import java.io.IOException;
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -15,6 +17,11 @@ import lombok.NoArgsConstructor;
  * One party member: display {@code name} plus the stable {@code accountHash} used by
  * clients to match blocked/favourited players across name changes. {@code accountHash}
  * is {@code 0} when the reporting client didn't supply one.
+ *
+ * <p>{@code badges} (Discord-role badges, e.g. {@code "developer"}) are server-asserted
+ * only: {@link net.osparty.api.service.DiscordBadgeService} stamps them onto outbound
+ * copies at broadcast time. They are never parsed from client input and never persisted —
+ * {@link MemberDeserializer} deliberately ignores the field.
  *
  * <p>{@link MemberDeserializer} accepts both the current object form and the legacy wire
  * form where a member was a bare JSON string (so ads persisted in Redis before this change
@@ -27,6 +34,12 @@ import lombok.NoArgsConstructor;
 public class Member {
 	private String name;
 	private long accountHash;
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	private List<String> badges;
+
+	public Member(String name, long accountHash) {
+		this(name, accountHash, null);
+	}
 
 	public static class MemberDeserializer extends JsonDeserializer<Member> {
 		@Override

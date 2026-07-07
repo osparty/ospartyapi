@@ -87,10 +87,12 @@ public final class PartyFactory {
 		}
 		// Roster: the host advertises the live members (host first) so search clients can
 		// block/favourite-match any member. Only replace when it actually changed.
-		if (patch.getMembers() != null && !patch.getMembers().isEmpty()
-			&& !patch.getMembers().equals(party.getMembers())) {
-			party.setMembers(patch.getMembers());
-			changed = true;
+		if (patch.getMembers() != null && !patch.getMembers().isEmpty()) {
+			List<Member> merged = mergeKnownHashes(party.getMembers(), patch.getMembers());
+			if (!merged.equals(party.getMembers())) {
+				party.setMembers(merged);
+				changed = true;
+			}
 		}
 		if (patch.getWorld() != null && !patch.getWorld().isBlank() && !patch.getWorld().equals(party.getWorld())) {
 			party.setWorld(patch.getWorld());
@@ -169,6 +171,41 @@ public final class PartyFactory {
 			changed = true;
 		}
 		return changed;
+	}
+
+	/**
+	 * A member's accountHash can be temporarily unknown to the advertising client — right after the
+	 * live room opens, the host's own PlayerUpdate hasn't round-tripped yet, so the roster heartbeat
+	 * reports the host with hash 0. Never let such a patch DOWNGRADE a hash we already know: it would
+	 * strip block/favourite matching and Discord badges from the ad until the client re-learns it
+	 * (observed as badges vanishing for 1-2 minutes after hosting).
+	 */
+	private static List<Member> mergeKnownHashes(List<Member> stored, List<Member> incoming) {
+		if (stored == null || stored.isEmpty()) {
+			return incoming;
+		}
+		List<Member> out = new ArrayList<>(incoming.size());
+		for (Member member : incoming) {
+			if (member != null && member.getAccountHash() == 0 && member.getName() != null) {
+				Member known = findByName(stored, member.getName());
+				if (known != null && known.getAccountHash() != 0) {
+					out.add(new Member(member.getName(), known.getAccountHash()));
+					continue;
+				}
+			}
+			out.add(member);
+		}
+		return out;
+	}
+
+	private static Member findByName(List<Member> members, String name) {
+		for (Member member : members) {
+			if (member != null && member.getName() != null
+				&& normalizeHost(member.getName()).equals(normalizeHost(name))) {
+				return member;
+			}
+		}
+		return null;
 	}
 
 	public static String newInviteCode() {

@@ -55,7 +55,8 @@ services:
   # Per-container metrics for this node — published on the private IP (cadvisor's internal 8080 -> 9200,
   # since the api already uses 8080). Optional: drop this service if the node is resource-constrained.
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    # See the main compose note: a current cadvisor speaks Docker API >=1.44 so container names resolve.
+    image: gcr.io/cadvisor/cadvisor:latest
     command:
       - '--housekeeping_interval=15s'
     privileged: true

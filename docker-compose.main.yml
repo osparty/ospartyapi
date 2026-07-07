@@ -99,7 +99,10 @@ services:
   # Per-container metrics (CPU, memory, running state) for every container on this host — including ones
   # with no metrics endpoint of their own (npm, grafana, redis). This is how NPM shows up in the dashboard.
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    # v0.49.1's bundled Docker client caps at API 1.41, which newer daemons reject (min 1.44), so its docker
+    # factory won't register and container NAMES never resolve (DOCKER_API_VERSION doesn't override it). A
+    # current cadvisor ships a Docker client that speaks >=1.44. Pin to a working tag once confirmed.
+    image: gcr.io/cadvisor/cadvisor:latest
     command:
       - '--housekeeping_interval=15s'
     privileged: true

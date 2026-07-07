@@ -1,0 +1,18 @@
+# Fronts the API pods. `http` is what the Ingress routes to; `management` exists only so the
+# ServiceMonitor can scrape /actuator/prometheus — it is never routed by the Ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: osparty-api
+  labels:
+    app: osparty-api
+spec:
+  selector:
+    app: osparty-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: management
+      port: 9090
+      targetPort: management

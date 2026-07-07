@@ -5,9 +5,10 @@ plugins {
 }
 
 group = 'net.osparty'
-// Overridable from CI (e.g. -PappVersion=1.2.3, set from the git tag); defaults
-// to this value for local builds so the jar manifest carries the real version.
-version = findProperty('appVersion') ?: '0.1.0'
+// Overridable from CI (-PappVersion=1.2.3 — deploy-k8s.yml auto-bumps the patch from the latest
+// v*.*.* git tag and tags the release); this fallback is the local-build baseline and the
+// versioning starting point.
+version = findProperty('appVersion') ?: '1.0.0'
 description = 'Advertising/bulletin-board API for the OSParty RuneLite plugin'
 
 java {

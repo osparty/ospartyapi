@@ -1,0 +1,181 @@
+name: Deploy API (Kubernetes)
+
+# k3s deploy with AUTOMATIC semver versioning — the successor to deploy.yml. Every run computes its own
+# version: latest v*.*.* git tag with the patch bumped (+1), or 1.0.0 if no tag exists yet. The tag +
+# GitHub release are created AFTER a successful rollout, so a failed deploy never consumes a version.
+# Minor/major bumps: run the workflow manually with an explicit version (e.g. 1.1.0) — auto-bumping
+# continues from there (1.1.1, 1.1.2, ...). Re-running an existing version (rollback) skips re-tagging.
+#
+# Builds the image once, then does ONE SSH to api01 and applies the rendered prod overlay: Kubernetes'
+# rolling update (maxUnavailable: 0 + readiness probes) replaces the old per-host matrix, NPM upstream
+# regeneration, and nginx/Prometheus reloads. Rollback: re-run with an older version label, or on api01:
+#   kubectl -n osparty rollout undo deployment/osparty-api
+#
+# GO-LIVE (Phase 3): uncomment the `push: branches: [main]` trigger below and delete deploy.yml +
+# deploy-test.yml — every push to main then deploys as the next patch version.
+#
+# Required secrets (same as deploy.yml): API_SERVER_ADDRESS (api01), SSH_USER, SSH_KEY, optional
+# SSH_PORT. GHCR_USERNAME/GHCR_TOKEN are no longer used at deploy time — the cluster pulls via the
+# `ghcr-pull` imagePullSecret created once per namespace (see k8s/README.md). The SSH user must be able
+# to run kubectl against k3s (root works out of the box; for another user, copy
+# /etc/rancher/k3s/k3s.yaml to ~/.kube/config and chown it).
+on:
+  # push:
+  #   branches:
+  #     - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Explicit version (e.g. 1.1.0 for a minor bump, or an old version to redeploy). Empty = auto patch bump.'
+        required: false
+
+permissions:
+  contents: write   # push the release tag + create the GitHub release
+  packages: write   # push the image to GHCR
+
+concurrency:
+  group: deploy-api-k8s
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/osparty/osparty-api
+  DEPLOY_DIR: osparty-api      # directory on api01, under the SSH user's home
+
+jobs:
+  # ---- Compute the version, build + push the image once ------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history: the version is derived from the latest tag
+
+      - name: Resolve version (auto patch bump)
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            echo "Using explicit version: $VERSION"
+          else
+            LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
+            if [ -z "$LATEST" ]; then
+              VERSION="1.0.0"
+              echo "No version tags yet — starting at $VERSION"
+            else
+              VERSION=$(echo "${LATEST#v}" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')
+              echo "Latest tag $LATEST -> bumping patch to $VERSION"
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Build and test
+        run: ./gradlew --no-daemon clean test bootJar -PappVersion=${{ steps.version.outputs.version }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE }}:latest
+
+  # ---- Render the prod overlay with the pinned tag and apply it on api01 -------------------------
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Render manifests (prod overlay, image pinned to this version)
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        # Rendering in CI (rather than kustomize-on-server) makes the shipped file a complete, immutable
+        # record of exactly what was applied.
+        run: |
+          cd k8s/overlays/prod
+          kustomize edit set image ${IMAGE}=${IMAGE}:${VERSION}
+          kustomize build . -o "${GITHUB_WORKSPACE}/k8s-prod.yaml"
+          echo "Rendered image refs:"; grep 'image:' "${GITHUB_WORKSPACE}/k8s-prod.yaml"
+
+      - name: Copy rendered manifests to api01
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.API_SERVER_ADDRESS }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          source: k8s-prod.yaml
+          target: ${{ env.DEPLOY_DIR }}
+          overwrite: true
+
+      - name: Apply + wait for rollout
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
+          VERSION: ${{ needs.build.outputs.version }}
+        with:
+          host: ${{ secrets.API_SERVER_ADDRESS }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          envs: DEPLOY_DIR,VERSION
+          script: |
+            set -euo pipefail
+            kubectl apply -f "$DEPLOY_DIR/k8s-prod.yaml"
+            # Fails the job (non-zero) if the new pods never go Ready — old pods keep serving
+            # (maxUnavailable: 0), so a broken image never takes traffic.
+            kubectl -n osparty rollout status deployment/osparty-api --timeout=300s
+            echo "Deployed osparty-api ${VERSION} to namespace osparty"
+
+  # ---- Tag + release AFTER the rollout succeeded, so failed deploys never consume a version ------
+  release:
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tag this commit as v${{ needs.build.outputs.version }}
+        id: tag
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists (redeploy of an existing version) — skipping tag + release."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "v${VERSION}" "${GITHUB_SHA}"
+            git push origin "v${VERSION}"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub release
+        if: steps.tag.outputs.created == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.build.outputs.version }}
+          name: v${{ needs.build.outputs.version }}
+          generate_release_notes: true

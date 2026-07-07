@@ -1,0 +1,109 @@
+# The shared Redis — still a deliberate singleton (capacity scaling, not HA, same as the compose setup).
+# Replaces the `redis` + `redis-exporter` services in docker-compose.main.yml. No more publishing 6379 on
+# the private IP: only pods can reach it, via the `redis` ClusterIP Service.
+#
+# Pinned to api01 because local-path PVCs are node-local (label the node first:
+# `kubectl label node api01 osparty.net/role=main` — see k8s/README.md). Ads are ephemeral
+# (TTL <= 90s) so losing this volume is harmless; AOF persistence just preserves ads across restarts.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      nodeSelector:
+        osparty.net/role: main
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["redis-server", "--appendonly", "yes", "--requirepass", "$(REDIS_PASSWORD)"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: osparty-api-env
+                  key: SPRING_DATA_REDIS_PASSWORD
+            # redis-cli picks this up so the probes can AUTH without the password on the cmdline.
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: osparty-api-env
+                  key: SPRING_DATA_REDIS_PASSWORD
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+        # Server-side Redis metrics (ops/sec, memory, clients, keyspace hits) — scraped via the `metrics`
+        # port on the redis Service, replacing the standalone redis-exporter container.
+        - name: exporter
+          image: oliver006/redis_exporter:v1.62.0
+          env:
+            - name: REDIS_ADDR
+              value: redis://localhost:6379
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: osparty-api-env
+                  key: SPRING_DATA_REDIS_PASSWORD
+          ports:
+            - name: metrics
+              containerPort: 9121
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+    - name: metrics
+      port: 9121
+      targetPort: metrics

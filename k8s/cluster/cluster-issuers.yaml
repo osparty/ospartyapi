@@ -1,0 +1,39 @@
+# Let's Encrypt issuers (cert-manager) — replace NPM's UI-driven cert requests. Cluster-scoped: applied
+# once, used by any Ingress via the cert-manager.io/cluster-issuer annotation.
+#
+#   kubectl apply -f k8s/cluster/cluster-issuers.yaml
+#
+# HTTP-01 solves through the Traefik ingress, so the controller must be reachable on port 80 of whatever
+# IP the hostname resolves to at issuance time (api01 at go-live — the cert issues within ~a minute of
+# Traefik taking port 80 there).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: gerardvdbosch@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+---
+# Staging issuer for experiments/dress rehearsals — untrusted certs, but no LE rate limits. Switch an
+# Ingress to it by changing its cluster-issuer annotation to letsencrypt-staging.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: gerardvdbosch@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik

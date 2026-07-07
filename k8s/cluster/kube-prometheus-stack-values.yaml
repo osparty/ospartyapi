@@ -1,0 +1,81 @@
+# kube-prometheus-stack Helm values — replaces the prometheus/grafana/node-exporter/cadvisor containers
+# from docker-compose.main.yml (node-exporter becomes a DaemonSet on every node; cadvisor is the kubelet's
+# embedded one, so the pinned-cadvisor-version saga ends here). Install/upgrade:
+#
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+#     -n monitoring --create-namespace -f k8s/cluster/kube-prometheus-stack-values.yaml
+#
+# Grafana admin credentials come from a Secret created once (see k8s/README.md):
+#   kubectl -n monitoring create secret generic grafana-admin \
+#     --from-literal=admin-user=admin --from-literal=admin-password=<GRAFANA_ADMIN_PASSWORD>
+#
+# Everything heavy is pinned to api01 (osparty.net/role=main) — the 4GB workers only carry node-exporter.
+
+# The old stack had no alertmanager; keep it off to save RAM on MAIN.
+alertmanager:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 15d   # same as the old --storage.tsdb.retention.time
+    nodeSelector:
+      osparty.net/role: main
+    # Pick up OUR ServiceMonitors (k8s/base/servicemonitors.yaml), not only ones labeled with this Helm
+    # release — without these two settings the app metrics silently never appear.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+
+grafana:
+  nodeSelector:
+    osparty.net/role: main
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  grafana.ini:
+    server:
+      root_url: https://monitoring.osparty.net
+    users:
+      allow_sign_up: false
+  persistence:
+    enabled: true
+    storageClassName: local-path
+    size: 2Gi
+  # Served through the same ingress controller as the API — replaces the NPM proxy host + host-port 3001.
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+    hosts:
+      - monitoring.osparty.net
+    tls:
+      - hosts:
+          - monitoring.osparty.net
+        secretName: monitoring-tls
+  # The dashboard sidecar watches all namespaces for ConfigMaps labeled grafana_dashboard=1 — that's how
+  # k8s/base's osparty-api dashboard ConfigMap lands in Grafana.
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+
+prometheusOperator:
+  nodeSelector:
+    osparty.net/role: main
+kube-state-metrics:
+  nodeSelector:
+    osparty.net/role: main

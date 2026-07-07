@@ -1,0 +1,31 @@
+# Production: api.osparty.net, 3 replicas (from the base). Deployed by .github/workflows/deploy-k8s.yml,
+# which pins the image tag per release (kustomize edit set image) before rendering.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: osparty
+
+resources:
+  - namespace.yaml
+  - ../../base
+
+images:
+  - name: ghcr.io/osparty/osparty-api
+    newTag: latest   # overwritten by CI with the immutable release tag
+
+patches:
+  # Voice provisioning: the bot still runs as its compose stack on MAIN until Phase 5, reached over the
+  # private net. When the bot migrates into the cluster, change this to http://osparty-discord:8090.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: osparty-api
+      spec:
+        template:
+          spec:
+            containers:
+              - name: api
+                env:
+                  - name: DISCORD_SERVICE_URL
+                    value: http://10.0.0.2:8090

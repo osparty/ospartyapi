@@ -1,0 +1,92 @@
+# Traefik Helm values — replaces NPM as ingress/TLS/LB. Traefik over ingress-nginx because the latter
+# was retired by the Kubernetes project in March 2026 (repo archived, no more security patches).
+# Install/upgrade (on api01):
+#
+#   helm repo add traefik https://traefik.github.io/charts
+#   helm upgrade --install traefik traefik/traefik \
+#     -n traefik --create-namespace -f k8s/cluster/traefik-values.yaml
+#
+# NOTE: k3s' BUNDLED Traefik stays --disable'd. The bundled one exposes itself through ServiceLB, which
+# binds 80/443 on EVERY node — colliding with NPM on api01 pre-go-live. This self-managed install keeps
+# the label-pinned hostNetwork design instead.
+#
+# hostNetwork on 80/443 (no Service/NAT layer in front): Traefik sees real client IPs directly and
+# proxies straight to pod IPs, so each API pod is a distinct upstream tuple with its own ephemeral
+# source-port pool — the same per-upstream port-ceiling math (and horizontal fix) as the old NPM setup.
+# The host-level tunables for the ingress node (ip_local_port_range, tcp_tw_reuse — see k8s/README.md)
+# apply to Traefik the same way. No worker/fd knobs needed (single Go process); containerd's default
+# nofile limit (~1M) covers the 2-fds-per-proxied-WebSocket cost, verify with:
+#   cat /proc/$(pgrep -f 'traefik traefik')/limits | grep files
+#
+# PLACEMENT / GO-LIVE: the controller runs on whichever node carries the osparty.net/ingress=true label.
+# Pre-go-live it idles on api02 (80/443 are free there; NPM still owns them on api01). Go-live = stop NPM
+# on api01, move the label to api01, rollout restart — api.osparty.net's DNS never changes.
+
+deployment:
+  replicas: 1
+  dnsPolicy: ClusterFirstWithHostNet   # hostNetwork pods need this to still resolve cluster services
+
+nodeSelector:
+  osparty.net/ingress: "true"
+
+hostNetwork: true
+
+# Binding 80/443 inside the host netns needs root + NET_BIND_SERVICE (the chart default is a non-root
+# user on unprivileged ports 8000/8443).
+podSecurityContext:
+  runAsNonRoot: false
+  runAsUser: 0
+  runAsGroup: 0
+securityContext:
+  capabilities:
+    drop: [ALL]
+    add: [NET_BIND_SERVICE]
+  runAsNonRoot: false
+  runAsUser: 0
+  runAsGroup: 0
+  readOnlyRootFilesystem: true
+
+ports:
+  # hostNetwork binds EVERY entrypoint on the host, so the internal ones must dodge ports already in
+  # use on the nodes: 8080 (compose api, Traefik's default dashboard/ping port) and 9100 (node-exporter,
+  # Traefik's default metrics port).
+  traefik:
+    port: 9000
+  metrics:
+    port: 9101
+  web:
+    port: 80
+    # http -> https, like NPM did. Let's Encrypt HTTP-01 still works: LE follows the redirect and
+    # ignores the (pre-issuance) certificate on the https target.
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+    transport:
+      respondingTimeouts:
+        readTimeout: 0   # Traefik v3 defaults to 60s; upgraded WebSockets escape it, but 0 removes doubt
+  websecure:
+    port: 443
+    transport:
+      respondingTimeouts:
+        readTimeout: 0
+
+# hostNetwork serves 80/443 directly on the labeled node; no LoadBalancer/NodePort Service needed.
+service:
+  enabled: false
+
+ingressClass:
+  enabled: true
+  isDefaultClass: true
+
+# Route from plain Ingress resources (k8s/base/ingress.yaml uses ingressClassName: traefik).
+providers:
+  kubernetesIngress:
+    enabled: true
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi

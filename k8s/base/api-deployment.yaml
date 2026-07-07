@@ -1,0 +1,96 @@
+# The API tier. Replaces the per-host `api` service in docker-compose.main.yml / docker-compose.node.yml:
+# one Deployment, spread across the cluster nodes, rolled natively (maxUnavailable: 0 replaces the old
+# one-host-at-a-time SSH matrix + nginx passive health checks).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: osparty-api
+  labels:
+    app: osparty-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: osparty-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: osparty-api
+    spec:
+      # ~one pod per node, like the old fleet — but ScheduleAnyway so a surge pod during a rolling
+      # update (or a node down) never blocks the rollout.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: osparty-api
+      securityContext:
+        # Bigger accept backlog for WS connection/reconnect bursts (pairs with Tomcat's accept-count),
+        # same as the compose sysctls. net.core.* is an "unsafe" sysctl: kubelet on every node needs
+        # --allowed-unsafe-sysctls=net.core.somaxconn or the pod is rejected — see k8s/README.md.
+        sysctls:
+          - name: net.core.somaxconn
+            value: "65535"
+      imagePullSecrets:
+        - name: ghcr-pull   # the GHCR package is internal; created per-namespace, see k8s/README.md
+      containers:
+        - name: api
+          image: ghcr.io/osparty/osparty-api:latest   # tag pinned per-deploy by CI (kustomize edit set image)
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management   # actuator health + /actuator/prometheus; never exposed via the Ingress
+              containerPort: 9090
+          env:
+            - name: SPRING_DATA_REDIS_HOST
+              value: redis
+            - name: SPRING_DATA_REDIS_PORT
+              value: "6379"
+            # Temurin's default JVM heap is 25% of the container memory limit — too timid for a
+            # single-app pod; 50% of the 2Gi limit ≈ the old fleet's effective footprint.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=50.0"
+            # Voice provisioning. Until the bot migrates into the cluster (Phase 5) this stays empty in
+            # the base (disabled -> no-op VoiceChannelService); the prod overlay points it at the bot's
+            # compose stack on MAIN's private IP.
+            - name: DISCORD_SERVICE_URL
+              value: ""
+          # REDIS password + Discord tokens/OAuth. Created once per namespace from the old .env values
+          # (never committed) — see k8s/README.md. Keys: SPRING_DATA_REDIS_PASSWORD,
+          # DISCORD_INTERNAL_TOKEN, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, DISCORD_REDIRECT_URI.
+          envFrom:
+            - secretRef:
+                name: osparty-api-env
+          # application.yml enables Spring's health probes, so the dedicated liveness/readiness groups
+          # exist on the management port. Readiness goes DOWN when Redis is unreachable, which takes the
+          # pod out of the Service — the old stack could only observe this via blackbox.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 2
+            failureThreshold: 30   # up to 60s for the JVM to boot
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 768Mi
+            limits:
+              # No CPU limit: WS reconnect storms should be allowed to burst.
+              memory: 2Gi

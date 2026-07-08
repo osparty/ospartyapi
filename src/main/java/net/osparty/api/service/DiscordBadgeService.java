@@ -37,6 +37,13 @@ public class DiscordBadgeService {
 
 	private static final Logger log = LoggerFactory.getLogger(DiscordBadgeService.class);
 	private static final String BADGE_KEY = "discordlink:badges:";
+	/**
+	 * Per-account privacy opt-out (set by the plugin over the WebSocket): when present, enrichment
+	 * never attaches this account's badges, so hidden badges never leave the server. Keyed by
+	 * accountHash and deliberately NOT cleaned on unlink — the preference survives a re-link, and a
+	 * stale flag on an unlinked account is inert (no link, no badges).
+	 */
+	private static final String HIDDEN_KEY = "discordlink:badgeshidden:";
 	private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
 	};
 
@@ -48,6 +55,21 @@ public class DiscordBadgeService {
 		this.redis = redis;
 		this.mapper = mapper;
 		this.links = links;
+	}
+
+	/** Set the caller's badge-privacy flag: hidden badges are stripped during enrichment. */
+	public void setBadgesHidden(long accountHash, boolean hidden) {
+		if (hidden) {
+			redis.opsForValue().set(HIDDEN_KEY + accountHash, "1");
+		}
+		else {
+			redis.delete(HIDDEN_KEY + accountHash);
+		}
+	}
+
+	/** Whether the account opted out of showing its badges to other players. */
+	public boolean isBadgesHidden(long accountHash) {
+		return redis.opsForValue().get(HIDDEN_KEY + accountHash) != null;
 	}
 
 	/** Upsert one user's badge set. An empty/unrecognised set deletes the key (no badges). */
@@ -160,7 +182,29 @@ public class DiscordBadgeService {
 				out.put(hash, badges);
 			}
 		});
+		stripHidden(out);
 		return out;
+	}
+
+	/** Drop entries for accounts that opted out of showing badges, one batched round-trip. */
+	private void stripHidden(Map<Long, List<String>> badgesByHash) {
+		if (badgesByHash.isEmpty()) {
+			return;
+		}
+		List<Long> hashes = new ArrayList<>(badgesByHash.keySet());
+		List<String> keys = new ArrayList<>(hashes.size());
+		for (Long hash : hashes) {
+			keys.add(HIDDEN_KEY + hash);
+		}
+		List<String> flags = redis.opsForValue().multiGet(keys);
+		if (flags == null) {
+			return;
+		}
+		for (int i = 0; i < flags.size(); i++) {
+			if (flags.get(i) != null) {
+				badgesByHash.remove(hashes.get(i));
+			}
+		}
 	}
 
 	private static Party enrich(Party party, Map<Long, List<String>> badgesByHash) {

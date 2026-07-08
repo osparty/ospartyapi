@@ -134,6 +134,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			case "unlinkDiscord":
 				handleUnlinkDiscord(sub, in);
 				break;
+			case "setBadgeVisibility":
+				handleSetBadgeVisibility(sub, in);
+				break;
 			case "kickVoiceMember":
 				handleKickVoiceMember(sub, in);
 				break;
@@ -310,7 +313,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		discordLinks.unlink(in.accountHash());
 		log.info("Unlinked Discord for accountHash {}", in.accountHash());
-		send(sub, Outbound.discordLink(version.get(), in.accountHash(), null, null));
+		send(sub, Outbound.discordLink(version.get(), in.accountHash(), null, null, null));
 	}
 
 	/** Report whether an accountHash is linked, echoing the hash so the poller can match the reply. */
@@ -321,7 +324,29 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		DiscordLinkService.Link link = discordLinks.getByAccountHash(in.accountHash()).orElse(null);
 		send(sub, Outbound.discordLink(version.get(), in.accountHash(),
-			link == null ? null : link.discordId(), link == null ? null : link.username()));
+			link == null ? null : link.discordId(), link == null ? null : link.username(),
+			!badges.isBadgesHidden(in.accountHash())));
+	}
+
+	/**
+	 * Badge privacy self-service: hide (or re-show) the caller's Discord-role badges on party ads.
+	 * Same cooperative trust as unlinkDiscord — keyed by the caller's own accountHash. Takes effect
+	 * on the next reconcile tick; the ack is the refreshed link status.
+	 */
+	private void handleSetBadgeVisibility(Subscriber sub, Inbound in) {
+		if (in.accountHash() == null || in.accountHash() == 0) {
+			sendError(sub, null, "missing accountHash");
+			return;
+		}
+		if (in.visible() == null) {
+			sendError(sub, null, "missing visible");
+			return;
+		}
+		badges.setBadgesHidden(in.accountHash(), !in.visible());
+		log.info("Badge visibility for accountHash {} -> {}", in.accountHash(), in.visible());
+		DiscordLinkService.Link link = discordLinks.getByAccountHash(in.accountHash()).orElse(null);
+		send(sub, Outbound.discordLink(version.get(), in.accountHash(),
+			link == null ? null : link.discordId(), link == null ? null : link.username(), in.visible()));
 	}
 
 	/** The linked Discord ids of a party's current members, for per-user channel access. */
@@ -655,60 +680,61 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	}
 
 	record Inbound(String type, String activity, PartyRequest request, PartyUpdate patch, String id, String key,
-		String code, String host, Long accountHash) {
+		String code, String host, Long accountHash, Boolean visible) {
 	}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	record Outbound(String type, long version, List<Party> parties, Party party, String id, String detail,
-		Integer online, String url, String username, Long accountHash) {
+		Integer online, String url, String username, Long accountHash, Boolean badgesVisible) {
 		static Outbound snapshot(long version, List<Party> parties) {
-			return new Outbound("snapshot", version, parties, null, null, null, null, null, null, null);
+			return new Outbound("snapshot", version, parties, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound hosted(long version, Party party) {
-			return new Outbound("hosted", version, null, party, null, null, null, null, null, null);
+			return new Outbound("hosted", version, null, party, null, null, null, null, null, null, null);
 		}
 
 		static Outbound gone(long version, String id) {
-			return new Outbound("gone", version, null, null, id, null, null, null, null, null);
+			return new Outbound("gone", version, null, null, id, null, null, null, null, null, null);
 		}
 
 		static Outbound error(long version, String id, String detail) {
-			return new Outbound("error", version, null, null, id, detail, null, null, null, null);
+			return new Outbound("error", version, null, null, id, detail, null, null, null, null, null);
 		}
 
 		static Outbound byCode(long version, String code, Party party) {
-			return new Outbound("byCode", version, null, party, code, null, null, null, null, null);
+			return new Outbound("byCode", version, null, party, code, null, null, null, null, null, null);
 		}
 
 		static Outbound byHost(long version, String host, Party party) {
-			return new Outbound("byHost", version, null, party, host, null, null, null, null, null);
+			return new Outbound("byHost", version, null, party, host, null, null, null, null, null, null);
 		}
 
 		/** Global count of connected plugin clients ("active users"). */
 		static Outbound presence(long version, int online) {
-			return new Outbound("presence", version, null, null, null, null, online, null, null, null);
+			return new Outbound("presence", version, null, null, null, null, online, null, null, null, null);
 		}
 
 		/** Reply to createVoiceChannel: the party id and the Discord invite URL to share with members. */
 		static Outbound voiceChannel(long version, String id, String url) {
-			return new Outbound("voiceChannel", version, null, null, id, null, null, url, null, null);
+			return new Outbound("voiceChannel", version, null, null, id, null, null, url, null, null, null);
 		}
 
 		/** Reply to startDiscordLink: the Discord OAuth authorize URL to open in a browser. */
 		static Outbound discordLinkUrl(long version, String url) {
-			return new Outbound("discordLinkUrl", version, null, null, null, null, null, url, null, null);
+			return new Outbound("discordLinkUrl", version, null, null, null, null, null, url, null, null, null);
 		}
 
-		/** Reply to getDiscordLink: the linked Discord id + username (both null when not linked). */
-		static Outbound discordLink(long version, long accountHash, String discordId, String username) {
+		/** Reply to getDiscordLink: linked Discord id + username (null when not linked) + badge privacy. */
+		static Outbound discordLink(long version, long accountHash, String discordId, String username,
+			Boolean badgesVisible) {
 			return new Outbound("discordLink", version, null, null, discordId, null, null, null, username,
-				accountHash);
+				accountHash, badgesVisible);
 		}
 
 		/** Ack to requestVoiceAccess: the caller has been granted access; the plugin may open the invite. */
 		static Outbound voiceAccess(long version, String id) {
-			return new Outbound("voiceAccess", version, null, null, id, null, null, null, null, null);
+			return new Outbound("voiceAccess", version, null, null, id, null, null, null, null, null, null);
 		}
 	}
 

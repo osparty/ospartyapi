@@ -13,7 +13,7 @@
 # hostNetwork on 80/443 (no Service/NAT layer in front): Traefik sees real client IPs directly and
 # proxies straight to pod IPs, so each API pod is a distinct upstream tuple with its own ephemeral
 # source-port pool — the same per-upstream port-ceiling math (and horizontal fix) as the old NPM setup.
-# The host-level tunables for the ingress node (ip_local_port_range, tcp_tw_reuse — see k8s/README.md)
+# The host-level tunables for the ingress node (ip_local_port_range, tcp_tw_reuse — see README.md (Deploy))
 # apply to Traefik the same way. No worker/fd knobs needed (single Go process); containerd's default
 # nofile limit (~1M) covers the 2-fds-per-proxied-WebSocket cost, verify with:
 #   cat /proc/$(pgrep -f 'traefik traefik')/limits | grep files

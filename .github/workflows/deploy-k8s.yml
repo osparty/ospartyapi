@@ -16,7 +16,7 @@ name: Deploy API (Kubernetes)
 #
 # Required secrets (same as deploy.yml): API_SERVER_ADDRESS (api01), SSH_USER, SSH_KEY, optional
 # SSH_PORT. GHCR_USERNAME/GHCR_TOKEN are no longer used at deploy time — the cluster pulls via the
-# `ghcr-pull` imagePullSecret created once per namespace (see k8s/README.md). The SSH user must be able
+# `ghcr-pull` imagePullSecret created once per namespace (see README.md (Deploy)). The SSH user must be able
 # to run kubectl against k3s (root works out of the box; for another user, copy
 # /etc/rancher/k3s/k3s.yaml to ~/.kube/config and chown it).
 on:

@@ -1,10 +1,10 @@
 # osrs-party-api
 
-A small **Spring Boot** service that backs the [OSParty](../aio-party-plugin)
-RuneLite plugin. It is purely an **advertising bulletin board**: it lists open
-party ads and accepts new ones. It tracks **no membership** — the live roster
-runs peer-to-peer inside the client, keyed by the `passphrase` carried on each
-ad.
+A small **Spring Boot** service that backs the
+[OSParty](https://github.com/osparty/osparty) RuneLite plugin. It is purely an
+**advertising bulletin board**: it lists open party ads and accepts new ones. It
+tracks **no membership**: the live roster runs peer-to-peer inside the client,
+keyed by the `passphrase` carried on each ad.
 
 ## Endpoints
 
@@ -13,15 +13,15 @@ All endpoints live under the versioned base path **`/api/v1`**.
 | Method | Path                             | Body / Query                   | Returns                 |
 |--------|----------------------------------|--------------------------------|-------------------------|
 | GET    | `/api/v1/parties`                | `?activity={id}&player={name}` | `Party[]` (public only) |
-| GET    | `/api/v1/parties/by-code/{code}` | —                              | `Party`                 |
+| GET    | `/api/v1/parties/by-code/{code}` | -                              | `Party`                 |
 | POST   | `/api/v1/parties`                | `PartyRequest` (+ host key)    | `Party` (201)           |
 | PUT    | `/api/v1/parties/{id}/heartbeat` | host key                       | `Party`                 |
 | DELETE | `/api/v1/parties/{id}`           | host key                       | `Party`                 |
 
 `activity` filters to one activity id (e.g. `cox`, `tob`, `toa`, `nex`, …).
-`player` is accepted but unused — the plugin hides your own ad client-side.
+`player` is accepted but unused; the plugin hides your own ad client-side.
 
-**Host authentication** — host-only mutations are gated by a per-party secret so a
+**Host authentication**: host-only mutations are gated by a per-party secret so a
 hand-rolled REST client can't hijack or close someone else's ad. On `POST` the
 plugin mints a random key and sends it in the **`X-OSParty-Host-Key`** header; the
 server stores it in the party's session (never returned in any response) and
@@ -31,11 +31,11 @@ requires the same header on that party's `heartbeat` and `DELETE`:
 - wrong / missing key on a key-bearing ad → **`403 Forbidden`**,
 - no such ad → **`404`**.
 
-Ads created **without** a key stay open (no header required) — backward
+Ads created **without** a key stay open (no header required): backward
 compatibility for plugin versions that predate the feature; those ads simply
 aren't protected until the host updates and re-advertises.
 
-**Party types** — an ad can be **private** (`privateParty`: excluded from the
+**Party types**: an ad can be **private** (`privateParty`: excluded from the
 public list, reachable only via its server-generated **`inviteCode`** at
 `GET …/by-code/{code}`, case-insensitive), tagged with a **loot rule**
 (`lootRule`: `FFA` / `SPLIT` / `UNSPECIFIED`), and/or **ironman-only**
@@ -44,13 +44,13 @@ stores these; the plugin filters and enforces them.
 
 ## Behaviour
 
-- **One ad per host** — `POST /api/v1/parties` replaces any existing ad from the same
+- **One ad per host**: `POST /api/v1/parties` replaces any existing ad from the same
   host (case/whitespace-insensitive), so re-advertising never piles up.
-- **Liveness & eviction** — each ad has a server-side `lastSeen` timestamp. The
+- **Liveness & eviction**: each ad has a server-side `lastSeen` timestamp. The
   host keeps it alive with `PUT /api/v1/parties/{id}/heartbeat`; the plugin pings every
   30s. A scheduled reaper drops ads not heard from within `app.ads.ttl-ms`
   (default 90s), so parties whose host crashed/closed disappear from search.
-- **Rate limiting** — `POST /api/v1/parties` is throttled to **1 request / 5s per
+- **Rate limiting**: `POST /api/v1/parties` is throttled to **1 request / 5s per
   client IP** (`app.rate-limit.interval-ms`); exceeding it returns `429` with a
   `Retry-After` header. GET/PUT/DELETE are not limited (so heartbeats and
   browsing are unaffected).
@@ -132,12 +132,12 @@ server → {"type":"removed","version":N,"id":"1000"}
 ```
 
 Deltas are **idempotent** (upsert/remove by id) and a reconnect re-sends a full
-snapshot, so a dropped frame self-heals — clients keep a map by id and re-render
+snapshot, so a dropped frame self-heals; clients keep a map by id and re-render
 on each frame. `version` is a loose ordering hint. A connection only gets this
 firehose after it `subscribe`s (and can `unsubscribe`), so a host-only socket
 doesn't receive it.
 
-Hosts also **write** over the same socket — these mutate the same store as the
+Hosts also **write** over the same socket; these mutate the same store as the
 REST endpoints, so the change reaches searchers through the reconciler above:
 
 ```
@@ -151,23 +151,23 @@ server → {"type":"error","id":"7","detail":"…"}       # directed: a write wa
 ```
 
 **The socket is the keep-alive.** While a hosting session is open the server
-refreshes that ad's TTL every `app.ws.touch-interval-ms` — no periodic heartbeat.
+refreshes that ad's TTL every `app.ws.touch-interval-ms`; no periodic heartbeat.
 A dropped socket leaves the ad in its remaining TTL (the *grace* window, ≈
 `ttl-ms − touch-interval-ms`); the host reconnects and `resume`s by id+key to keep
 the **same** ad, or it lapses and is reaped. Ownership is the session that
 created/reclaimed the ad; the host key is the cross-reconnect credential. (Writes
 also accept the key directly, so a REST-created ad can be adopted by the socket.)
 
-**Why it scales** — a single `PartyReconciler` diffs the ad set every
+**Why it scales**: a single `PartyReconciler` diffs the ad set every
 `app.ws.reconcile-interval-ms` and pushes the changes to all subscribers, so
 server work is **constant per interval regardless of client count** (vs. every
 client re-fetching the whole list every few seconds). Since the reconciler reads
 the shared store, multiple API instances each reconcile and push to their own
-subscribers with no cross-instance bus — the shared Redis *is* the bus. A change
+subscribers with no cross-instance bus; the shared Redis *is* the bus. A change
 reaches clients within one interval; TTL-expired ads surface as `removed`.
 
 The REST endpoints stay fully supported (the plugin falls back to them if the
-socket can't connect — older server / WS blocked), so the contract is additive —
+socket can't connect: older server / WS blocked), so the contract is additive:
 `POST`/`PUT /{id}`/`DELETE` and the socket are two ways to drive the same store.
 
 ## Run
@@ -177,7 +177,7 @@ socket can't connect — older server / WS blocked), so the contract is additive
 ```
 
 Serves on `http://localhost:8080` (matches the plugin's default `API base URL`).
-The store starts **empty** — `GET /api/v1/parties` returns `[]` until a party is
+The store starts **empty**: `GET /api/v1/parties` returns `[]` until a party is
 advertised via `POST /api/v1/parties` (the plugin does this when you create a party).
 
 ```sh
@@ -220,28 +220,29 @@ docker compose up --build -d  # builds the image, starts api + redis
 > ⚠️ **`--build` alone does not recompile your source.** The Dockerfile only
 > `COPY`s `build/libs/app.jar`, so `docker compose up --build` just re-copies
 > whatever jar is already there. If you skip `./gradlew bootJar`, the container
-> silently runs **stale code** — the image rebuilds, the app starts fine, but your
+> silently runs **stale code**: the image rebuilds, the app starts fine, but your
 > latest changes aren't in it. Always run `bootJar` before `docker compose up --build`.
 
 - **API** on `http://localhost:8080`, wired to the `redis` service via compose env
-  (`SPRING_DATA_REDIS_HOST=redis`) — no code/config changes needed.
-- **Redis** — ads persist in the `redis-data` volume (`--appendonly yes`), so
+  (`SPRING_DATA_REDIS_HOST=redis`); no code/config changes needed.
+- **Redis**: ads persist in the `redis-data` volume (`--appendonly yes`), so
   they survive both API and Redis restarts.
 - `docker compose down` stops it (add `-v` to also wipe the volume).
 
-### TLS / reverse proxy
+### TLS / reverse proxy (self-hosting)
 
-TLS termination is handled by a **separate Nginx Proxy Manager stack** (not part
-of this compose). The API publishes port `8080` on the host, so point an NPM
-Proxy Host at it:
+Production runs behind the cluster's Traefik ingress (see **Deploy**); for a
+self-hosted compose setup, terminate TLS with any reverse proxy, e.g. an Nginx
+Proxy Manager. The API publishes port `8080` on the host, so point an NPM Proxy
+Host at it:
 
-- *Forward Hostname / IP*: the host's address — e.g. `127.0.0.1`, or
+- *Forward Hostname / IP*: the host's address, e.g. `127.0.0.1`, or
   `host.docker.internal` from inside the NPM container
 - *Forward Port*: `8080`
 - optionally enable **SSL → Request a new Let's Encrypt certificate**, then point
   the plugin's `API base URL` at `https://party.example.com`.
 - **enable "Websockets Support"** on the Proxy Host (Details tab) so the
-  `/api/v1/ws/parties` upgrade is forwarded — otherwise the live push falls back
+  `/api/v1/ws/parties` upgrade is forwarded; otherwise the live push falls back
   to REST polling. NPM keeps idle upgraded connections for `proxy_read_timeout`
   (default 60s); the plugin pings every 20s, so the default is fine.
 
@@ -253,20 +254,21 @@ Proxy Host at it:
 Production monitoring runs in the k3s cluster: **kube-prometheus-stack** (Helm values in
 `k8s/cluster/`), the app's ServiceMonitors and the **OSParty API** Grafana dashboard provisioned
 from `k8s/base/`, and Grafana served at `https://monitoring.osparty.net` through the same Traefik
-ingress + cert-manager as the API. Logs are in Loki (Grafana → Explore). See `k8s/README.md`.
+ingress + cert-manager as the API. Logs from every pod are queryable in **Loki** (Grafana →
+Explore); alert rules notify the OSParty Discord.
 
 What's collected:
 
-- **JVM** — heap/non-heap, GC pause rate, live threads, CPU (Actuator + Micrometer, automatic).
-- **Active socket connections** — the `osparty_ws_connections_active` gauge, read live off
+- **JVM**: heap/non-heap, GC pause rate, live threads, CPU (Actuator + Micrometer, automatic).
+- **Active socket connections**: the `osparty_ws_connections_active` gauge, read live off
   `PartyBroadcaster`'s subscriber map (see `MetricsConfig`).
-- **Redis query time** — Lettuce per-command latency timers (`lettuce_command_completion_*`),
+- **Redis query time**: Lettuce per-command latency timers (`lettuce_command_completion_*`),
   tagged by command. Only populated when `app.storage=redis` (i.e. in the deployed stack).
-- **Redis server load** — a `redis-exporter` sidecar: ops/sec, memory, connected clients,
+- **Redis server load**: a `redis-exporter` sidecar: ops/sec, memory, connected clients,
   keyspace hit ratio.
 
 The app exposes `/actuator/prometheus` on a **separate management port `9090`** that is never
-part of the public Service — only Prometheus reaches it inside the cluster.
+part of the public Service; only Prometheus reaches it inside the cluster.
 
 ## Test / build
 
@@ -275,12 +277,32 @@ part of the public Service — only Prometheus reaches it inside the cluster.
 ./gradlew build    # full build (jar in build/libs)
 ```
 
-## Deploy
+## Deploy (production, k3s)
 
-Production is a 3-server **k3s** cluster; `.github/workflows/deploy-k8s.yml` (**Deploy API
-(Kubernetes)** in the Actions tab) is the only deploy pipeline. A run builds the image, pushes it to
-`ghcr.io/osparty/osparty-api`, applies the rendered `k8s/` manifests over one SSH to the control
-plane, and — only after the rollout succeeds — tags the commit and cuts a GitHub release.
+Production is a 3-server Hetzner **k3s** cluster on a private network (`10.0.0.0/24`). Everything
+under `k8s/` is the cluster's source of truth:
+
+```
+k8s/
+  cluster/        one-time, cluster-scoped: Helm values (Traefik, kube-prometheus-stack, Loki,
+                  Alloy), cert-manager issuers
+  base/           the app: api Deployment/Service, redis StatefulSet, Ingress, ServiceMonitors,
+                  Grafana dashboard
+  overlays/prod/  namespace osparty: api.osparty.net, 3 api replicas
+  sysctl/         host-global sysctls (conntrack, backlogs, file-max); copy to /etc/sysctl.d/
+                  on every node, they cannot be set from inside the cluster
+```
+
+| Server | Private IP | Role |
+|--------|-----------|------|
+| api01  | 10.0.0.2  | control plane; Traefik ingress (80/443); redis + discord-bot pods pin here |
+| api02  | 10.0.0.3  | agent |
+| api03  | 10.0.0.4  | agent |
+
+`.github/workflows/deploy-k8s.yml` (**Deploy API (Kubernetes)** in the Actions tab) is the only
+deploy pipeline. A run builds the image, pushes it to `ghcr.io/osparty/osparty-api`, applies the
+rendered `k8s/` manifests over one SSH to the control plane, and only after the rollout succeeds
+tags the commit and cuts a GitHub release.
 
 Versioning is automatic semver: each run bumps the patch of the latest `v*.*.*` tag. For a
 minor/major bump (or to redeploy an old version), run the workflow manually with an explicit
@@ -289,8 +311,19 @@ with the previous version.
 
 Required repository **secrets**: `API_SERVER_ADDRESS` (the control-plane host), `SSH_USER`,
 `SSH_KEY` (PEM private key, no passphrase); optional `SSH_PORT` (defaults to 22). The image push
-uses the workflow's own `GITHUB_TOKEN`; the cluster pulls via its `ghcr-pull` secret. Cluster
-setup, secrets, and operations are documented in `k8s/README.md`.
+uses the workflow's own `GITHUB_TOKEN`; the cluster pulls via its `ghcr-pull` docker-registry
+secret.
+
+Runtime configuration lives in namespace secrets, created once by hand:
+
+- **`osparty-api-env`** (namespace `osparty`): `SPRING_DATA_REDIS_PASSWORD`,
+  `DISCORD_INTERNAL_TOKEN` (shared secret with the bot, both directions),
+  `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` / `DISCORD_REDIRECT_URI` (OAuth account linking).
+- **`ghcr-pull`** (namespace `osparty`): pull credentials for the internal GHCR packages.
+- **`grafana-env`** (namespace `monitoring`): `DISCORD_ALERT_WEBHOOK_URL` for Grafana alerts.
+
+The Discord bot deploys from its own repo (`osparty-discord`) into the same namespace with its own
+workflow and `osparty-discord-env` secret; the api pods reach it at `http://osparty-discord:8090`.
 
 ## Layout
 

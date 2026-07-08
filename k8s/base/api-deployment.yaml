@@ -34,12 +34,12 @@ spec:
       securityContext:
         # Bigger accept backlog for WS connection/reconnect bursts (pairs with Tomcat's accept-count),
         # same as the compose sysctls. net.core.* is an "unsafe" sysctl: kubelet on every node needs
-        # --allowed-unsafe-sysctls=net.core.somaxconn or the pod is rejected — see k8s/README.md.
+        # --allowed-unsafe-sysctls=net.core.somaxconn or the pod is rejected — see README.md (Deploy).
         sysctls:
           - name: net.core.somaxconn
             value: "65535"
       imagePullSecrets:
-        - name: ghcr-pull   # the GHCR package is internal; created per-namespace, see k8s/README.md
+        - name: ghcr-pull   # the GHCR package is internal; created per-namespace, see README.md (Deploy)
       containers:
         - name: api
           image: ghcr.io/osparty/osparty-api:latest   # tag pinned per-deploy by CI (kustomize edit set image)
@@ -63,7 +63,7 @@ spec:
             - name: DISCORD_SERVICE_URL
               value: ""
           # REDIS password + Discord tokens/OAuth. Created once per namespace from the old .env values
-          # (never committed) — see k8s/README.md. Keys: SPRING_DATA_REDIS_PASSWORD,
+          # (never committed) — see README.md (Deploy). Keys: SPRING_DATA_REDIS_PASSWORD,
           # DISCORD_INTERNAL_TOKEN, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, DISCORD_REDIRECT_URI.
           envFrom:
             - secretRef:

@@ -3,7 +3,7 @@
 # the private IP: only pods can reach it, via the `redis` ClusterIP Service.
 #
 # Pinned to api01 because local-path PVCs are node-local (label the node first:
-# `kubectl label node api01 osparty.net/role=main` — see k8s/README.md). Ads are ephemeral
+# `kubectl label node api01 osparty.net/role=main` — see README.md (Deploy)). Ads are ephemeral
 # (TTL <= 90s) so losing this volume is harmless; AOF persistence just preserves ads across restarts.
 apiVersion: apps/v1
 kind: StatefulSet

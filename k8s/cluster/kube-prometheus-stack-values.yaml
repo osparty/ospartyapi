@@ -6,7 +6,7 @@
 #   helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
 #     -n monitoring --create-namespace -f k8s/cluster/kube-prometheus-stack-values.yaml
 #
-# Grafana admin credentials come from a Secret created once (see k8s/README.md):
+# Grafana admin credentials come from a Secret created once (see README.md (Deploy)):
 #   kubectl -n monitoring create secret generic grafana-admin \
 #     --from-literal=admin-user=admin --from-literal=admin-password=<GRAFANA_ADMIN_PASSWORD>
 #

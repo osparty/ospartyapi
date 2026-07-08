@@ -250,8 +250,10 @@ Proxy Host at it:
 
 ## Monitoring (production)
 
-The production `docker-compose.yml` runs a **Prometheus + Grafana** stack alongside the API.
-It's not in the test stack — monitoring is production-only.
+Production monitoring runs in the k3s cluster: **kube-prometheus-stack** (Helm values in
+`k8s/cluster/`), the app's ServiceMonitors and the **OSParty API** Grafana dashboard provisioned
+from `k8s/base/`, and Grafana served at `https://monitoring.osparty.net` through the same Traefik
+ingress + cert-manager as the API. Logs are in Loki (Grafana → Explore). See `k8s/README.md`.
 
 What's collected:
 
@@ -263,27 +265,8 @@ What's collected:
 - **Redis server load** — a `redis-exporter` sidecar: ops/sec, memory, connected clients,
   keyspace hit ratio.
 
-How it's wired (all private by default):
-
-- The app exposes `/actuator/prometheus` on a **separate management port `9090`** that
-  docker-compose does **not** publish — only the `prometheus` container reaches it over the
-  compose network. It is never served on the public `8080` port.
-- **Grafana** is published on host port `${GRAFANA_HTTP_PORT}` (default `3001` — `3000` is often
-  already taken on this shared box) and served at `https://monitoring.osparty.net` through the
-  same Nginx Proxy Manager stack as the API. Add a Proxy Host in NPM:
-  - *Domain*: `monitoring.osparty.net`
-  - *Forward Hostname/IP*: `host.docker.internal` — *Forward Port*: `3001` — scheme **http**
-    (NOT NPM's own host/port — pointing it at NPM returns NPM's `{"status":"OK"...}` API JSON)
-  - Details tab: enable **Websockets Support**
-  - SSL tab: request a Let's Encrypt certificate + Force SSL
-
-  Login is `admin` / `GRAFANA_ADMIN_PASSWORD` (set it in the server's `.env`; see `.env.example`).
-  The Prometheus datasource and an **OSParty API** dashboard are auto-provisioned on first boot.
-  Prefer SSH-tunnel-only access? Change the port mapping to `127.0.0.1:3000:3000` and
-  `ssh -L 3000:localhost:3000 <server>`.
-
-The `monitoring/` directory (scrape config + Grafana provisioning) is shipped to the server by
-the deploy workflow alongside the jar and compose file.
+The app exposes `/actuator/prometheus` on a **separate management port `9090`** that is never
+part of the public Service — only Prometheus reaches it inside the cluster.
 
 ## Test / build
 
@@ -294,25 +277,20 @@ the deploy workflow alongside the jar and compose file.
 
 ## Deploy
 
-CI deploys are **tag-driven** (`.github/workflows/deploy.yml`) and image-based via **GitHub Container
-Registry**. Pushing a semver tag builds the image, pushes it to `ghcr.io/osparty/osparty-api`, then SSHes
-to the server and runs `docker compose pull && up -d`:
+Production is a 3-server **k3s** cluster; `.github/workflows/deploy-k8s.yml` (**Deploy API
+(Kubernetes)** in the Actions tab) is the only deploy pipeline. A run builds the image, pushes it to
+`ghcr.io/osparty/osparty-api`, applies the rendered `k8s/` manifests over one SSH to the control
+plane, and — only after the rollout succeeds — tags the commit and cuts a GitHub release.
 
-```sh
-git tag v1.2.3 && git push origin v1.2.3   # builds + deploys version 1.2.3
-```
+Versioning is automatic semver: each run bumps the patch of the latest `v*.*.*` tag. For a
+minor/major bump (or to redeploy an old version), run the workflow manually with an explicit
+version. **Rollback**: `kubectl -n osparty rollout undo deployment/osparty-api`, or a manual run
+with the previous version.
 
-The build version comes from the tag (`v1.2.3` -> `1.2.3`, via `-PappVersion`); the image is tagged
-`:<version>` and `:latest`, the compose file pins it via `${IMAGE_TAG}`, and a GitHub Release is cut for
-the tag. **Rollback** is just redeploying an older tag on the server: `IMAGE_TAG=1.2.2 docker compose up -d`.
-You can also trigger a manual deploy from the Actions tab (**Run workflow**), optionally passing a version
-label. Every push to `main` publishes a `:test` image and updates the test stack (`deploy-test.yml`).
-
-Required repository **secrets**: `API_SERVER_ADDRESS`, `SSH_USER`, `SSH_KEY` (PEM private key, no
-passphrase), and `GHCR_USERNAME` + `GHCR_TOKEN` (a PAT with `read:packages` for the server's pull login).
-Optional: `SSH_PORT` (defaults to 22). One-time on GitHub, set the GHCR package visibility to **internal**
-under the org's package settings. The SSH user must be able to run `docker` / `docker compose` (Compose v2).
-Only the compose file + `monitoring/` are shipped to the server; the app image comes from GHCR.
+Required repository **secrets**: `API_SERVER_ADDRESS` (the control-plane host), `SSH_USER`,
+`SSH_KEY` (PEM private key, no passphrase); optional `SSH_PORT` (defaults to 22). The image push
+uses the workflow's own `GITHUB_TOKEN`; the cluster pulls via its `ghcr-pull` secret. Cluster
+setup, secrets, and operations are documented in `k8s/README.md`.
 
 ## Layout
 

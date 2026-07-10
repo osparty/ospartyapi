@@ -190,6 +190,38 @@ public class RedisPartyRepository implements PartyRepository {
 	}
 
 	@Override
+	public Optional<Party> transferHost(String id, String newHost, String newKey) {
+		String key = PARTY_KEY + id;
+		Party party = read(key);
+		if (party == null) {
+			return Optional.empty();
+		}
+		String oldHostIndex = HOST_KEY + PartyFactory.normalizeHost(party.getHost());
+		String newHostIndex = HOST_KEY + PartyFactory.normalizeHost(newHost);
+		party.setHost(newHost);
+		String json = write(party);
+		// One pipelined round-trip: move the host index, re-key the credential and rewrite the ad,
+		// all refreshed to a full TTL so the handoff doesn't shorten the party's lifetime.
+		redis.executePipelined(new SessionCallback<Object>() {
+			@Override
+			@SuppressWarnings({"unchecked", "rawtypes"})
+			public Object execute(RedisOperations operations) {
+				if (!oldHostIndex.equals(newHostIndex)) {
+					operations.delete(oldHostIndex);
+				}
+				operations.opsForValue().set(newHostIndex, id, ttl);
+				operations.opsForValue().set(CREDENTIAL_KEY + id, newKey, ttl);
+				operations.opsForValue().set(key, json, ttl);
+				if (party.getInviteCode() != null) {
+					operations.expire(CODE_KEY + party.getInviteCode(), ttl);
+				}
+				return null;
+			}
+		});
+		return Optional.of(party);
+	}
+
+	@Override
 	public Optional<Party> attachVoiceChannel(String id, String channelId, String inviteUrl) {
 		String key = PARTY_KEY + id;
 		Party party = read(key);

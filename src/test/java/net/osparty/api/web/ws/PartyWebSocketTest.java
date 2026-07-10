@@ -150,6 +150,56 @@ class PartyWebSocketTest {
 	}
 
 	@Test
+	void transferHostReassignsAdAndReKeys() throws Exception {
+		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
+		WebSocketSession session = connect(messages);
+		try {
+			session.sendMessage(new TextMessage("{\"type\":\"subscribe\"}"));
+			awaitWhere(messages, m -> "snapshot".equals(type(m)), "snapshot");
+
+			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-old\",\"request\":"
+				+ "{\"activity\":\"cox\",\"host\":\"WsXfer\",\"capacity\":3,\"passphrase\":\"pp-xfer\"}}"));
+			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
+			String id = hosted.path("party").path("id").asText();
+			awaitWhere(messages,
+				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> id.equals(p.path("id").asText())),
+				"created for the hosted ad");
+
+			// Hand the ad to WsXfer2, re-keying the credential to k-new.
+			session.sendMessage(new TextMessage("{\"type\":\"transferHost\",\"id\":\"" + id
+				+ "\",\"key\":\"k-old\",\"host\":\"WsXfer2\",\"newKey\":\"k-new\"}"));
+			JsonNode ack = awaitWhere(messages,
+				m -> "transferred".equals(type(m)) && id.equals(m.path("id").asText()), "transferred ack");
+			assertThat(ack.path("id").asText()).isEqualTo(id);
+
+			// The host-name change ships to search clients as a normal reconcile delta.
+			awaitWhere(messages,
+				m -> "batch".equals(type(m)) && anyMatch(m.path("updated"),
+					d -> id.equals(d.path("id").asText()) && "WsXfer2".equals(d.path("host").asText())),
+				"updated delta with new host");
+
+			// The old key no longer authorises (session was unbound + credential re-keyed).
+			session.sendMessage(new TextMessage("{\"type\":\"update\",\"id\":\"" + id
+				+ "\",\"key\":\"k-old\",\"patch\":{\"description\":\"stale\"}}"));
+			awaitWhere(messages,
+				m -> "error".equals(type(m)) && id.equals(m.path("id").asText())
+					&& "forbidden".equals(m.path("detail").asText()),
+				"forbidden for the old key");
+
+			// The new key authorises the new host's writes.
+			session.sendMessage(new TextMessage("{\"type\":\"update\",\"id\":\"" + id
+				+ "\",\"key\":\"k-new\",\"patch\":{\"description\":\"new-host-desc\"}}"));
+			awaitWhere(messages,
+				m -> "batch".equals(type(m)) && anyMatch(m.path("updated"),
+					d -> id.equals(d.path("id").asText()) && "new-host-desc".equals(d.path("description").asText())),
+				"updated delta from the new host");
+		}
+		finally {
+			session.close();
+		}
+	}
+
+	@Test
 	void getByCodeReturnsPrivatePartyAndMissCarriesNoParty() throws Exception {
 		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
 		WebSocketSession session = connect(messages);

@@ -14,6 +14,7 @@ import java.util.Objects;
 public record PartyDelta(
 	String id,
 	String activity,
+	String host,
 	Integer size,
 	List<Member> members,
 	String world,
@@ -39,6 +40,7 @@ public record PartyDelta(
 	 * the only things that can change after an ad is created.
 	 */
 	public static PartyDelta diff(Party prev, Party cur) {
+		String host = Objects.equals(prev.getHost(), cur.getHost()) ? null : cur.getHost();
 		Integer size = prev.getSize() != cur.getSize() ? cur.getSize() : null;
 		List<Member> members = Objects.equals(prev.getMembers(), cur.getMembers()) ? null : cur.getMembers();
 		String world = Objects.equals(prev.getWorld(), cur.getWorld()) ? null : cur.getWorld();
@@ -62,13 +64,13 @@ public record PartyDelta(
 		Boolean learner = prev.isLearner() != cur.isLearner() ? cur.isLearner() : null;
 		Boolean teacher = prev.isTeacher() != cur.isTeacher() ? cur.isTeacher() : null;
 
-		if (size == null && members == null && world == null && layout == null && neededRoles == null
+		if (host == null && size == null && members == null && world == null && layout == null && neededRoles == null
 			&& description == null && capacity == null && lootRule == null && ironmanOnly == null && privateParty == null
 			&& minKillCount == null && minHardModeKillCount == null && invocation == null && hardMode == null
 			&& requiredRoles == null && hostRole == null && learner == null && teacher == null) {
 			return null;
 		}
-		return new PartyDelta(cur.getId(), cur.getActivity(), size, members, world, layout, neededRoles, description,
+		return new PartyDelta(cur.getId(), cur.getActivity(), host, size, members, world, layout, neededRoles, description,
 			capacity, lootRule, ironmanOnly, privateParty, minKillCount, minHardModeKillCount, invocation, hardMode,
 			requiredRoles, hostRole, learner, teacher);
 	}

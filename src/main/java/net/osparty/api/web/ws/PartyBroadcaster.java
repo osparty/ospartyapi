@@ -116,6 +116,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			case "unhost":
 				handleUnhost(sub, in);
 				break;
+			case "transferHost":
+				handleTransferHost(sub, in);
+				break;
 			case "getByCode":
 				handleGetByCode(sub, in);
 				break;
@@ -246,6 +249,43 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		unbind(sub.session.getId());
 		log.info("WS unhost: session={} party={}", sub.session.getId(), id);
+	}
+
+	/**
+	 * Host action: hand the ad to a new host in place. Authorised by the current host (session binding
+	 * or the current key). Swaps the host name + credential to {@code newKey} so the previous host's key
+	 * stops working, then unbinds this session — the new host adopts the ad by resuming with {@code newKey}
+	 * and its next heartbeat refreshes the roster. The party id, invite code and Discord channel are kept,
+	 * and the host-name change ships to search clients as a normal reconcile delta.
+	 */
+	private void handleTransferHost(Subscriber sub, Inbound in) {
+		String id = in.id();
+		if (id == null) {
+			sendError(sub, null, "missing id");
+			return;
+		}
+		if (in.host() == null || in.host().isBlank()) {
+			sendError(sub, id, "missing host");
+			return;
+		}
+		if (in.newKey() == null || in.newKey().isBlank()) {
+			sendError(sub, id, "missing newKey");
+			return;
+		}
+		if (!authorizeWrite(sub, id, in.key())) {
+			return;
+		}
+		Optional<Party> party = store.transferHost(id, in.host(), in.newKey());
+		if (party.isEmpty()) {
+			sendError(sub, id, "gone");
+			unbind(sub.session.getId());
+			return;
+		}
+		// The old host is relinquishing: drop its ownership binding so its keep-alive touch stops and the
+		// new host can bind on resume. The re-keyed credential already invalidated the old host's key.
+		unbind(sub.session.getId());
+		log.info("WS transferHost: session={} party={} newHost={}", sub.session.getId(), id, in.host());
+		send(sub, Outbound.transferred(version.get(), id));
 	}
 
 	/**
@@ -680,7 +720,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	}
 
 	record Inbound(String type, String activity, PartyRequest request, PartyUpdate patch, String id, String key,
-		String code, String host, Long accountHash, Boolean visible) {
+		String code, String host, Long accountHash, Boolean visible, String newKey) {
 	}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)
@@ -735,6 +775,11 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		/** Ack to requestVoiceAccess: the caller has been granted access; the plugin may open the invite. */
 		static Outbound voiceAccess(long version, String id) {
 			return new Outbound("voiceAccess", version, null, null, id, null, null, null, null, null, null);
+		}
+
+		/** Ack to transferHost: the ad has been reassigned; the old host may relinquish and the new host adopt it. */
+		static Outbound transferred(long version, String id) {
+			return new Outbound("transferred", version, null, null, id, null, null, null, null, null, null);
 		}
 	}
 

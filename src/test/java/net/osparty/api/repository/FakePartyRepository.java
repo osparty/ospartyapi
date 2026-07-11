@@ -96,6 +96,17 @@ public class FakePartyRepository implements PartyRepository {
 	}
 
 	@Override
+	public Optional<Party> transferHost(String id, String newHost, String newKey) {
+		Party party = parties.get(id);
+		if (party == null) {
+			return Optional.empty();
+		}
+		party.setHost(newHost);
+		hostKeys.put(id, newKey);
+		return Optional.of(party);
+	}
+
+	@Override
 	public Optional<Party> attachVoiceChannel(String id, String channelId, String inviteUrl) {
 		Party party = parties.get(id);
 		if (party == null) {

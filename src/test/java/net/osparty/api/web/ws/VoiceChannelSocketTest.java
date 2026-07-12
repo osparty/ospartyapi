@@ -25,11 +25,6 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-/**
- * Exercises the {@code createVoiceChannel} opcode with a stubbed {@link VoiceChannelService} (no real
- * Discord bot): the host provisions a channel, the reply carries the invite URL, and a second request
- * is idempotent (no second create).
- */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @TestPropertySource(properties = "app.ws.reconcile-interval-ms=150")
@@ -45,8 +40,6 @@ class VoiceChannelSocketTest {
 
 	@TestConfiguration
 	static class Config {
-		// @Primary so it wins over the DisabledVoiceChannelService no-op fallback, which is also
-		// present (its @ConditionalOnMissingBean is evaluated before this test bean is registered).
 		@Bean
 		@org.springframework.context.annotation.Primary
 		StubVoiceChannelService stubVoiceChannelService() {
@@ -54,7 +47,6 @@ class VoiceChannelSocketTest {
 		}
 	}
 
-	/** Counts create/delete calls and returns a fixed URL, so the opcode can be tested without Discord. */
 	static class StubVoiceChannelService implements VoiceChannelService {
 		final AtomicReference<String> deleted = new AtomicReference<>();
 		int creates;
@@ -69,13 +61,11 @@ class VoiceChannelSocketTest {
 
 		@Override
 		public boolean grantAccess(String channelId, String discordId) {
-			// not exercised here
 			return true;
 		}
 
 		@Override
 		public void revokeAccess(String channelId, String discordId) {
-			// not exercised here
 		}
 
 		@Override
@@ -85,7 +75,6 @@ class VoiceChannelSocketTest {
 
 		@Override
 		public void disconnectFromChannel(String channelId, String discordId) {
-			// not exercised here
 		}
 	}
 
@@ -106,7 +95,6 @@ class VoiceChannelSocketTest {
 			assertThat(reply.path("url").asText()).isEqualTo("https://discord.gg/stub-" + id);
 			assertThat(voice.creates).isEqualTo(1);
 
-			// Second request must not create a second channel — it echoes the stored URL.
 			session.sendMessage(new TextMessage("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
 			JsonNode again = awaitWhere(messages, m -> "voiceChannel".equals(type(m)), "voiceChannel reply (2)");
 			assertThat(again.path("url").asText()).isEqualTo("https://discord.gg/stub-" + id);

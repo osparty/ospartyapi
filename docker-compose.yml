@@ -1,7 +1,7 @@
 services:
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]   # durable across restarts
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
     ports:
@@ -12,10 +12,7 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
-
   api:
-    # Image is built + pushed to GHCR by the deploy workflow; the server pulls it (see IMAGE_TAG).
-    # For a local build instead, run: ./gradlew bootJar && docker compose up --build
     image: ghcr.io/osparty/osparty-api:${IMAGE_TAG:-latest}
     build:
       context: .
@@ -26,31 +23,18 @@ services:
     environment:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
-      # Voice-channel provisioning is delegated to the separate osparty-discord service. Point this at
-      # the bot (e.g. http://host.docker.internal:8090 locally, or http://<main-private-ip>:8090 on the
-      # private network); leave it blank to run without voice (a no-op VoiceChannelService stands in).
-      # DISCORD_INTERNAL_TOKEN must match the bot's shared secret.
       DISCORD_SERVICE_URL: "${DISCORD_SERVICE_URL:-}"
       DISCORD_INTERNAL_TOKEN: "${DISCORD_INTERNAL_TOKEN:-}"
-      # OAuth2 account linking stays in the API (Redis-backed; needs no bot). Blank = linking disabled.
       DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID:-}"
       DISCORD_CLIENT_SECRET: "${DISCORD_CLIENT_SECRET:-}"
       DISCORD_REDIRECT_URI: "${DISCORD_REDIRECT_URI:-}"
-    # The bot runs as its own stack (osparty-discord); reach it on the host via host.docker.internal.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
-    # Actuator/Prometheus metrics port. NOT published to the host — only reachable by the
-    # prometheus service on this compose network, so the scrape endpoint stays private.
     expose:
       - "9090"
     restart: unless-stopped
-
-  # ---- Monitoring (production only) --------------------------------------------------------
-  # Prometheus scrapes the API's /actuator/prometheus (JVM, Tomcat, Lettuce/Redis, active
-  # WebSocket connections) and the redis-exporter (server-side Redis load); Grafana renders it.
-
   prometheus:
     image: prom/prometheus:v2.54.1
     volumes:
@@ -62,9 +46,6 @@ services:
     depends_on:
       - api
     restart: unless-stopped
-
-  # Client-app Redis latency comes from Lettuce metrics on the API; this exporter adds the
-  # server side: ops/sec, memory, connected clients, keyspace hit ratio, blocked clients.
   redis-exporter:
     image: oliver006/redis_exporter:v1.62.0
     environment:
@@ -72,33 +53,21 @@ services:
     depends_on:
       - redis
     restart: unless-stopped
-
   grafana:
     image: grafana/grafana:11.2.0
     depends_on:
       - prometheus
     environment:
-      # Set GRAFANA_ADMIN_PASSWORD in the server's .env (see .env.example). Defaults to "admin".
       GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
       GF_USERS_ALLOW_SIGN_UP: "false"
-      # Public URL Grafana is served on (behind Nginx Proxy Manager). Needed so login redirects
-      # and generated links use https://monitoring.osparty.net instead of localhost.
       GF_SERVER_ROOT_URL: "${GRAFANA_ROOT_URL:-https://monitoring.osparty.net}"
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
-    # Published on ALL interfaces (not 127.0.0.1) so the separate Nginx Proxy Manager stack can
-    # reach it via host.docker.internal, the same way it reaches the API on 8080. The host port is
-    # configurable because 3000 is often already taken on a shared box (NPM serves test + prod
-    # here) — pick a free one via GRAFANA_HTTP_PORT and point the NPM Proxy Host at it:
-    #   Forward Hostname host.docker.internal, Forward Port ${GRAFANA_HTTP_PORT}, scheme http,
-    #   Websockets Support on, Let's Encrypt SSL. External access to this port stays firewalled;
-    #   only NPM reaches it over the docker bridge.
     ports:
       - "${GRAFANA_HTTP_PORT:-3001}:3000"
     restart: unless-stopped
-
 volumes:
   redis-data:
   prometheus-data:

@@ -1,10 +1,3 @@
-# The shared Redis — still a deliberate singleton (capacity scaling, not HA, same as the compose setup).
-# Replaces the `redis` + `redis-exporter` services in docker-compose.main.yml. No more publishing 6379 on
-# the private IP: only pods can reach it, via the `redis` ClusterIP Service.
-#
-# Pinned to api01 because local-path PVCs are node-local (label the node first:
-# `kubectl label node api01 osparty.net/role=main` — see README.md (Deploy)). Ads are ephemeral
-# (TTL <= 90s) so losing this volume is harmless; AOF persistence just preserves ads across restarts.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -34,7 +27,6 @@ spec:
                 secretKeyRef:
                   name: osparty-api-env
                   key: SPRING_DATA_REDIS_PASSWORD
-            # redis-cli picks this up so the probes can AUTH without the password on the cmdline.
             - name: REDISCLI_AUTH
               valueFrom:
                 secretKeyRef:
@@ -60,8 +52,6 @@ spec:
               memory: 128Mi
             limits:
               memory: 512Mi
-        # Server-side Redis metrics (ops/sec, memory, clients, keyspace hits) — scraped via the `metrics`
-        # port on the redis Service, replacing the standalone redis-exporter container.
         - name: exporter
           image: oliver006/redis_exporter:v1.62.0
           env:

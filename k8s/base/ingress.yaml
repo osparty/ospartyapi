@@ -1,9 +1,3 @@
-# Public ingress for the API — replaces the NPM Proxy Host + the hand-rendered `upstream osparty_api`
-# (deploy/npm/http_top.conf): the Service's endpoints ARE the pool now, membership is automatic.
-# cert-manager issues/renews the Let's Encrypt cert (no more one-time NPM UI setup).
-#
-# Served by Traefik (k8s/cluster/traefik-values.yaml). WebSockets (/api/v1/ws/parties) upgrade natively;
-# upgraded connections live outside Traefik's HTTP timeouts, so long-idle sockets stay open.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

@@ -19,7 +19,6 @@ public class Party {
 	private String passphrase;
 	private int minKillCount;
 	private int minHardModeKillCount;
-	/** Host is the first entry. Each carries the member's name plus stable accountHash. */
 	private List<Member> members;
 	private boolean privateParty;
 	private String inviteCode;
@@ -31,14 +30,9 @@ public class Party {
 	private List<String> neededRoles;
 	private boolean learner;
 	private boolean teacher;
-	/** Discord voice channel provisioned for this party (id + invite URL), or null if none created. */
 	private String discordChannelId;
 	private String discordInviteUrl;
 
-	/**
-	 * A shallow field copy. Used by the reconciler to retain an immutable snapshot of an ad for the
-	 * next tick's diff, so it never aliases a repository-owned instance that may be mutated in place.
-	 */
 	public static Party copyOf(Party src) {
 		Party c = new Party();
 		c.id = src.id;

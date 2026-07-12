@@ -15,12 +15,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/**
- * Server-side half of the Discord OAuth2 code exchange: swaps the authorization {@code code} from the
- * callback for an access token, then reads {@code /users/@me} to learn the linked Discord user's id and
- * username. Uses the JDK HTTP client (no extra dependency). Secrets ({@code client-secret}) never leave
- * the backend. Returns empty on any failure — the controller then shows a "try again" page.
- */
 @Component
 public class DiscordOAuthClient {
 	private static final Logger log = LoggerFactory.getLogger(DiscordOAuthClient.class);
@@ -43,7 +37,6 @@ public class DiscordOAuthClient {
 		this.redirectUri = redirectUri == null ? "" : redirectUri.trim();
 	}
 
-	/** Exchange the authorization code for the linked Discord user, or empty on any failure. */
 	public Optional<DiscordLinkService.Link> exchangeForUser(String code) {
 		try {
 			String form = "client_id=" + enc(clientId)

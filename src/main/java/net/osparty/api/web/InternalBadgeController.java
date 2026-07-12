@@ -11,12 +11,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * Internal endpoint the osparty-discord bot pushes badge state to — the reverse of the API→bot voice
- * calls, authenticated with the same shared secret ({@code X-Internal-Token}, see
- * {@link net.osparty.api.web.filter.InternalTokenFilter}). POST upserts one user on a gateway role
- * event; PUT is the bot's startup sweep, replacing the complete badge state.
- */
 @RestController
 @RequestMapping("/internal/badges")
 public class InternalBadgeController {
@@ -26,7 +20,6 @@ public class InternalBadgeController {
 		this.badges = badges;
 	}
 
-	/** Upsert one user's badges. Empty (or all-unrecognised) badges clears them. */
 	@PostMapping
 	public ResponseEntity<Void> set(@RequestBody BadgePush push) {
 		if (push == null || push.discordId() == null || push.discordId().isBlank()) {
@@ -36,7 +29,6 @@ public class InternalBadgeController {
 		return ResponseEntity.noContent().build();
 	}
 
-	/** Replace the complete badge state (startup reconciliation): absent users lose their badges. */
 	@PutMapping
 	public ResponseEntity<Void> replaceAll(@RequestBody List<BadgePush> pushes) {
 		if (pushes == null) {
@@ -52,7 +44,6 @@ public class InternalBadgeController {
 		return ResponseEntity.noContent().build();
 	}
 
-	/** Mirrors osparty-discord's BadgePush DTO. */
 	public record BadgePush(String discordId, List<String> badges) {
 	}
 }

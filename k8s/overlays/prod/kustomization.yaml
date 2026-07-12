@@ -1,21 +1,13 @@
-# Production: api.osparty.net, 3 replicas (from the base). Deployed by .github/workflows/deploy-k8s.yml,
-# which pins the image tag per release (kustomize edit set image) before rendering.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-
 namespace: osparty
-
 resources:
   - namespace.yaml
   - ../../base
-
 images:
   - name: ghcr.io/osparty/osparty-api
-    newTag: latest   # overwritten by CI with the immutable release tag
-
+    newTag: latest
 patches:
-  # Voice provisioning: the bot runs in-cluster (osparty-discord repo, same namespace), reached by
-  # Service DNS. Before the bot's k8s migration this pointed at its compose stack on 10.0.0.2:8090.
   - patch: |-
       apiVersion: apps/v1
       kind: Deployment

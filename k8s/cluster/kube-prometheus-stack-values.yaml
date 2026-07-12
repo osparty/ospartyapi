@@ -1,28 +1,10 @@
-# kube-prometheus-stack Helm values — replaces the prometheus/grafana/node-exporter/cadvisor containers
-# from docker-compose.main.yml (node-exporter becomes a DaemonSet on every node; cadvisor is the kubelet's
-# embedded one, so the pinned-cadvisor-version saga ends here). Install/upgrade:
-#
-#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-#   helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
-#     -n monitoring --create-namespace -f k8s/cluster/kube-prometheus-stack-values.yaml
-#
-# Grafana admin credentials come from a Secret created once (see README.md (Deploy)):
-#   kubectl -n monitoring create secret generic grafana-admin \
-#     --from-literal=admin-user=admin --from-literal=admin-password=<GRAFANA_ADMIN_PASSWORD>
-#
-# Everything heavy is pinned to api01 (osparty.net/role=main) — the 4GB workers only carry node-exporter.
-
-# The old stack had no alertmanager; keep it off to save RAM on MAIN.
 alertmanager:
   enabled: false
-
 prometheus:
   prometheusSpec:
-    retention: 15d   # same as the old --storage.tsdb.retention.time
+    retention: 15d
     nodeSelector:
       osparty.net/role: main
-    # Pick up OUR ServiceMonitors (k8s/base/servicemonitors.yaml), not only ones labeled with this Helm
-    # release — without these two settings the app metrics silently never appear.
     serviceMonitorSelectorNilUsesHelmValues: false
     podMonitorSelectorNilUsesHelmValues: false
     storageSpec:
@@ -37,7 +19,6 @@ prometheus:
       requests:
         cpu: 250m
         memory: 512Mi
-
 grafana:
   nodeSelector:
     osparty.net/role: main
@@ -45,22 +26,13 @@ grafana:
     existingSecret: grafana-admin
     userKey: admin-user
     passwordKey: admin-password
-  # Injects DISCORD_ALERT_WEBHOOK_URL for the alerting contact point below. Create BEFORE upgrading
-  # (Grafana won't start with the secret missing):
-  #   kubectl -n monitoring create secret generic grafana-env \
-  #     --from-literal=DISCORD_ALERT_WEBHOOK_URL='https://discord.com/api/webhooks/<id>/<token>'
   envFromSecret: grafana-env
-  # Loki (k8s/cluster/loki-values.yaml) — same namespace, so plain service DNS. The uid is referenced
-  # by the dashboard's Logs panel.
   additionalDataSources:
     - name: Loki
       type: loki
       uid: loki
       access: proxy
       url: http://loki:3100
-  # Discord notifications: a provisioned contact point (webhook from the env var above) set as the
-  # root notification policy — every Grafana alert rule fires into Discord with a readable message,
-  # no per-rule wiring needed. Alert RULES are created in the UI (persisted in the grafana PVC).
   alerting:
     contactpoints.yaml:
       apiVersion: 1
@@ -73,8 +45,6 @@ grafana:
               settings:
                 url: ${DISCORD_ALERT_WEBHOOK_URL}
                 use_discord_username: true
-                # The outer {{ ` ... ` }} is HELM escaping (the grafana chart tpl-renders these values);
-                # what Grafana receives is just the inner Go template.
                 message: |-
                   {{ `{{ range .Alerts.Firing }}🔥 **{{ .Labels.alertname }}**{{ if .Annotations.summary }} — {{ .Annotations.summary }}{{ end }}
                   {{ if .Annotations.description }}{{ .Annotations.description }}
@@ -98,7 +68,6 @@ grafana:
     enabled: true
     storageClassName: local-path
     size: 2Gi
-  # Served through the same ingress controller as the API — replaces the NPM proxy host + host-port 3001.
   ingress:
     enabled: true
     ingressClassName: traefik
@@ -110,13 +79,10 @@ grafana:
       - hosts:
           - monitoring.osparty.net
         secretName: monitoring-tls
-  # The dashboard sidecar watches all namespaces for ConfigMaps labeled grafana_dashboard=1 — that's how
-  # k8s/base's osparty-api dashboard ConfigMap lands in Grafana.
   sidecar:
     dashboards:
       enabled: true
       searchNamespace: ALL
-
 prometheusOperator:
   nodeSelector:
     osparty.net/role: main

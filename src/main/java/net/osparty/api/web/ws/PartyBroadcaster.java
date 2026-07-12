@@ -46,7 +46,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private final Map<String, String> hostedBy = new ConcurrentHashMap<>();
 	private final Map<String, String> ownerSession = new ConcurrentHashMap<>();
 	private final AtomicLong version = new AtomicLong();
-	/** Last GLOBAL active-user count pushed to clients; {@code -1} until the first broadcast. */
 	private volatile int lastPresence = -1;
 
 	public PartyBroadcaster(PartyRepository store, ObjectMapper mapper,
@@ -62,7 +61,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		this.presence = presence;
 	}
 
-	/** Currently connected WebSocket clients, exported as a Micrometer gauge (see MetricsConfig). */
 	public int activeConnections() {
 		return subscribers.size();
 	}
@@ -75,9 +73,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		subscribers.put(session.getId(), sub);
 		log.info("WS connected: session={} remote={} (subscribers={})",
 			session.getId(), remoteOf(session), subscribers.size());
-		// Give the newcomer the current active-user count right away — the last known GLOBAL total if we
-		// have one (so a multi-node deployment doesn't flash this node's local count), else our local size.
-		// Everyone else learns of the change via the throttled scheduled broadcast below.
 		send(sub, Outbound.presence(version.get(), lastPresence >= 0 ? lastPresence : subscribers.size()));
 	}
 
@@ -186,7 +181,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		send(sub, Outbound.hosted(version.get(), enriched(party)));
 	}
 
-	/** Badge-enrich a single outbound party (see {@code DiscordBadgeService.enrichParties}). */
 	private Party enriched(Party party) {
 		return party == null ? null : badges.enrichParties(List.of(party)).get(0);
 	}
@@ -240,9 +234,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		if (!authorizeWrite(sub, id, in.key())) {
 			return;
 		}
-		// Delete here (not only via the reconciler) because the reconciler's list() excludes private
-		// parties, so a private party's channel would otherwise never be cleaned up on disband. The
-		// reconciler still covers the public TTL/crash path; a double delete is a harmless no-op.
 		Party deleted = store.delete(id).orElse(null);
 		if (deleted != null && deleted.getDiscordChannelId() != null) {
 			voice.delete(deleted.getDiscordChannelId());
@@ -251,13 +242,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		log.info("WS unhost: session={} party={}", sub.session.getId(), id);
 	}
 
-	/**
-	 * Host action: hand the ad to a new host in place. Authorised by the current host (session binding
-	 * or the current key). Swaps the host name + credential to {@code newKey} so the previous host's key
-	 * stops working, then unbinds this session — the new host adopts the ad by resuming with {@code newKey}
-	 * and its next heartbeat refreshes the roster. The party id, invite code and Discord channel are kept,
-	 * and the host-name change ships to search clients as a normal reconcile delta.
-	 */
 	private void handleTransferHost(Subscriber sub, Inbound in) {
 		String id = in.id();
 		if (id == null) {
@@ -281,19 +265,11 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			unbind(sub.session.getId());
 			return;
 		}
-		// The old host is relinquishing: drop its ownership binding so its keep-alive touch stops and the
-		// new host can bind on resume. The re-keyed credential already invalidated the old host's key.
 		unbind(sub.session.getId());
 		log.info("WS transferHost: session={} party={} newHost={}", sub.session.getId(), id, in.host());
 		send(sub, Outbound.transferred(version.get(), id));
 	}
 
-	/**
-	 * Host action: provision a Discord voice channel for the hosted party and return its invite URL.
-	 * Idempotent — if a channel already exists we just echo its URL back, so a double-click (or a
-	 * resume after reconnect) never creates a second channel. The host then re-broadcasts the URL to
-	 * its actual party members over the RuneLite peer bus; the ad firehose never carries it.
-	 */
 	private void handleCreateVoiceChannel(Subscriber sub, Inbound in) {
 		String id = in.id();
 		if (id == null) {
@@ -319,19 +295,12 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			sendError(sub, id, "voice unavailable");
 			return;
 		}
-		// Store + broadcast the invite URL as the "Join voice" link. Its "Open Discord" page launches the
-		// desktop app (the approach that worked in the first iteration).
 		store.attachVoiceChannel(id, channel.get().channelId(), channel.get().inviteUrl());
 		log.info("WS voice channel: session={} party={} channel={}", sub.session.getId(), id,
 			channel.get().channelId());
 		send(sub, Outbound.voiceChannel(version.get(), id, channel.get().inviteUrl()));
 	}
 
-	/**
-	 * Start an OAuth2 Discord link for the caller's accountHash: mint a nonce and return the authorize
-	 * URL for the plugin to open in a browser. No host authorization — linking is per-user and only
-	 * binds the accountHash the caller supplies (same cooperative-trust model as the rest of the API).
-	 */
 	private void handleStartDiscordLink(Subscriber sub, Inbound in) {
 		if (!discordLinks.isEnabled()) {
 			sendError(sub, null, "linking disabled");
@@ -345,7 +314,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		send(sub, Outbound.discordLinkUrl(version.get(), url));
 	}
 
-	/** Remove the caller's Discord binding (both directions). Reply with an unlinked status for confirmation. */
 	private void handleUnlinkDiscord(Subscriber sub, Inbound in) {
 		if (in.accountHash() == null || in.accountHash() == 0) {
 			sendError(sub, null, "missing accountHash");
@@ -356,7 +324,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		send(sub, Outbound.discordLink(version.get(), in.accountHash(), null, null, null));
 	}
 
-	/** Report whether an accountHash is linked, echoing the hash so the poller can match the reply. */
 	private void handleGetDiscordLink(Subscriber sub, Inbound in) {
 		if (in.accountHash() == null || in.accountHash() == 0) {
 			sendError(sub, null, "missing accountHash");
@@ -368,11 +335,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			!badges.isBadgesHidden(in.accountHash())));
 	}
 
-	/**
-	 * Badge privacy self-service: hide (or re-show) the caller's Discord-role badges on party ads.
-	 * Same cooperative trust as unlinkDiscord — keyed by the caller's own accountHash. Takes effect
-	 * on the next reconcile tick; the ack is the refreshed link status.
-	 */
 	private void handleSetBadgeVisibility(Subscriber sub, Inbound in) {
 		if (in.accountHash() == null || in.accountHash() == 0) {
 			sendError(sub, null, "missing accountHash");
@@ -389,7 +351,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			link == null ? null : link.discordId(), link == null ? null : link.username(), in.visible()));
 	}
 
-	/** The linked Discord ids of a party's current members, for per-user channel access. */
 	private List<String> linkedDiscordIds(Party party) {
 		List<String> ids = new java.util.ArrayList<>();
 		if (party.getMembers() != null) {
@@ -402,11 +363,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		return ids;
 	}
 
-	/**
-	 * Member self-service: grant the caller per-user access to the party's voice channel before they open
-	 * the invite, so someone who joined or linked after the channel was created can still get in. Verified
-	 * by the caller's accountHash being in the party roster (cooperative trust) and being Discord-linked.
-	 */
 	private void handleRequestVoiceAccess(Subscriber sub, Inbound in) {
 		String id = in.id();
 		if (id == null) {
@@ -433,8 +389,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			sendError(sub, id, "not linked");
 			return;
 		}
-		// Synchronous: only tell the client "you're in" once the override is actually live, so the plugin
-		// doesn't open the invite to a still-invisible channel (which forced the old see-nothing-then-retry).
 		if (!voice.grantAccess(party.getDiscordChannelId(), discordId)) {
 			sendError(sub, id, "voice access failed");
 			return;
@@ -442,11 +396,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		send(sub, Outbound.voiceAccess(version.get(), id));
 	}
 
-	/**
-	 * Host action: disconnect a kicked member from the party's voice channel. Requires host auth; no-ops
-	 * unless the party has a channel and the member's accountHash is linked to a Discord user. The bot
-	 * itself only disconnects them if they're actually sitting in that channel. Fire-and-forget.
-	 */
 	private void handleKickVoiceMember(Subscriber sub, Inbound in) {
 		String id = in.id();
 		if (id == null) {
@@ -462,7 +411,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		Party party = store.findById(id).orElse(null);
 		if (party == null || party.getDiscordChannelId() == null) {
 			log.info("kickVoiceMember party={} accountHash={}: no channel, skipping", id, in.accountHash());
-			return; // no channel to remove them from
+			return;
 		}
 		String discordId = discordLinks.discordIdForAccountHash(in.accountHash()).orElse(null);
 		if (discordId == null) {
@@ -472,8 +421,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		log.info("kickVoiceMember party={} accountHash={} -> revoking + disconnecting Discord user {} from channel {}",
 			id, in.accountHash(), discordId, party.getDiscordChannelId());
-		// Revoke their per-user view access (so the channel disappears for them) and disconnect them if
-		// they're currently in it.
 		voice.revokeAccess(party.getDiscordChannelId(), discordId);
 		voice.disconnectFromChannel(party.getDiscordChannelId(), discordId);
 	}
@@ -518,16 +465,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			session.getId(), status, subscribers.size());
 	}
 
-	/**
-	 * Push the current active-user count to every connected client, but only when it has
-	 * changed since the last push. Throttling to a scheduled tick (rather than firing on
-	 * every connect/disconnect) keeps this O(subscribers) per interval instead of
-	 * O(subscribers) per churn event, which matters under heavy connection turnover.
-	 */
 	@Scheduled(fixedDelayString = "${app.ws.presence-interval-ms:5000}")
 	public void broadcastPresence() {
-		// Report this node's local count to the shared registry and get back the GLOBAL total across all
-		// instances, so every client sees the same "active users" number regardless of which node it's on.
 		int online = presence.record(subscribers.size());
 		if (online == lastPresence) {
 			return;
@@ -574,12 +513,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		send(sub, Outbound.error(version.get(), id, detail));
 	}
 
-	/**
-	 * Push a whole tick's worth of changes as ONE frame per subscriber instead of
-	 * one frame per changed party per subscriber. Cuts the per-tick message count
-	 * from O(changed x subscribers) to O(subscribers), and serialises at most once
-	 * per distinct activity filter rather than once per send.
-	 */
 	void broadcastBatch(List<Party> created, List<PartyDelta> updated, List<RemovedRef> removed) {
 		if (created.isEmpty() && updated.isEmpty() && removed.isEmpty()) {
 			return;
@@ -590,9 +523,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			if (!sub.subscribed || !sub.session.isOpen()) {
 				continue;
 			}
-			// One serialised frame per distinct activity scope. HashMap permits the null ("all
-			// activities") key, so no sentinel string is needed; a cached null means "nothing
-			// matches this scope" and is neither rebuilt nor sent.
 			if (!perActivity.containsKey(sub.activity)) {
 				perActivity.put(sub.activity, buildBatch(v, sub.activity, created, updated, removed));
 			}
@@ -670,7 +600,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 	}
 
-	/** Identifies a removed ad plus the activity it had, so removals can be activity-filtered. */
 	record RemovedRef(String id, String activity) {
 	}
 
@@ -750,34 +679,28 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			return new Outbound("byHost", version, null, party, host, null, null, null, null, null, null);
 		}
 
-		/** Global count of connected plugin clients ("active users"). */
 		static Outbound presence(long version, int online) {
 			return new Outbound("presence", version, null, null, null, null, online, null, null, null, null);
 		}
 
-		/** Reply to createVoiceChannel: the party id and the Discord invite URL to share with members. */
 		static Outbound voiceChannel(long version, String id, String url) {
 			return new Outbound("voiceChannel", version, null, null, id, null, null, url, null, null, null);
 		}
 
-		/** Reply to startDiscordLink: the Discord OAuth authorize URL to open in a browser. */
 		static Outbound discordLinkUrl(long version, String url) {
 			return new Outbound("discordLinkUrl", version, null, null, null, null, null, url, null, null, null);
 		}
 
-		/** Reply to getDiscordLink: linked Discord id + username (null when not linked) + badge privacy. */
 		static Outbound discordLink(long version, long accountHash, String discordId, String username,
 			Boolean badgesVisible) {
 			return new Outbound("discordLink", version, null, null, discordId, null, null, null, username,
 				accountHash, badgesVisible);
 		}
 
-		/** Ack to requestVoiceAccess: the caller has been granted access; the plugin may open the invite. */
 		static Outbound voiceAccess(long version, String id) {
 			return new Outbound("voiceAccess", version, null, null, id, null, null, null, null, null, null);
 		}
 
-		/** Ack to transferHost: the ad has been reassigned; the old host may relinquish and the new host adopt it. */
 		static Outbound transferred(long version, String id) {
 			return new Outbound("transferred", version, null, null, id, null, null, null, null, null, null);
 		}

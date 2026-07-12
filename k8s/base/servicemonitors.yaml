@@ -1,16 +1,3 @@
-# Prometheus scrape targets, replacing the static IP lists in monitoring/prometheus.yml. Discovery is
-# label-based, so instances join/leave the scrape pool with the pods — no more per-node target edits or
-# SIGHUP reloads. Requires kube-prometheus-stack installed with serviceMonitorSelectorNilUsesHelmValues:
-# false (see k8s/cluster/kube-prometheus-stack-values.yaml) so monitors outside the Helm release are picked up.
-#
-# What the old config covered and where it lives now:
-#   osparty-api  -> ServiceMonitor below (JVM, Tomcat, Lettuce latency, osparty_ws_connections_active)
-#   redis        -> ServiceMonitor below (redis-exporter sidecar)
-#   node         -> kube-prometheus-stack's node-exporter DaemonSet (all nodes, automatic)
-#   cadvisor     -> kubelet's embedded cadvisor (automatic; the standalone cadvisor containers retire)
-#   blackbox     -> in-cluster health is now the pods' readiness; the end-to-end probe of
-#                   https://api.osparty.net is an optional follow-up (blackbox-exporter chart + Probe CRD)
-#   osparty-discord -> moves to a ServiceMonitor in the osparty-discord repo when the bot migrates (Phase 5)
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -25,8 +12,6 @@ spec:
     - port: management
       path: /actuator/prometheus
       interval: 15s
-      # Stamp each series with the node its pod runs on — pod names churn every deploy, node names
-      # (api01/02/03) are stable, so dashboards group/label by node.
       relabelings:
         - sourceLabels: [__meta_kubernetes_pod_node_name]
           targetLabel: node

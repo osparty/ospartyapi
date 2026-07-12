@@ -1,15 +1,6 @@
-# Grafana Alloy Helm values — the log collector (Promtail's successor; Promtail is EOL). Runs as a
-# DaemonSet: each instance tails the pods on ITS node via the Kubernetes API and pushes to Loki with
-# namespace/pod/container/app/node labels. Install/upgrade (on api01):
-#
-#   helm repo add grafana https://grafana.github.io/helm-charts
-#   helm upgrade --install alloy grafana/alloy -n monitoring -f k8s/cluster/alloy-values.yaml
 controller:
   type: daemonset
-
 alloy:
-  # Downward-API env so each instance only discovers pods on its own node (a DaemonSet without this
-  # filter would ship every log line once per node).
   extraEnv:
     - name: NODE_NAME
       valueFrom:

@@ -16,15 +16,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-/**
- * Stores the one-time {@code accountHash ⇄ Discord user} binding produced by the OAuth2 link flow,
- * plus the short-lived nonces that carry the accountHash through Discord's authorize redirect as the
- * {@code state} parameter (so the callback can't be tricked into binding an arbitrary hash).
- *
- * <p>Backed by Redis. The binding is persistent (no TTL) — a member links once, ever; nonces expire
- * after {@link #NONCE_TTL}. Linking is only advertised as available when the OAuth client-id and
- * redirect-uri are configured ({@link #isEnabled()}); with them blank the whole feature is inert.
- */
 @Service
 public class DiscordLinkService {
 	private static final String HASH_KEY = "discordlink:hash:";
@@ -47,15 +38,10 @@ public class DiscordLinkService {
 		this.redirectUri = redirectUri == null ? "" : redirectUri.trim();
 	}
 
-	/** Linking is offered only when the OAuth app is configured; otherwise the opcodes report disabled. */
 	public boolean isEnabled() {
 		return !clientId.isBlank() && !redirectUri.isBlank();
 	}
 
-	/**
-	 * Mint a one-time nonce bound to {@code accountHash} and return the Discord authorize URL the
-	 * plugin should open. The nonce travels back as {@code state} and is consumed in the callback.
-	 */
 	public String beginLink(long accountHash) {
 		String nonce = newNonce();
 		redis.opsForValue().set(NONCE_KEY + nonce, Long.toString(accountHash), NONCE_TTL);
@@ -65,7 +51,6 @@ public class DiscordLinkService {
 			+ "&response_type=code&scope=identify&state=" + nonce;
 	}
 
-	/** Consume a nonce, returning the accountHash it was minted for, or empty if unknown/expired. */
 	public Optional<Long> consumeNonce(String nonce) {
 		if (nonce == null || nonce.isBlank()) {
 			return Optional.empty();
@@ -84,7 +69,6 @@ public class DiscordLinkService {
 		}
 	}
 
-	/** Persist the binding both ways (by accountHash and by Discord id). Overwrites any prior link. */
 	public void link(long accountHash, String discordId, String username) {
 		Link link = new Link(discordId, username);
 		try {
@@ -96,7 +80,6 @@ public class DiscordLinkService {
 		redis.opsForValue().set(DISCORD_KEY + discordId, Long.toString(accountHash));
 	}
 
-	/** Remove the binding for an accountHash, both directions (by hash and by Discord id). */
 	public void unlink(long accountHash) {
 		String json = redis.opsForValue().get(HASH_KEY + accountHash);
 		if (json != null) {
@@ -107,7 +90,6 @@ public class DiscordLinkService {
 				}
 			}
 			catch (Exception ignored) {
-				// couldn't parse the stored value; still drop the forward mapping below
 			}
 		}
 		redis.delete(HASH_KEY + accountHash);
@@ -126,15 +108,10 @@ public class DiscordLinkService {
 		}
 	}
 
-	/** The linked Discord user id for a member's accountHash, or empty when not linked. */
 	public Optional<String> discordIdForAccountHash(long accountHash) {
 		return getByAccountHash(accountHash).map(Link::discordId);
 	}
 
-	/**
-	 * Batch form of {@link #discordIdForAccountHash}: one Redis round-trip for a whole roster.
-	 * Unlinked (or unparseable) hashes are simply absent from the result.
-	 */
 	public Map<Long, String> discordIdsForAccountHashes(Collection<Long> accountHashes) {
 		if (accountHashes == null || accountHashes.isEmpty()) {
 			return Map.of();
@@ -161,7 +138,6 @@ public class DiscordLinkService {
 				}
 			}
 			catch (Exception ignored) {
-				// unparseable stored link; treat as unlinked
 			}
 		}
 		return out;
@@ -173,7 +149,6 @@ public class DiscordLinkService {
 		return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
 	}
 
-	/** A stored binding: the Discord user id (stable) plus their username at link time (for display). */
 	public record Link(String discordId, String username) {
 	}
 }

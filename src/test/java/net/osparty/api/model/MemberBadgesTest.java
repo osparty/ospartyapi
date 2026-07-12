@@ -9,12 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Discord-role badges on the wire: server-asserted only. Outbound JSON carries {@code badges}
- * exactly when set (never a null field); inbound member JSON — client rosters are parsed with the
- * same deserializer — can never smuggle badges in. Badge-only differences must show up in
- * {@code equals}, since that's what drives the reconciler's member deltas.
- */
 class MemberBadgesTest {
 
 	private final ObjectMapper mapper = new ObjectMapper();

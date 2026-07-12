@@ -4,12 +4,6 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * A partial update for an existing ad: carries {@code id} and {@code activity} always (the activity
- * lets the broadcaster route/filter without the client needing it), plus ONLY the mutable fields
- * that actually changed. Everything else is null and omitted on the wire, so a size/world tweak ships
- * a handful of bytes instead of the full 30-field {@link Party}.
- */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record PartyDelta(
 	String id,
@@ -34,11 +28,6 @@ public record PartyDelta(
 	Boolean learner,
 	Boolean teacher) {
 
-	/**
-	 * Builds a delta of the fields that differ between {@code prev} and {@code cur}, or returns null
-	 * if none of the mutable fields changed. The mutable set is exactly {@link PartyUpdate}'s fields —
-	 * the only things that can change after an ad is created.
-	 */
 	public static PartyDelta diff(Party prev, Party cur) {
 		String host = Objects.equals(prev.getHost(), cur.getHost()) ? null : cur.getHost();
 		Integer size = prev.getSize() != cur.getSize() ? cur.getSize() : null;

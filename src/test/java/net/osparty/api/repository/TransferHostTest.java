@@ -12,10 +12,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Reassigning an ad to a new host keeps its identity (id, invite code) but swaps the host name,
- * moves the host index and re-keys the credential so the previous host's key stops authorising.
- */
 class TransferHostTest {
 
 	private PartyRequest request(String host) {
@@ -32,13 +28,10 @@ class TransferHostTest {
 
 		Party updated = repo.transferHost(id, "NewHost", "k-new").orElseThrow();
 
-		// Same ad, new host.
 		assertEquals(id, updated.getId());
 		assertEquals("NewHost", updated.getHost());
-		// The credential is re-keyed: old key rejected, new key accepted.
 		assertEquals(Authorization.FORBIDDEN, repo.authorize(id, "k-old"));
 		assertEquals(Authorization.OK, repo.authorize(id, "k-new"));
-		// The host lookup follows the new host.
 		assertTrue(repo.findByHost("NewHost").isPresent());
 		assertTrue(repo.findByHost("OldHost").isEmpty());
 	}

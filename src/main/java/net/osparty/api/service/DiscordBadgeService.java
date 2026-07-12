@@ -16,33 +16,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-/**
- * Discord-role badges ({@code developer}, {@code content_creator}, {@code beta_tester}, {@code backer})
- * shown by clients next to party hosts. The osparty-discord bot is the source of truth: it watches guild
- * role changes over the gateway and pushes badge sets here (see {@code InternalBadgeController}), keyed by
- * Discord user id — for <em>any</em> role-holding guild member, linked or not, so a user who links later
- * needs no extra work.
- *
- * <p>Badges are stored in Redis beside the link keys and are never written into stored ads: the broadcast
- * path stamps them onto outbound {@link Party} copies each reconcile tick / snapshot
- * ({@link #enrichParties}). A role change therefore reaches subscribers within one reconcile interval as an
- * ordinary members delta, and client-supplied rosters (which never carry badges) can't fight the
- * enrichment or leak spoofed badges.
- */
 @Service
 public class DiscordBadgeService {
-	/** The recognised badges, in the canonical (display-priority) order clients render them in. */
 	public static final List<String> CANONICAL_BADGES =
 		List.of("developer", "content_creator", "beta_tester", "backer");
 
 	private static final Logger log = LoggerFactory.getLogger(DiscordBadgeService.class);
 	private static final String BADGE_KEY = "discordlink:badges:";
-	/**
-	 * Per-account privacy opt-out (set by the plugin over the WebSocket): when present, enrichment
-	 * never attaches this account's badges, so hidden badges never leave the server. Keyed by
-	 * accountHash and deliberately NOT cleaned on unlink — the preference survives a re-link, and a
-	 * stale flag on an unlinked account is inert (no link, no badges).
-	 */
 	private static final String HIDDEN_KEY = "discordlink:badgeshidden:";
 	private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
 	};
@@ -57,7 +37,6 @@ public class DiscordBadgeService {
 		this.links = links;
 	}
 
-	/** Set the caller's badge-privacy flag: hidden badges are stripped during enrichment. */
 	public void setBadgesHidden(long accountHash, boolean hidden) {
 		if (hidden) {
 			redis.opsForValue().set(HIDDEN_KEY + accountHash, "1");
@@ -67,12 +46,10 @@ public class DiscordBadgeService {
 		}
 	}
 
-	/** Whether the account opted out of showing its badges to other players. */
 	public boolean isBadgesHidden(long accountHash) {
 		return redis.opsForValue().get(HIDDEN_KEY + accountHash) != null;
 	}
 
-	/** Upsert one user's badge set. An empty/unrecognised set deletes the key (no badges). */
 	public void setBadges(String discordId, List<String> badges) {
 		List<String> canonical = sanitize(badges);
 		if (canonical.isEmpty()) {
@@ -87,11 +64,6 @@ public class DiscordBadgeService {
 		}
 	}
 
-	/**
-	 * Full reconciliation, used by the bot's startup sweep: the given map becomes the complete badge
-	 * state — keys for users absent from it are deleted (covers role removals missed while the bot was
-	 * offline). KEYS matches the repository's existing pattern; the badge keyspace is small.
-	 */
 	public void replaceAll(Map<String, List<String>> badgesByDiscordId) {
 		Set<String> existing = redis.keys(BADGE_KEY + "*");
 		if (existing != null) {
@@ -105,12 +77,6 @@ public class DiscordBadgeService {
 		badgesByDiscordId.forEach(this::setBadges);
 	}
 
-	/**
-	 * Stamp badges onto outbound parties, returning enriched copies (input and stored ads stay
-	 * untouched — {@code copyOf} + fresh {@link Member} instances, since the in-memory test repository
-	 * hands out live references). Parties with no badged member are returned as-is. Any Redis failure
-	 * degrades to "no badges" rather than breaking the broadcast path.
-	 */
 	public List<Party> enrichParties(List<Party> parties) {
 		Set<Long> hashes = new HashSet<>();
 		for (Party party : parties) {
@@ -144,7 +110,6 @@ public class DiscordBadgeService {
 		return out;
 	}
 
-	/** Resolve accountHash → linked Discord id → badges, two batched Redis round-trips. */
 	private Map<Long, List<String>> badgesForAccountHashes(Collection<Long> accountHashes) {
 		Map<Long, String> discordIds = links.discordIdsForAccountHashes(accountHashes);
 		if (discordIds.isEmpty()) {
@@ -172,7 +137,6 @@ public class DiscordBadgeService {
 				}
 			}
 			catch (Exception ignored) {
-				// unparseable stored badge set; treat as none
 			}
 		}
 		Map<Long, List<String>> out = new HashMap<>();
@@ -186,7 +150,6 @@ public class DiscordBadgeService {
 		return out;
 	}
 
-	/** Drop entries for accounts that opted out of showing badges, one batched round-trip. */
 	private void stripHidden(Map<Long, List<String>> badgesByHash) {
 		if (badgesByHash.isEmpty()) {
 			return;
@@ -232,10 +195,6 @@ public class DiscordBadgeService {
 		return copy;
 	}
 
-	/**
-	 * Keep only recognised badges, deduplicated, in canonical order — so equal badge sets always
-	 * serialise identically and never produce spurious member deltas.
-	 */
 	private static List<String> sanitize(List<String> badges) {
 		if (badges == null || badges.isEmpty()) {
 			return List.of();

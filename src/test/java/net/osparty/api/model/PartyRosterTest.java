@@ -9,11 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * The host advertises its live roster (host + admitted members, with accountHashes) via
- * heartbeat so search clients can block/favourite-match any member. These cover the two
- * server-side pieces: applying the roster patch, and diffing it into a broadcast delta.
- */
 class PartyRosterTest {
 
 	private Party party(List<Member> members) {
@@ -46,8 +41,6 @@ class PartyRosterTest {
 
 	@Test
 	void applyUpdateNeverDowngradesKnownHashToZero() {
-		// Right after the live room opens, the host's own PlayerUpdate hasn't synced, so the roster
-		// heartbeat reports the host with hash 0 — the stored hash must survive that patch.
 		Party p = party(List.of(new Member("Host", 42L)));
 		PartyUpdate u = new PartyUpdate();
 		u.setMembers(List.of(new Member("Host", 0L), new Member("Joiner", -7L)));
@@ -63,7 +56,6 @@ class PartyRosterTest {
 		PartyUpdate u = new PartyUpdate();
 		u.setMembers(List.of(new Member("Host", 0L)));
 
-		// After the hash merge the roster is identical to the stored one -> no change, no delta.
 		assertFalse(PartyFactory.applyUpdate(p, u));
 		assertEquals(42L, p.getMembers().get(0).getAccountHash());
 	}

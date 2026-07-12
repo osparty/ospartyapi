@@ -10,17 +10,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
-/**
- * {@link VoiceChannelService} that delegates over HTTP to the separate osparty-discord service
- * (github.com/osparty/osparty-discord), which owns the single JDA gateway connection. Used in the deployed,
- * horizontally-scaled setup: every API instance calls the one bot rather than each embedding JDA.
- *
- * <p>Create and grant are synchronous (the host is blocked on the reply, exactly as the old in-process
- * bot was); a failure/timeout surfaces as the same "voice unavailable" the caller already handles (empty
- * Optional / {@code false}). Revoke, disconnect and delete are best-effort — errors are logged and
- * swallowed so a bot hiccup never breaks a party's write path. Wired by {@link VoiceChannelServiceConfig}
- * when {@code app.discord.service-url} is set; otherwise {@link DisabledVoiceChannelService} stands in.
- */
 public class HttpVoiceChannelService implements VoiceChannelService {
 	private static final Logger log = LoggerFactory.getLogger(HttpVoiceChannelService.class);
 
@@ -29,8 +18,6 @@ public class HttpVoiceChannelService implements VoiceChannelService {
 	public HttpVoiceChannelService(String serviceUrl, String internalToken) {
 		SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
 		factory.setConnectTimeout(Duration.ofSeconds(2));
-		// Generous read timeout: create mints a channel + an invite (two Discord round-trips) and can be
-		// slowed by JDA's gateway rate limiter, same as the old in-process complete().
 		factory.setReadTimeout(Duration.ofSeconds(10));
 		RestClient.Builder builder = RestClient.builder().baseUrl(serviceUrl).requestFactory(factory);
 		if (internalToken != null && !internalToken.isBlank()) {
@@ -129,7 +116,6 @@ public class HttpVoiceChannelService implements VoiceChannelService {
 		}
 	}
 
-	/** Mirrors osparty-discord's PartyRef DTO — the create request's channel-naming fields. */
 	private record PartyRef(String id, String host, String inviteCode, String activity) {
 		static PartyRef of(Party p) {
 			return new PartyRef(p.getId(), p.getHost(), p.getInviteCode(), p.getActivity());

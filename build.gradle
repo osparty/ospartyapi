@@ -5,14 +5,10 @@ plugins {
 }
 
 group = 'net.osparty'
-// Overridable from CI (-PappVersion=1.2.3 — deploy-k8s.yml auto-bumps the patch from the latest
-// v*.*.* git tag and tags the release); this fallback is the local-build baseline and the
-// versioning starting point.
 version = findProperty('appVersion') ?: '1.0.0'
 description = 'Advertising/bulletin-board API for the OSParty RuneLite plugin'
 
 java {
-    // Compile to 17 bytecode; runs on any JDK 17+ (the dev box may have a newer JDK).
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
 }
@@ -23,20 +19,11 @@ repositories {
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
-    // Live party-list push to the plugin (/api/v1/ws/parties); see PartyBroadcaster.
     implementation 'org.springframework.boot:spring-boot-starter-websocket'
-    // Only used when app.storage=redis; the connection is created lazily, so the
-    // default in-memory mode (and the tests) run without a Redis server.
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
-    // Production monitoring: Actuator exposes a Prometheus scrape endpoint (JVM, Tomcat,
-    // Redis/Lettuce and our custom WebSocket-connection gauge). Scraped by the prometheus
-    // service in docker-compose and visualised in Grafana. See MetricsConfig + monitoring/.
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'io.micrometer:micrometer-registry-prometheus'
-
-    // Voice-channel provisioning is delegated over HTTP to the separate osparty-discord service
-    // (github.com/osparty/osparty-discord); JDA no longer lives here. See HttpVoiceChannelService.
 
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
@@ -48,7 +35,6 @@ tasks.named('test') {
     useJUnitPlatform()
 }
 
-// Stable output name so the Dockerfile can COPY build/libs/app.jar.
 tasks.named('bootJar') {
     archiveFileName = 'app.jar'
 }

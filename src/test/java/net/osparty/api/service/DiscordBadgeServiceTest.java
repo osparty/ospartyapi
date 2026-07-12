@@ -8,11 +8,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
-/**
- * Broadcast-path safety: enrichment must never break the reconcile tick. With nothing to look up it
- * short-circuits without touching Redis, and when Redis is unreachable (the templates below have no
- * connection factory, so any command throws) it degrades to "no badges" instead of propagating.
- */
 class DiscordBadgeServiceTest {
 
 	private DiscordBadgeService service() {
@@ -28,7 +23,6 @@ class DiscordBadgeServiceTest {
 		p.setMembers(List.of(new Member("Legacy", 0L)));
 		List<Party> in = List.of(p);
 
-		// Would throw if Redis were touched — the template has no connection factory.
 		assertSame(in, service().enrichParties(in));
 	}
 

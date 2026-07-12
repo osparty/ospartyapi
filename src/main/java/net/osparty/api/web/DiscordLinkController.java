@@ -12,12 +12,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * OAuth2 redirect target. Discord sends the user here after they authorize; we consume the {@code state}
- * nonce (which identifies the OSRS accountHash), exchange the {@code code} for the Discord user, persist
- * the binding, and render a small "you can return to RuneLite" page. The plugin learns of success by
- * polling {@code getDiscordLink} over the WebSocket — this endpoint only serves the browser.
- */
 @RestController
 @RequestMapping("/api/v1/discord/link")
 public class DiscordLinkController {

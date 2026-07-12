@@ -11,13 +11,6 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
-/**
- * Redis-backed {@link PresenceRegistry}. Each instance writes its live socket count under
- * {@code presence:node:{id}} with a short TTL and registers its id in the {@code presence:nodes} set; the
- * global total is the sum of all live count keys. A node that dies stops refreshing its key, so it TTLs
- * out and drops from the total within {@link #TTL}; its id is pruned from the index lazily on the next
- * read (the same set-index-plus-lazy-prune pattern {@code RedisPartyRepository} uses to avoid {@code KEYS}).
- */
 @Component
 @Profile("!test")
 public class RedisPresenceRegistry implements PresenceRegistry {
@@ -25,11 +18,9 @@ public class RedisPresenceRegistry implements PresenceRegistry {
 
 	private static final String NODES_KEY = "presence:nodes";
 	private static final String NODE_PREFIX = "presence:node:";
-	// A few seconds' slack over the 5s presence tick, so a briefly-slow node isn't dropped and re-added.
 	private static final Duration TTL = Duration.ofSeconds(15);
 
 	private final StringRedisTemplate redis;
-	/** Unique per process; a restart just leaves a stale key that TTLs out in seconds. */
 	private final String nodeId = UUID.randomUUID().toString();
 
 	public RedisPresenceRegistry(StringRedisTemplate redis) {
@@ -57,7 +48,7 @@ public class RedisPresenceRegistry implements PresenceRegistry {
 			for (int i = 0; i < idList.size(); i++) {
 				String value = values == null ? null : values.get(i);
 				if (value == null) {
-					stale.add(idList.get(i)); // key TTL'd out -> prune its id from the index
+					stale.add(idList.get(i));
 					continue;
 				}
 				try {
@@ -73,7 +64,6 @@ public class RedisPresenceRegistry implements PresenceRegistry {
 			return sum;
 		}
 		catch (Exception e) {
-			// Redis blip: fall back to the local count so presence still updates for this node's clients.
 			log.debug("presence aggregation failed, using local count: {}", e.toString());
 			return localCount;
 		}

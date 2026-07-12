@@ -141,7 +141,6 @@ class PartyWebSocketTest {
 			assertThat(delta.path("hostRole").asText()).isEqualTo("mage");
 			assertThat(delta.path("requiredRoles").get(0).asText()).isEqualTo("mage");
 			assertThat(delta.path("learner").asBoolean()).isTrue();
-			// neededRoles re-seeds from the new composition minus the host's role.
 			assertThat(delta.path("neededRoles").toString()).isEqualTo("[\"range\",\"fill\"]");
 		}
 		finally {
@@ -165,20 +164,17 @@ class PartyWebSocketTest {
 				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> id.equals(p.path("id").asText())),
 				"created for the hosted ad");
 
-			// Hand the ad to WsXfer2, re-keying the credential to k-new.
 			session.sendMessage(new TextMessage("{\"type\":\"transferHost\",\"id\":\"" + id
 				+ "\",\"key\":\"k-old\",\"host\":\"WsXfer2\",\"newKey\":\"k-new\"}"));
 			JsonNode ack = awaitWhere(messages,
 				m -> "transferred".equals(type(m)) && id.equals(m.path("id").asText()), "transferred ack");
 			assertThat(ack.path("id").asText()).isEqualTo(id);
 
-			// The host-name change ships to search clients as a normal reconcile delta.
 			awaitWhere(messages,
 				m -> "batch".equals(type(m)) && anyMatch(m.path("updated"),
 					d -> id.equals(d.path("id").asText()) && "WsXfer2".equals(d.path("host").asText())),
 				"updated delta with new host");
 
-			// The old key no longer authorises (session was unbound + credential re-keyed).
 			session.sendMessage(new TextMessage("{\"type\":\"update\",\"id\":\"" + id
 				+ "\",\"key\":\"k-old\",\"patch\":{\"description\":\"stale\"}}"));
 			awaitWhere(messages,
@@ -186,7 +182,6 @@ class PartyWebSocketTest {
 					&& "forbidden".equals(m.path("detail").asText()),
 				"forbidden for the old key");
 
-			// The new key authorises the new host's writes.
 			session.sendMessage(new TextMessage("{\"type\":\"update\",\"id\":\"" + id
 				+ "\",\"key\":\"k-new\",\"patch\":{\"description\":\"new-host-desc\"}}"));
 			awaitWhere(messages,

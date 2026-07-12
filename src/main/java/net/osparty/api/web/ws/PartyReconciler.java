@@ -30,30 +30,20 @@ public class PartyReconciler {
 		this.badges = badges;
 	}
 
-	// TODO(scale): list() scans every ad each tick (KEYS on Redis); back it with a SCAN/index if one instance ever holds enough ads to bite.
 	@Scheduled(fixedDelayString = "${app.ws.reconcile-interval-ms:5000}")
 	public void reconcile() {
-		// Badge enrichment happens on the reconciler's view (enriched copies, storage untouched), so a
-		// role change surfaces as an ordinary members diff on the next tick.
 		List<Party> current = badges.enrichParties(store.list(null));
-		// Snapshot copies, never the live repository instances: the fake/in-memory repo mutates ads
-		// in place, so holding a live reference across ticks would alias prev==cur and hide changes.
 		Map<String, Party> currentById = new HashMap<>();
 		for (Party party : current) {
 			currentById.put(party.getId(), Party.copyOf(party));
 		}
 
-		// One batch per tick: full Party for new ads, a minimal field delta for changed ads, ids for
-		// removed ads. The broadcaster fans this out as a single frame per subscriber.
 		List<Party> created = new ArrayList<>();
 		List<PartyDelta> updated = new ArrayList<>();
 		List<PartyBroadcaster.RemovedRef> removed = new ArrayList<>();
 		for (Map.Entry<String, Party> entry : lastKnown.entrySet()) {
 			if (!currentById.containsKey(entry.getKey())) {
 				removed.add(new PartyBroadcaster.RemovedRef(entry.getKey(), entry.getValue().getActivity()));
-				// The party is gone (disbanded or TTL'd out): tear down its Discord channel if it had
-				// one. No-op when Discord is disabled. A separate sweeper should catch any we miss here
-				// (e.g. an event lost across a restart).
 				String channelId = entry.getValue().getDiscordChannelId();
 				if (channelId != null) {
 					voice.delete(channelId);

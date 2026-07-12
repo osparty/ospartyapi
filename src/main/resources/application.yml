@@ -1,9 +1,6 @@
 server:
   port: 8080
   tomcat:
-    # Sized for ~10k concurrent WebSocket clients with headroom. Idle NIO sockets do not hold a
-    # worker thread, but a redeploy reconnect storm bursts subscribe/host work, so the pool and the
-    # accept backlog must absorb it rather than refuse connections.
     max-connections: 20000
     accept-count: 2000
     threads:
@@ -19,51 +16,28 @@ spring:
     redis:
       host: localhost
       port: 6379
-      # password: ...
 
 app:
   ads:
-    # Ad TTL (ms): an ad is reaped if its host stops keeping it alive within this
-    # window. The open WebSocket refreshes it (see app.ws.touch-interval-ms). Redis
-    # evicts it natively when the TTL lapses.
     ttl-ms: 90000
   ws:
-    # Live party-list push over WebSocket (/api/v1/ws/parties). This is the only
-    # transport; disabling it leaves clients with no discovery or hosting path.
     enabled: true
-    # How often the server diffs the ad set and pushes changes to subscribers (ms).
-    # This is the worst-case latency for a new/updated/removed party to reach clients.
     reconcile-interval-ms: 5000
-    # How often a hosting socket refreshes its ad's TTL (socket-as-heartbeat). Must be
-    # comfortably below app.ads.ttl-ms; the gap between them is the disconnect grace.
     touch-interval-ms: 5000
   discord:
-    # Voice-channel provisioning is delegated over HTTP to the separate osparty-discord service
-    # (github.com/osparty/osparty-discord), which owns the single JDA gateway connection. Set service-url
-    # to enable it; when unset, a no-op VoiceChannelService stands in (dev/tests). internal-token must
-    # match the bot's configured shared secret. See VoiceChannelServiceConfig / HttpVoiceChannelService.
     service-url: ${DISCORD_SERVICE_URL:}
     internal-token: ${DISCORD_INTERNAL_TOKEN:}
     oauth:
-      # Account linking (accountHash <-> Discord user) via OAuth2. Linking is offered only when
-      # client-id and redirect-uri are set. client-id is the Discord application id; the redirect-uri
-      # must be registered under OAuth2 -> Redirects in the Developer Portal and match exactly.
       client-id: ${DISCORD_CLIENT_ID:}
       client-secret: ${DISCORD_CLIENT_SECRET:}
-      # e.g. https://api.osparty.net/api/v1/discord/link/callback (or http://localhost:8080/... for dev)
       redirect-uri: ${DISCORD_REDIRECT_URI:}
 
-# Production monitoring. Actuator runs on its OWN port (9090), which docker-compose does NOT
-# publish to the host — only the prometheus container (same compose network) can reach it, so
-# the scrape endpoint is never exposed to the public internet. The main API stays on 8080.
-# Locally (gradle bootRun) this just binds 9090 on localhost, unused and harmless.
 management:
   server:
     port: 9090
   endpoints:
     web:
       exposure:
-        # Only health + the Prometheus scrape endpoint; nothing else is opened up.
         include: health,prometheus
   endpoint:
     health:
@@ -72,10 +46,4 @@ management:
 
 logging:
   level:
-    # One INFO line per request (method, path, IP, status, latency).
     net.osparty.api.requests: INFO
-    # Flip to DEBUG to also log request bodies (the PartyRequest JSON):
-    # net.osparty.api.requests: DEBUG
-    # WebSocket: connect/subscribe/close log at INFO; flip to DEBUG to log every
-    # frame pushed on each live connection (the full snapshot/delta JSON):
-    # net.osparty.api.web.ws.PartyBroadcaster: DEBUG

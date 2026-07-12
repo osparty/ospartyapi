@@ -85,8 +85,6 @@ public final class PartyFactory {
 			party.setSize(patch.getSize());
 			changed = true;
 		}
-		// Roster: the host advertises the live members (host first) so search clients can
-		// block/favourite-match any member. Only replace when it actually changed.
 		if (patch.getMembers() != null && !patch.getMembers().isEmpty()) {
 			List<Member> merged = mergeKnownHashes(party.getMembers(), patch.getMembers());
 			if (!merged.equals(party.getMembers())) {
@@ -146,8 +144,6 @@ public final class PartyFactory {
 			party.setHardMode(patch.getHardMode());
 			changed = true;
 		}
-		// Roles: when the required composition or host role changes, re-seed neededRoles
-		// from it (the live host's heartbeat then keeps it accurate against admitted members).
 		boolean rolesChanged = false;
 		if (patch.getRequiredRoles() != null && !patch.getRequiredRoles().equals(party.getRequiredRoles())) {
 			party.setRequiredRoles(patch.getRequiredRoles());
@@ -173,13 +169,6 @@ public final class PartyFactory {
 		return changed;
 	}
 
-	/**
-	 * A member's accountHash can be temporarily unknown to the advertising client — right after the
-	 * live room opens, the host's own PlayerUpdate hasn't round-tripped yet, so the roster heartbeat
-	 * reports the host with hash 0. Never let such a patch DOWNGRADE a hash we already know: it would
-	 * strip block/favourite matching and Discord badges from the ad until the client re-learns it
-	 * (observed as badges vanishing for 1-2 minutes after hosting).
-	 */
 	private static List<Member> mergeKnownHashes(List<Member> stored, List<Member> incoming) {
 		if (stored == null || stored.isEmpty()) {
 			return incoming;
@@ -234,7 +223,6 @@ public final class PartyFactory {
 		if (supplied == null) {
 			return false;
 		}
-		// Constant-time compare so a mismatch can't be timed out character by character.
 		return MessageDigest.isEqual(stored.getBytes(StandardCharsets.UTF_8), supplied.getBytes(StandardCharsets.UTF_8));
 	}
 

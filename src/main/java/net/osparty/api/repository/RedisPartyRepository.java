@@ -30,8 +30,6 @@ public class RedisPartyRepository implements PartyRepository {
 	private static final String CODE_KEY = "partycode:";
 	private static final String CREDENTIAL_KEY = "partykey:";
 	private static final String SEQ_KEY = "party:seq";
-	// Set of live party ids. list() reads this instead of scanning the keyspace with KEYS; ids whose
-	// value has TTL'd out are pruned lazily on the next list().
 	private static final String INDEX_KEY = "party:ids";
 
 	private final StringRedisTemplate redis;
@@ -52,8 +50,6 @@ public class RedisPartyRepository implements PartyRepository {
 		if (ids == null || ids.isEmpty()) {
 			return new ArrayList<>();
 		}
-		// One SMEMBERS + one pipelined MGET instead of a KEYS keyspace scan: cost scales with the
-		// number of live ads, not the whole Redis keyspace, and never blocks on a full scan.
 		List<String> idList = new ArrayList<>(ids);
 		List<String> keys = new ArrayList<>(idList.size());
 		for (String id : idList) {
@@ -66,7 +62,7 @@ public class RedisPartyRepository implements PartyRepository {
 		for (int i = 0; i < idList.size(); i++) {
 			String json = values == null ? null : values.get(i);
 			if (json == null) {
-				expired.add(idList.get(i)); // value TTL'd out — drop the stale id from the index
+				expired.add(idList.get(i));
 				continue;
 			}
 			Party party = parse(json, keys.get(i));
@@ -111,8 +107,6 @@ public class RedisPartyRepository implements PartyRepository {
 		long now = System.currentTimeMillis();
 		String hostIndexKey = HOST_KEY + PartyFactory.normalizeHost(request.host());
 
-		// One ad per host: evict the previous ad. The deletes are independent, so flush them in a
-		// single pipeline round-trip rather than four sequential ones.
 		String previousId = redis.opsForValue().get(hostIndexKey);
 		if (previousId != null) {
 			Party previous = read(PARTY_KEY + previousId);
@@ -137,9 +131,6 @@ public class RedisPartyRepository implements PartyRepository {
 		Party party = PartyFactory.fromRequest(request, id, inviteCode, now);
 		String json = write(party);
 
-		// All create writes are independent — one pipelined round-trip instead of five sequential
-		// ones, so the request thread blocks on Redis once. This is the hot path measured by the
-		// host->hosted ack latency, so cutting its round-trips directly shortens that ack.
 		redis.executePipelined(new SessionCallback<Object>() {
 			@Override
 			@SuppressWarnings({"unchecked", "rawtypes"})
@@ -200,8 +191,6 @@ public class RedisPartyRepository implements PartyRepository {
 		String newHostIndex = HOST_KEY + PartyFactory.normalizeHost(newHost);
 		party.setHost(newHost);
 		String json = write(party);
-		// One pipelined round-trip: move the host index, re-key the credential and rewrite the ad,
-		// all refreshed to a full TTL so the handoff doesn't shorten the party's lifetime.
 		redis.executePipelined(new SessionCallback<Object>() {
 			@Override
 			@SuppressWarnings({"unchecked", "rawtypes"})
@@ -230,7 +219,6 @@ public class RedisPartyRepository implements PartyRepository {
 		}
 		party.setDiscordChannelId(channelId);
 		party.setDiscordInviteUrl(inviteUrl);
-		// Rewrite in place; preserve the remaining TTL rather than resetting it (a KEEPTTL-style set).
 		Long remaining = redis.getExpire(key, java.util.concurrent.TimeUnit.MILLISECONDS);
 		Duration ttlToUse = (remaining != null && remaining > 0) ? Duration.ofMillis(remaining) : ttl;
 		redis.opsForValue().set(key, write(party), ttlToUse);

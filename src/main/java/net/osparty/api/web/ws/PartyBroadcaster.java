@@ -71,8 +71,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT);
 		Subscriber sub = new Subscriber(guarded);
 		subscribers.put(session.getId(), sub);
-		log.info("WS connected: session={} remote={} (subscribers={})",
-			session.getId(), remoteOf(session), subscribers.size());
+		log.info("WS connected: session={} (subscribers={})",
+			session.getId(), subscribers.size());
 		send(sub, Outbound.presence(version.get(), lastPresence >= 0 ? lastPresence : subscribers.size()));
 	}
 
@@ -628,14 +628,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			catch (IOException ignored) {
 			}
 		}
-	}
-
-	private static String remoteOf(WebSocketSession session) {
-		List<String> forwarded = session.getHandshakeHeaders().get("X-Forwarded-For");
-		if (forwarded != null && !forwarded.isEmpty()) {
-			return forwarded.get(0);
-		}
-		return String.valueOf(session.getRemoteAddress());
 	}
 
 	private static final class Subscriber {

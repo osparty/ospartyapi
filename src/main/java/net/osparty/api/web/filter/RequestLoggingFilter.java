@@ -31,8 +31,8 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
 		finally {
 			long elapsedMs = System.currentTimeMillis() - start;
 			String query = request.getQueryString() == null ? "" : "?" + request.getQueryString();
-			log.info("{} {}{} from {} ua=\"{}\" -> {} ({}ms)",
-				request.getMethod(), request.getRequestURI(), query, clientIp(request),
+			log.info("{} {}{} ua=\"{}\" -> {} ({}ms)",
+				request.getMethod(), request.getRequestURI(), query,
 				header(request, "User-Agent"), response.getStatus(), elapsedMs);
 
 			if (log.isDebugEnabled() && hasBody(request)) {
@@ -59,11 +59,5 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
 	private static String header(HttpServletRequest request, String name) {
 		String value = request.getHeader(name);
 		return value == null ? "-" : value;
-	}
-
-	private static String clientIp(HttpServletRequest request) {
-		String forwarded = request.getHeader("X-Forwarded-For");
-		return forwarded != null && !forwarded.isBlank()
-			? forwarded.split(",")[0].trim() : request.getRemoteAddr();
 	}
 }

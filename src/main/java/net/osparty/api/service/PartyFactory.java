@@ -37,6 +37,7 @@ public final class PartyFactory {
 		party.setHostAccountType(request.hostAccountType());
 		party.setHardMode(request.hardMode());
 		party.setInvocation(request.invocation());
+		party.setCoxScale(request.coxScale());
 		party.setRequiredRoles(request.requiredRoles());
 		party.setHostRole(request.hostRole());
 		party.setNeededRoles(initialNeededRoles(request.requiredRoles(), request.hostRole()));
@@ -144,6 +145,14 @@ public final class PartyFactory {
 			party.setHardMode(patch.getHardMode());
 			changed = true;
 		}
+		// Scale is host-editable and clearable (an empty string removes it), so merge on any
+		// non-null difference rather than guarding against blank like world/layout.
+		if (patch.getCoxScale() != null && !patch.getCoxScale().equals(party.getCoxScale())) {
+			party.setCoxScale(patch.getCoxScale());
+			changed = true;
+		}
+		// Roles: when the required composition or host role changes, re-seed neededRoles
+		// from it (the live host's heartbeat then keeps it accurate against admitted members).
 		boolean rolesChanged = false;
 		if (patch.getRequiredRoles() != null && !patch.getRequiredRoles().equals(party.getRequiredRoles())) {
 			party.setRequiredRoles(patch.getRequiredRoles());

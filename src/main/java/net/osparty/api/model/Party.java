@@ -15,6 +15,8 @@ public class Party {
 	private String layout;
 	private boolean hardMode;
 	private int invocation;
+	/** Chambers of Xeric team-size scaling as advertised (e.g. "3+4"); null/empty when unset. */
+	private String coxScale;
 	private long createdAt;
 	private String passphrase;
 	private int minKillCount;
@@ -45,6 +47,7 @@ public class Party {
 		c.layout = src.layout;
 		c.hardMode = src.hardMode;
 		c.invocation = src.invocation;
+		c.coxScale = src.coxScale;
 		c.createdAt = src.createdAt;
 		c.passphrase = src.passphrase;
 		c.minKillCount = src.minKillCount;

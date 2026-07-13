@@ -19,6 +19,7 @@ public class PartyUpdate {
 	private Integer minHardModeKillCount;
 	private Integer invocation;
 	private Boolean hardMode;
+	private String coxScale;
 	private List<String> requiredRoles;
 	private String hostRole;
 	private Boolean learner;

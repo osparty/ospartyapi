@@ -23,6 +23,7 @@ public record PartyDelta(
 	Integer minHardModeKillCount,
 	Integer invocation,
 	Boolean hardMode,
+	String coxScale,
 	List<String> requiredRoles,
 	String hostRole,
 	Boolean learner,
@@ -47,6 +48,7 @@ public record PartyDelta(
 			prev.getMinHardModeKillCount() != cur.getMinHardModeKillCount() ? cur.getMinHardModeKillCount() : null;
 		Integer invocation = prev.getInvocation() != cur.getInvocation() ? cur.getInvocation() : null;
 		Boolean hardMode = prev.isHardMode() != cur.isHardMode() ? cur.isHardMode() : null;
+		String coxScale = Objects.equals(prev.getCoxScale(), cur.getCoxScale()) ? null : cur.getCoxScale();
 		List<String> requiredRoles =
 			Objects.equals(prev.getRequiredRoles(), cur.getRequiredRoles()) ? null : cur.getRequiredRoles();
 		String hostRole = Objects.equals(prev.getHostRole(), cur.getHostRole()) ? null : cur.getHostRole();
@@ -56,11 +58,11 @@ public record PartyDelta(
 		if (host == null && size == null && members == null && world == null && layout == null && neededRoles == null
 			&& description == null && capacity == null && lootRule == null && ironmanOnly == null && privateParty == null
 			&& minKillCount == null && minHardModeKillCount == null && invocation == null && hardMode == null
-			&& requiredRoles == null && hostRole == null && learner == null && teacher == null) {
+			&& coxScale == null && requiredRoles == null && hostRole == null && learner == null && teacher == null) {
 			return null;
 		}
 		return new PartyDelta(cur.getId(), cur.getActivity(), host, size, members, world, layout, neededRoles, description,
 			capacity, lootRule, ironmanOnly, privateParty, minKillCount, minHardModeKillCount, invocation, hardMode,
-			requiredRoles, hostRole, learner, teacher);
+			coxScale, requiredRoles, hostRole, learner, teacher);
 	}
 }

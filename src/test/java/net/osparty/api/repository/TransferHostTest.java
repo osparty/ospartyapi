@@ -16,7 +16,7 @@ class TransferHostTest {
 
 	private PartyRequest request(String host) {
 		return new PartyRequest("cox", host, 1L, "trio", 3, "301", 0, 0, "pp-xfer",
-			false, null, false, null, false, 0, null, null, false, false);
+			false, null, false, null, false, 0, null, null, null, false, false);
 	}
 
 	@Test

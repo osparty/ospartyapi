@@ -18,6 +18,7 @@ public record PartyRequest(
 	String hostAccountType,
 	boolean hardMode,
 	int invocation,
+	String coxScale,
 	List<String> requiredRoles,
 	String hostRole,
 	boolean learner,

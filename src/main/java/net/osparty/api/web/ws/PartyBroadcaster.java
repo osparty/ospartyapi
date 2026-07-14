@@ -42,6 +42,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private final net.osparty.api.service.DiscordLinkService discordLinks;
 	private final net.osparty.api.service.DiscordBadgeService badges;
 	private final PresenceRegistry presence;
+	private final InviteBus inviteBus;
 	private final Map<String, Subscriber> subscribers = new ConcurrentHashMap<>();
 	private final Map<String, String> hostedBy = new ConcurrentHashMap<>();
 	private final Map<String, String> ownerSession = new ConcurrentHashMap<>();
@@ -55,13 +56,17 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		net.osparty.api.service.VoiceChannelService voice,
 		net.osparty.api.service.DiscordLinkService discordLinks,
 		net.osparty.api.service.DiscordBadgeService badges,
-		PresenceRegistry presence) {
+		PresenceRegistry presence,
+		InviteBus inviteBus) {
 		this.store = store;
 		this.mapper = mapper;
 		this.voice = voice;
 		this.discordLinks = discordLinks;
 		this.badges = badges;
 		this.presence = presence;
+		this.inviteBus = inviteBus;
+		// Cross-node invite delivery calls back here to reach a target connected to this instance.
+		inviteBus.setLocalDelivery(this::deliverInviteLocally);
 	}
 
 	public int activeConnections() {
@@ -459,16 +464,32 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			send(sub, Outbound.inviteAck(version.get(), in.target(), false));
 			return;
 		}
-		String targetSessionId = sessionByName.get(target);
-		Subscriber targetSub = targetSessionId == null ? null : subscribers.get(targetSessionId);
-		if (targetSub == null || !targetSub.session.isOpen()) {
-			send(sub, Outbound.inviteAck(version.get(), in.target(), false));
+		String from = (in.name() == null || in.name().isBlank()) ? party.getHost() : in.name();
+		String frame;
+		try {
+			frame = mapper.writeValueAsString(Outbound.invited(version.get(), enriched(party), from));
+		}
+		catch (Exception e) {
+			sendError(sub, id, "invite failed");
 			return;
 		}
-		String from = (in.name() == null || in.name().isBlank()) ? party.getHost() : in.name();
-		send(targetSub, Outbound.invited(version.get(), enriched(party), from));
-		log.info("WS invite: session={} party={} target={}", sub.session.getId(), id, target);
-		send(sub, Outbound.inviteAck(version.get(), in.target(), true));
+		// The target may be connected to any replica; the bus finds and delivers it cluster-wide.
+		inviteBus.dispatch(target, frame).whenComplete((delivered, error) -> {
+			log.info("WS invite: session={} party={} target={} delivered={}",
+				sub.session.getId(), id, target, delivered);
+			send(sub, Outbound.inviteAck(version.get(), in.target(), delivered != null && delivered));
+		});
+	}
+
+	/** Deliver a pre-serialised {@code invited} frame to {@code normalizedName} if connected to this node. */
+	private boolean deliverInviteLocally(String normalizedName, String frameJson) {
+		String sessionId = sessionByName.get(normalizedName);
+		Subscriber sub = sessionId == null ? null : subscribers.get(sessionId);
+		if (sub == null || !sub.session.isOpen()) {
+			return false;
+		}
+		sendRaw(sub, new TextMessage(frameJson));
+		return true;
 	}
 
 	/** Whether the invite sender is the party host or an admitted member (by name or accountHash). */

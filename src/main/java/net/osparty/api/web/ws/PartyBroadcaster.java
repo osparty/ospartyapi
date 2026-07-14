@@ -45,6 +45,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private final Map<String, Subscriber> subscribers = new ConcurrentHashMap<>();
 	private final Map<String, String> hostedBy = new ConcurrentHashMap<>();
 	private final Map<String, String> ownerSession = new ConcurrentHashMap<>();
+	// Self-asserted identity indexes so an invite can be routed to a specific online client.
+	private final Map<Long, String> sessionByAccount = new ConcurrentHashMap<>();
+	private final Map<String, String> sessionByName = new ConcurrentHashMap<>();
 	private final AtomicLong version = new AtomicLong();
 	private volatile int lastPresence = -1;
 
@@ -140,6 +143,12 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				break;
 			case "requestVoiceAccess":
 				handleRequestVoiceAccess(sub, in);
+				break;
+			case "identify":
+				handleIdentify(sub, in);
+				break;
+			case "invite":
+				handleInvite(sub, in);
 				break;
 			default:
 				break;
@@ -396,6 +405,120 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		send(sub, Outbound.voiceAccess(version.get(), id));
 	}
 
+	/**
+	 * Register this connection's self-reported OSRS identity so invites can be routed to it. Identity is
+	 * self-asserted (consistent with the rest of the socket) and re-sent by the client on every reconnect.
+	 */
+	private void handleIdentify(Subscriber sub, Inbound in) {
+		String sessionId = sub.session.getId();
+		if (in.accountHash() != null && in.accountHash() != 0) {
+			if (sub.accountHash != null && !sub.accountHash.equals(in.accountHash())) {
+				sessionByAccount.remove(sub.accountHash, sessionId);
+			}
+			sub.accountHash = in.accountHash();
+			sessionByAccount.put(in.accountHash(), sessionId);
+		}
+		String name = normalizeName(in.name());
+		if (name != null) {
+			if (sub.name != null && !sub.name.equals(name)) {
+				sessionByName.remove(sub.name, sessionId);
+			}
+			sub.name = name;
+			sessionByName.put(name, sessionId);
+		}
+	}
+
+	/**
+	 * Route a party invite from a member/host to a specific online friend by name. The sender must be in
+	 * the party, the invitee must not already be, and the invitee must be connected. The sender gets an
+	 * {@code inviteAck} reporting whether it was delivered; the invitee gets an {@code invited} push.
+	 */
+	private void handleInvite(Subscriber sub, Inbound in) {
+		String id = in.id();
+		if (id == null) {
+			sendError(sub, null, "missing id");
+			return;
+		}
+		String target = normalizeName(in.target());
+		if (target == null) {
+			sendError(sub, id, "missing target");
+			return;
+		}
+		Party party = store.findById(id).orElse(null);
+		if (party == null) {
+			// The party vanished (TTL/disband) between opening the menu and inviting; report as not delivered.
+			send(sub, Outbound.inviteAck(version.get(), in.target(), false));
+			return;
+		}
+		if (!senderInParty(party, in)) {
+			sendError(sub, id, "not in party");
+			return;
+		}
+		if (memberByName(party, target) != null) {
+			// They joined between the menu opening and the invite; nothing to deliver.
+			send(sub, Outbound.inviteAck(version.get(), in.target(), false));
+			return;
+		}
+		String targetSessionId = sessionByName.get(target);
+		Subscriber targetSub = targetSessionId == null ? null : subscribers.get(targetSessionId);
+		if (targetSub == null || !targetSub.session.isOpen()) {
+			send(sub, Outbound.inviteAck(version.get(), in.target(), false));
+			return;
+		}
+		String from = (in.name() == null || in.name().isBlank()) ? party.getHost() : in.name();
+		send(targetSub, Outbound.invited(version.get(), enriched(party), from));
+		log.info("WS invite: session={} party={} target={}", sub.session.getId(), id, target);
+		send(sub, Outbound.inviteAck(version.get(), in.target(), true));
+	}
+
+	/** Whether the invite sender is the party host or an admitted member (by name or accountHash). */
+	private static boolean senderInParty(Party party, Inbound in) {
+		String senderName = normalizeName(in.name());
+		if (senderName != null && senderName.equals(normalizeName(party.getHost()))) {
+			return true;
+		}
+		if (party.getMembers() == null) {
+			return false;
+		}
+		if (in.accountHash() != null && in.accountHash() != 0) {
+			long hash = in.accountHash();
+			if (party.getMembers().stream().anyMatch(m -> m.getAccountHash() == hash)) {
+				return true;
+			}
+		}
+		return senderName != null && memberByName(party, senderName) != null;
+	}
+
+	private static net.osparty.api.model.Member memberByName(Party party, String normalizedName) {
+		if (party.getMembers() == null) {
+			return null;
+		}
+		return party.getMembers().stream()
+			.filter(m -> normalizedName.equals(normalizeName(m.getName())))
+			.findFirst().orElse(null);
+	}
+
+	/** Normalise an OSRS name for identity matching: strip the nbsp Jagex uses for spaces, trim, lowercase. */
+	private static String normalizeName(String name) {
+		if (name == null) {
+			return null;
+		}
+		String normalized = name.replace('\u00A0', ' ').trim().toLowerCase();
+		return normalized.isEmpty() ? null : normalized;
+	}
+
+	private void forgetIdentity(Subscriber sub) {
+		if (sub == null) {
+			return;
+		}
+		if (sub.accountHash != null) {
+			sessionByAccount.remove(sub.accountHash, sub.session.getId());
+		}
+		if (sub.name != null) {
+			sessionByName.remove(sub.name, sub.session.getId());
+		}
+	}
+
 	private void handleKickVoiceMember(Subscriber sub, Inbound in) {
 		String id = in.id();
 		if (id == null) {
@@ -459,7 +582,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 
 	@Override
 	public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-		subscribers.remove(session.getId());
+		forgetIdentity(subscribers.remove(session.getId()));
 		unbind(session.getId());
 		log.info("WS closed: session={} status={} (subscribers={})",
 			session.getId(), status, subscribers.size());
@@ -495,7 +618,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 
 	@Override
 	public void handleTransportError(WebSocketSession session, Throwable exception) {
-		subscribers.remove(session.getId());
+		forgetIdentity(subscribers.remove(session.getId()));
 		try {
 			session.close(CloseStatus.SERVER_ERROR);
 		}
@@ -634,6 +757,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		final WebSocketSession session;
 		volatile boolean subscribed;
 		volatile String activity;
+		// Self-reported identity, mirrored into sessionByAccount/sessionByName for invite routing.
+		volatile Long accountHash;
+		volatile String name;
 
 		Subscriber(WebSocketSession session) {
 			this.session = session;
@@ -641,60 +767,70 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	}
 
 	record Inbound(String type, String activity, PartyRequest request, PartyUpdate patch, String id, String key,
-		String code, String host, Long accountHash, Boolean visible, String newKey) {
+		String code, String host, Long accountHash, Boolean visible, String newKey, String name, String target) {
 	}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	record Outbound(String type, long version, List<Party> parties, Party party, String id, String detail,
-		Integer online, String url, String username, Long accountHash, Boolean badgesVisible) {
+		Integer online, String url, String username, Long accountHash, Boolean badgesVisible, String from,
+		Boolean delivered) {
 		static Outbound snapshot(long version, List<Party> parties) {
-			return new Outbound("snapshot", version, parties, null, null, null, null, null, null, null, null);
+			return new Outbound("snapshot", version, parties, null, null, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound hosted(long version, Party party) {
-			return new Outbound("hosted", version, null, party, null, null, null, null, null, null, null);
+			return new Outbound("hosted", version, null, party, null, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound gone(long version, String id) {
-			return new Outbound("gone", version, null, null, id, null, null, null, null, null, null);
+			return new Outbound("gone", version, null, null, id, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound error(long version, String id, String detail) {
-			return new Outbound("error", version, null, null, id, detail, null, null, null, null, null);
+			return new Outbound("error", version, null, null, id, detail, null, null, null, null, null, null, null);
 		}
 
 		static Outbound byCode(long version, String code, Party party) {
-			return new Outbound("byCode", version, null, party, code, null, null, null, null, null, null);
+			return new Outbound("byCode", version, null, party, code, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound byHost(long version, String host, Party party) {
-			return new Outbound("byHost", version, null, party, host, null, null, null, null, null, null);
+			return new Outbound("byHost", version, null, party, host, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound presence(long version, int online) {
-			return new Outbound("presence", version, null, null, null, null, online, null, null, null, null);
+			return new Outbound("presence", version, null, null, null, null, online, null, null, null, null, null, null);
 		}
 
 		static Outbound voiceChannel(long version, String id, String url) {
-			return new Outbound("voiceChannel", version, null, null, id, null, null, url, null, null, null);
+			return new Outbound("voiceChannel", version, null, null, id, null, null, url, null, null, null, null, null);
 		}
 
 		static Outbound discordLinkUrl(long version, String url) {
-			return new Outbound("discordLinkUrl", version, null, null, null, null, null, url, null, null, null);
+			return new Outbound("discordLinkUrl", version, null, null, null, null, null, url, null, null, null, null, null);
 		}
 
 		static Outbound discordLink(long version, long accountHash, String discordId, String username,
 			Boolean badgesVisible) {
 			return new Outbound("discordLink", version, null, null, discordId, null, null, null, username,
-				accountHash, badgesVisible);
+				accountHash, badgesVisible, null, null);
 		}
 
 		static Outbound voiceAccess(long version, String id) {
-			return new Outbound("voiceAccess", version, null, null, id, null, null, null, null, null, null);
+			return new Outbound("voiceAccess", version, null, null, id, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound transferred(long version, String id) {
-			return new Outbound("transferred", version, null, null, id, null, null, null, null, null, null);
+			return new Outbound("transferred", version, null, null, id, null, null, null, null, null, null, null, null);
+		}
+
+		static Outbound invited(long version, Party party, String from) {
+			return new Outbound("invited", version, null, party, null, null, null, null, null, null, null, from, null);
+		}
+
+		static Outbound inviteAck(long version, String target, boolean delivered) {
+			return new Outbound("inviteAck", version, null, null, target, null, null, null, null, null, null, null,
+				delivered);
 		}
 	}
 

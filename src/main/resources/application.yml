@@ -20,6 +20,9 @@ spring:
 app:
   ads:
     ttl-ms: 90000
+    # Parties older than this are purged outright, even with a live host heartbeat.
+    stale-purge-age-ms: 7200000
+    stale-purge-cron: "0 */5 * * * *"
   ws:
     enabled: true
     reconcile-interval-ms: 5000

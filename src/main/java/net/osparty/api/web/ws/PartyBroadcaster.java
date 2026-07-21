@@ -636,6 +636,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				continue;
 			}
 			if (store.update(entry.getValue(), TTL_TOUCH).isEmpty()) {
+				log.info("WS touch: party {} is gone; notifying host session {}",
+					entry.getValue(), entry.getKey());
+				send(sub, Outbound.gone(version.get(), entry.getValue()));
 				unbind(entry.getKey());
 			}
 		}

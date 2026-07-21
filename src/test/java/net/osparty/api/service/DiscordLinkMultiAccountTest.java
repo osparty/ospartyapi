@@ -1,48 +1,96 @@
 package net.osparty.api.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import net.osparty.api.model.Member;
 import net.osparty.api.model.Party;
-import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.test.context.ActiveProfiles;
+import org.springframework.data.redis.core.ValueOperations;
 
 /**
  * A single Discord account may be linked to several OSRS accounts (multi-account users). Verifies the
  * badge/role state fans out to every linked account, and that unlinking one account leaves the others
- * intact. Uses the live Redis the rest of the suite already relies on; keys are namespaced by unique
- * test ids and purged in {@link #cleanup()}.
+ * intact. The suite runs Redis-free (the {@code test} profile swaps in in-memory beans), so this backs
+ * {@link DiscordLinkService}/{@link DiscordBadgeService} with an in-memory fake of the handful of
+ * {@code StringRedisTemplate} operations they use.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
-@ActiveProfiles("test")
 class DiscordLinkMultiAccountTest {
 	private static final long ACCOUNT_A = 900001L;
 	private static final long ACCOUNT_B = 900002L;
-	private static final String DISCORD_ID = "discordlink-multiaccount-test-9001";
+	private static final String DISCORD_ID = "discord-9001";
 
-	@Autowired
-	private StringRedisTemplate redis;
+	/** In-memory stand-ins for Redis string keys and set keys. */
+	private final Map<String, String> values = new HashMap<>();
+	private final Map<String, Set<String>> sets = new HashMap<>();
 
-	@Autowired
 	private DiscordLinkService links;
-
-	@Autowired
 	private DiscordBadgeService badges;
 
-	@Autowired
-	private ObjectMapper mapper;
+	@BeforeEach
+	@SuppressWarnings("unchecked")
+	void setUp() {
+		StringRedisTemplate redis = mock(StringRedisTemplate.class);
+		ValueOperations<String, String> valueOps = mock(ValueOperations.class);
+		SetOperations<String, String> setOps = mock(SetOperations.class);
+		when(redis.opsForValue()).thenReturn(valueOps);
+		when(redis.opsForSet()).thenReturn(setOps);
 
-	@AfterEach
-	void cleanup() {
-		links.unlink(ACCOUNT_A);
-		links.unlink(ACCOUNT_B);
-		redis.delete("discordlink:badges:" + DISCORD_ID);
+		doAnswer(inv -> {
+			values.put(inv.getArgument(0), inv.getArgument(1));
+			return null;
+		}).when(valueOps).set(anyString(), anyString());
+		when(valueOps.get(anyString())).thenAnswer(inv -> values.get(inv.getArgument(0)));
+		when(valueOps.multiGet(anyCollection())).thenAnswer(inv -> {
+			Collection<String> keys = inv.getArgument(0);
+			List<String> out = new ArrayList<>(keys.size());
+			for (String key : keys) {
+				out.add(values.get(key));
+			}
+			return out;
+		});
+		when(redis.delete(anyString())).thenAnswer(inv -> values.remove(inv.getArgument(0)) != null);
+
+		when(setOps.add(anyString(), anyString())).thenAnswer(inv -> {
+			String key = inv.getArgument(0);
+			String value = inv.getArgument(1);
+			return sets.computeIfAbsent(key, k -> new HashSet<>()).add(value) ? 1L : 0L;
+		});
+		when(setOps.remove(anyString(), anyString())).thenAnswer(inv -> {
+			String key = inv.getArgument(0);
+			Set<String> set = sets.get(key);
+			if (set == null) {
+				return 0L;
+			}
+			boolean removed = set.remove(inv.<String>getArgument(1));
+			if (set.isEmpty()) {
+				sets.remove(key);
+			}
+			return removed ? 1L : 0L;
+		});
+		when(setOps.members(anyString())).thenAnswer(inv -> {
+			Set<String> set = sets.get(inv.getArgument(0));
+			return set == null ? null : new HashSet<>(set);
+		});
+
+		ObjectMapper mapper = new ObjectMapper();
+		links = new DiscordLinkService(redis, mapper, "", "");
+		badges = new DiscordBadgeService(redis, mapper, links);
 	}
 
 	@Test
@@ -77,22 +125,17 @@ class DiscordLinkMultiAccountTest {
 	@Test
 	void relinkingAnAccountToAnotherDiscordMovesItOutOfTheOldSet() {
 		String otherDiscord = DISCORD_ID + "-other";
-		try {
-			links.link(ACCOUNT_A, DISCORD_ID, "user#1");
-			links.link(ACCOUNT_A, otherDiscord, "user#2");
+		links.link(ACCOUNT_A, DISCORD_ID, "user#1");
+		links.link(ACCOUNT_A, otherDiscord, "user#2");
 
-			assertThat(links.accountHashesForDiscordId(DISCORD_ID)).doesNotContain(ACCOUNT_A);
-			assertThat(links.accountHashesForDiscordId(otherDiscord)).containsExactly(ACCOUNT_A);
-		}
-		finally {
-			redis.delete("discordlink:accounts:" + otherDiscord);
-		}
+		assertThat(links.accountHashesForDiscordId(DISCORD_ID)).doesNotContain(ACCOUNT_A);
+		assertThat(links.accountHashesForDiscordId(otherDiscord)).containsExactly(ACCOUNT_A);
 	}
 
 	private static Party partyWith(long... accountHashes) {
 		Party party = new Party();
 		party.setId("p-multiaccount");
-		List<Member> members = new java.util.ArrayList<>();
+		List<Member> members = new ArrayList<>();
 		for (long hash : accountHashes) {
 			members.add(new Member("Acct" + hash, hash));
 		}

@@ -10,6 +10,10 @@ public class DisabledVoiceChannelService implements VoiceChannelService {
 	}
 
 	@Override
+	public void rename(String channelId, Party party) {
+	}
+
+	@Override
 	public boolean grantAccess(String channelId, String discordId) {
 		return false;
 	}

@@ -48,6 +48,23 @@ public class HttpVoiceChannelService implements VoiceChannelService {
 	}
 
 	@Override
+	public void rename(String channelId, Party party) {
+		if (channelId == null || channelId.isBlank() || party == null) {
+			return;
+		}
+		try {
+			http.post()
+				.uri("/voice/channels/{id}/rename", channelId)
+				.body(PartyRef.of(party))
+				.retrieve()
+				.toBodilessEntity();
+		}
+		catch (Exception e) {
+			log.warn("rename via bot failed for channel {}: {}", channelId, e.toString());
+		}
+	}
+
+	@Override
 	public boolean grantAccess(String channelId, String discordId) {
 		if (channelId == null || discordId == null) {
 			return false;

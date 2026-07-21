@@ -49,7 +49,13 @@ class VoiceChannelSocketTest {
 
 	static class StubVoiceChannelService implements VoiceChannelService {
 		final AtomicReference<String> deleted = new AtomicReference<>();
+		final AtomicReference<String> renamed = new AtomicReference<>();
 		int creates;
+
+		@Override
+		public void rename(String channelId, Party party) {
+			renamed.set(channelId);
+		}
 
 		@Override
 		public synchronized Optional<VoiceChannelInfo> createForParty(Party party,
@@ -99,6 +105,31 @@ class VoiceChannelSocketTest {
 			JsonNode again = awaitWhere(messages, m -> "voiceChannel".equals(type(m)), "voiceChannel reply (2)");
 			assertThat(again.path("url").asText()).isEqualTo("https://discord.gg/stub-" + id);
 			assertThat(voice.creates).isEqualTo(1);
+		}
+		finally {
+			session.close();
+		}
+	}
+
+	@Test
+	void transferHostRenamesTheVoiceChannel() throws Exception {
+		voice.renamed.set(null);
+		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
+		WebSocketSession session = connect(messages);
+		try {
+			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-xfer\",\"request\":"
+				+ "{\"activity\":\"cox\",\"host\":\"OldHost\",\"capacity\":3,\"passphrase\":\"pp-xfer\"}}"));
+			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
+			String id = hosted.path("party").path("id").asText();
+
+			session.sendMessage(new TextMessage("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
+			awaitWhere(messages, m -> "voiceChannel".equals(type(m)), "voiceChannel reply");
+
+			session.sendMessage(new TextMessage("{\"type\":\"transferHost\",\"id\":\"" + id + "\","
+				+ "\"host\":\"NewHost\",\"key\":\"k-xfer\",\"newKey\":\"k-new\"}"));
+			awaitWhere(messages, m -> "transferred".equals(type(m)), "transferred ack");
+
+			assertThat(voice.renamed.get()).isEqualTo("chan-" + id);
 		}
 		finally {
 			session.close();

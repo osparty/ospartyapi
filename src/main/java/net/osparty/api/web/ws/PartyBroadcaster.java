@@ -280,6 +280,10 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			return;
 		}
 		unbind(sub.session.getId());
+		// The Discord channel name embeds the host, so rename it to match the new host (best-effort).
+		if (party.get().getDiscordChannelId() != null) {
+			voice.rename(party.get().getDiscordChannelId(), party.get());
+		}
 		log.info("WS transferHost: session={} party={} newHost={}", sub.session.getId(), id, in.host());
 		send(sub, Outbound.transferred(version.get(), id));
 	}

@@ -10,6 +10,8 @@ import java.util.Optional;
 public interface PartyRepository {
 	List<Party> list(String activity);
 
+	int partyCount();
+
 	Optional<Party> findById(String id);
 
 	Optional<Party> findByInviteCode(String code);

@@ -2,7 +2,7 @@ package net.osparty.api.web.ws;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import net.osparty.api.repository.PartyRepository;
 import net.osparty.api.repository.PartyRepository.Authorization;
@@ -53,7 +53,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private final Map<String, String> sessionByName = new ConcurrentHashMap<>();
 	private final AtomicLong version = new AtomicLong();
 	private volatile int lastPresence = -1;
-	private final Counter partiesCreated;
 
 	public PartyBroadcaster(PartyRepository store, ObjectMapper mapper,
 		net.osparty.api.service.VoiceChannelService voice,
@@ -71,8 +70,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		this.inviteBus = inviteBus;
 		// Cross-node invite delivery calls back here to reach a target connected to this instance.
 		inviteBus.setLocalDelivery(this::deliverInviteLocally);
-		this.partiesCreated = Counter.builder("parties.created")
-				.description("Number of parties created")
+		Gauge.builder("parties.active", store, PartyRepository::partyCount)
+				.description("Current number of active parties")
 				.register(meterRegistry);
 	}
 
@@ -199,7 +198,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		Party party = store.create(in.request(), in.key());
 		bind(sub.session.getId(), party.getId());
 		log.info("WS host: session={} party={} host={}", sub.session.getId(), party.getId(), party.getHost());
-		partiesCreated.increment();
 		send(sub, Outbound.hosted(version.get(), enriched(party)));
 	}
 
@@ -262,7 +260,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		unbind(sub.session.getId());
 		log.info("WS unhost: session={} party={}", sub.session.getId(), id);
-		partiesCreated.increment(-1);
 	}
 
 	private void handleTransferHost(Subscriber sub, Inbound in) {

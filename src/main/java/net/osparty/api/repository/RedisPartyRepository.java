@@ -79,6 +79,12 @@ public class RedisPartyRepository implements PartyRepository {
 	}
 
 	@Override
+	public int partyCount() {
+		Long size = redis.opsForSet().size(INDEX_KEY);
+		return size == null ? 0 : size.intValue();
+	}
+
+	@Override
 	public Optional<Party> findById(String id) {
 		return id == null ? Optional.empty() : Optional.ofNullable(read(PARTY_KEY + id));
 	}

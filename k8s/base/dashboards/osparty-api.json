@@ -248,18 +248,18 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 6, "w": 12, "x": 0, "y": 62 },
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } } },
-      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [
-        {"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "parties_active{application=\"osrs-party-api\"}", "legendFormat": "active parties"}
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max(parties_active{application=\"osrs-party-api\"})", "legendFormat": "active parties"}
       ]
     },
     {
       "type": "stat",
       "title": "Stale Parties Purged (last 24h)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 62 }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } } }, "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 62 }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } } }, "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [
-        {"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "increase(stale_parties_purged_total{application=\"osrs-party-api\"}[24h])", "legendFormat": "purged last 24h"}
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(increase(stale_parties_purged_total{application=\"osrs-party-api\"}[24h]))", "legendFormat": "purged last 24h"}
       ]
     },
     {

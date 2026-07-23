@@ -239,14 +239,41 @@
     },
     {
       "type": "row",
-      "title": "Logs",
+      "title": "Party Metrics",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 61 }
+    },
+    {
+      "type": "stat",
+      "title": "Active Parties (ongoing)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 62 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } } },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "osparty_parties_created_total{application=\"osrs-party-api\"} - increase(osparty_parties_created_total{application=\"osrs-party-api\"}[1d] offset 24h)", "legendFormat": "active parties" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Parties Purged (daily reset)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 62 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } } },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "increase(osparty_parties_created_total{application=\"osrs-party-api\"}[24h] offset 0h) - increase(osparty_parties_created_total{application=\"osrs-party-api\"}[24h] offset 24h)", "legendFormat": "purged today" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Logs",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 69 }
     },
     {
       "type": "logs",
       "title": "API + bot logs (Loki)",
       "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 62 },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 70 },
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" },
       "targets": [
         { "refId": "A", "datasource": { "type": "loki", "uid": "loki" }, "expr": "{namespace=\"osparty\"}" }

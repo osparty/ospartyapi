@@ -2,6 +2,8 @@ package net.osparty.api.web.ws;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import net.osparty.api.repository.PartyRepository;
 import net.osparty.api.repository.PartyRepository.Authorization;
 import net.osparty.api.model.Party;
@@ -51,13 +53,15 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private final Map<String, String> sessionByName = new ConcurrentHashMap<>();
 	private final AtomicLong version = new AtomicLong();
 	private volatile int lastPresence = -1;
+	private final Counter partiesCreated;
 
 	public PartyBroadcaster(PartyRepository store, ObjectMapper mapper,
 		net.osparty.api.service.VoiceChannelService voice,
 		net.osparty.api.service.DiscordLinkService discordLinks,
 		net.osparty.api.service.DiscordBadgeService badges,
 		PresenceRegistry presence,
-		InviteBus inviteBus) {
+		InviteBus inviteBus,
+		MeterRegistry meterRegistry) {
 		this.store = store;
 		this.mapper = mapper;
 		this.voice = voice;
@@ -67,6 +71,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		this.inviteBus = inviteBus;
 		// Cross-node invite delivery calls back here to reach a target connected to this instance.
 		inviteBus.setLocalDelivery(this::deliverInviteLocally);
+		this.partiesCreated = Counter.builder("parties.created")
+				.description("Number of parties created")
+				.register(meterRegistry);
 	}
 
 	public int activeConnections() {
@@ -192,6 +199,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		Party party = store.create(in.request(), in.key());
 		bind(sub.session.getId(), party.getId());
 		log.info("WS host: session={} party={} host={}", sub.session.getId(), party.getId(), party.getHost());
+		partiesCreated.increment();
 		send(sub, Outbound.hosted(version.get(), enriched(party)));
 	}
 
@@ -254,6 +262,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		unbind(sub.session.getId());
 		log.info("WS unhost: session={} party={}", sub.session.getId(), id);
+		partiesCreated.increment(-1);
 	}
 
 	private void handleTransferHost(Subscriber sub, Inbound in) {

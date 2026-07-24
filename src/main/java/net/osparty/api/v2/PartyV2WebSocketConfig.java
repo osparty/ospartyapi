@@ -1,4 +1,4 @@
-package net.osparty.api.v2.web;
+package net.osparty.api.v2;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
@@ -14,8 +14,9 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
  * <p>Gated OFF by default: nothing here loads unless {@code app.party-v2.enabled=true}, so the running
  * V1 system is unaffected while V2 is built in parallel.
  *
- * <p>P0 skeleton: registers the endpoint with a no-op handler. Ownership/node-hint routing
- * ({@code /n/{nodeId}/…}, §3.2) and the in-memory party manager arrive in P1/P2.
+ * <p>P1: single-node in-memory relay (owner is always this node). P2 will additionally accept the
+ * node-hint form {@code /n/{nodeId}/api/v2/ws/party} so the gateway can route a joiner straight to the
+ * owning pod; the trailing path is identical.
  */
 @Configuration
 @EnableWebSocket
@@ -31,8 +32,6 @@ public class PartyV2WebSocketConfig implements WebSocketConfigurer {
 
 	@Override
 	public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-		// P2 will additionally accept the node-hint form "/n/{nodeId}/api/v2/ws/party" so the gateway
-		// can route a joiner straight to the owning pod; the trailing path is identical.
 		registry.addHandler(handler, WS_PATH).setAllowedOrigins("*");
 	}
 }

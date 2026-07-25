@@ -84,6 +84,29 @@ class PartyV2HandlerTest {
 	}
 
 	@Test
+	void aLaterHelloFillsInAnAlreadySeatedMembersIdentity() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		// A joiner doesn't know its own name yet when the UI sends the join frame.
+		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
+		long memberId = last(memberOut, "welcome").get("memberId").asLong();
+		assertThat(nameOf(last(hostOut, "roster"), memberId)).isNull();
+
+		send(member, "{\"type\":\"hello\",\"name\":\"Mem\",\"accountHash\":222}");
+
+		JsonNode roster = last(hostOut, "roster");
+		assertThat(nameOf(roster, memberId)).isEqualTo("Mem");
+		assertThat(accountHashOf(roster, memberId)).isEqualTo(222);
+	}
+
+	@Test
+	void aLaterHelloFromTheHostRenamesTheRoom() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"capacity\":3}");
+		send(host, "{\"type\":\"hello\",\"name\":\"Host\",\"accountHash\":111}");
+
+		assertThat(last(hostOut, "roster").get("host").asText()).isEqualTo("Host");
+	}
+
+	@Test
 	void joiningUnknownRoomErrors() throws Exception {
 		send(member, "{\"type\":\"join\",\"room\":\"nope\"}");
 		assertThat(last(memberOut, "error").get("detail").asText()).isEqualTo("no room");
@@ -244,6 +267,24 @@ class PartyV2HandlerTest {
 			}
 		}
 		return n;
+	}
+
+	private static String nameOf(JsonNode roster, long memberId) {
+		for (JsonNode m : roster.get("members")) {
+			if (m.get("memberId").asLong() == memberId) {
+				return m.hasNonNull("name") ? m.get("name").asText() : null;
+			}
+		}
+		return null;
+	}
+
+	private static long accountHashOf(JsonNode roster, long memberId) {
+		for (JsonNode m : roster.get("members")) {
+			if (m.get("memberId").asLong() == memberId) {
+				return m.get("accountHash").asLong();
+			}
+		}
+		return 0;
 	}
 
 	private static String statusOf(JsonNode roster, long memberId) {

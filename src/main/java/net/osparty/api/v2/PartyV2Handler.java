@@ -153,6 +153,9 @@ public class PartyV2Handler extends TextWebSocketHandler {
 		if (in.name() != null) {
 			ctx.name = in.name();
 		}
+		// A joiner only knows its own name once it is in-game, which is usually after it was seated, so a
+		// later hello has to reach the roster too (see LivePartyRoom.identify).
+		withRoom(ctx, room -> room.identify(ctx.memberId, ctx.name, ctx.accountHash));
 	}
 
 	private void handleHost(Ctx ctx, Inbound in) {

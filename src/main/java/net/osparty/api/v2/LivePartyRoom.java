@@ -88,6 +88,35 @@ final class LivePartyRoom {
 		}
 	}
 
+	/**
+	 * Refresh a seated member's self-asserted identity. Clients send their name/accountHash in {@code hello}
+	 * as soon as those resolve, which for a joiner is only after they are already seated — the live state
+	 * payload is opaque here, so this is the only way the roster learns who a member actually is.
+	 */
+	void identify(long memberId, String name, long accountHash) {
+		synchronized (lock) {
+			MemberState member = members.get(memberId);
+			if (member == null) {
+				return;
+			}
+			boolean changed = false;
+			if (name != null && !name.isBlank() && !name.equals(member.name)) {
+				member.name = name;
+				if (memberId == hostMemberId) {
+					hostName = name;
+				}
+				changed = true;
+			}
+			if (accountHash != 0 && accountHash != member.accountHash) {
+				member.accountHash = accountHash;
+				changed = true;
+			}
+			if (changed) {
+				broadcastRoster();
+			}
+		}
+	}
+
 	/** Host admits a PENDING applicant. Server-enforced: only if capacity allows. */
 	boolean admit(long actorMemberId, long targetMemberId) {
 		synchronized (lock) {

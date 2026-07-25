@@ -24,8 +24,16 @@ public interface PartyOwnershipService {
 	/** The node that currently owns {@code room}, or empty if none does. */
 	Optional<Owner> lookup(String room);
 
-	/** Refresh this node's ownership lock + party metadata TTL. No-op if we no longer own the room. */
-	void renew(String room);
+	/**
+	 * Refresh this node's ownership lock + party metadata TTL.
+	 *
+	 * @return true if this node still held the lock; false means ownership was lost (our lock expired and
+	 *     another node claimed the room), so the caller must stop serving it.
+	 */
+	boolean renew(String room);
+
+	/** Whether this node currently holds {@code room}'s lock — the fence for authoritative actions (R5). */
+	boolean ownedBySelf(String room);
 
 	/** Release ownership of {@code room} (only if we still hold it). */
 	void release(String room);

@@ -315,6 +315,22 @@ final class LivePartyRoom {
 		}
 	}
 
+	int memberCount() {
+		synchronized (lock) {
+			return members.size();
+		}
+	}
+
+	/**
+	 * Tell everyone this node has stopped serving the room, so they reconnect and rebuild it on its next
+	 * owner. Used for graceful drain at shutdown and when ownership is lost (PARTY_V2_MIGRATION.md §16 R4).
+	 */
+	void broadcastOwnerChanged() {
+		synchronized (lock) {
+			broadcast(Outbound.ownerChanged(), null);
+		}
+	}
+
 	// ---- internals (call under lock) ----------------------------------------
 
 	/** Whether {@code memberId} is seated and past admission (host or member, not a pending applicant). */

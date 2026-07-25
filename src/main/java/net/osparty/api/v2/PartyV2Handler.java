@@ -87,21 +87,21 @@ public class PartyV2Handler extends TextWebSocketHandler {
 				handleCommand(ctx, in);
 				break;
 			case "setCapacity":
-				withRoom(ctx, room -> {
+				withOwnedRoom(ctx, room -> {
 					if (in.capacity() != null) {
 						room.setCapacity(ctx.memberId, in.capacity());
 					}
 				});
 				break;
 			case "setLocked":
-				withRoom(ctx, room -> {
+				withOwnedRoom(ctx, room -> {
 					if (in.locked() != null) {
 						room.setLocked(ctx.memberId, in.locked());
 					}
 				});
 				break;
 			case "setDiscord":
-				withRoom(ctx, room -> room.setDiscordUrl(ctx.memberId, in.url()));
+				withOwnedRoom(ctx, room -> room.setDiscordUrl(ctx.memberId, in.url()));
 				break;
 			case "readyStart":
 				withRoom(ctx, room -> {
@@ -130,7 +130,7 @@ public class PartyV2Handler extends TextWebSocketHandler {
 				});
 				break;
 			case "transferHost":
-				withRoom(ctx, room -> {
+				withOwnedRoom(ctx, room -> {
 					if (in.target() != null && in.kind() != null) {
 						room.transferHost(ctx.memberId, in.target(), in.kind(), in.newHostKey(),
 							in.newHostName(), Boolean.TRUE.equals(in.hostStays()));
@@ -168,7 +168,10 @@ public class PartyV2Handler extends TextWebSocketHandler {
 		if (room == null) {
 			// Another node already owns this room; send the host to that owner.
 			manager.owner(in.room()).ifPresentOrElse(
-				owner -> send(ctx, Outbound.redirect(owner.nodeId())),
+				owner -> {
+					manager.recordRedirect();
+					send(ctx, Outbound.redirect(owner.nodeId()));
+				},
 				() -> send(ctx, Outbound.error("host claim failed")));
 			return;
 		}
@@ -193,7 +196,10 @@ public class PartyV2Handler extends TextWebSocketHandler {
 		if (room == null) {
 			// Not hosted here: if another node owns it, redirect there; otherwise no such party exists.
 			manager.owner(in.room()).ifPresentOrElse(
-				owner -> send(ctx, Outbound.redirect(owner.nodeId())),
+				owner -> {
+					manager.recordRedirect();
+					send(ctx, Outbound.redirect(owner.nodeId()));
+				},
 				() -> send(ctx, Outbound.error("no room")));
 			return;
 		}
@@ -219,7 +225,7 @@ public class PartyV2Handler extends TextWebSocketHandler {
 		if (in.action() == null || in.target() == null) {
 			return;
 		}
-		withRoom(ctx, room -> {
+		withOwnedRoom(ctx, room -> {
 			if ("ADMIT".equals(in.action())) {
 				room.admit(ctx.memberId, in.target());
 			}
@@ -278,6 +284,29 @@ public class PartyV2Handler extends TextWebSocketHandler {
 		if (room != null) {
 			action.accept(room);
 		}
+	}
+
+	/**
+	 * As {@link #withRoom}, but fenced on still owning the room (PARTY_V2_MIGRATION.md §16 R5): used for
+	 * authoritative actions (admission, kick, room settings, host transfer) so a node whose lock expired
+	 * cannot keep mutating a room another node now owns. A lost room is drained instead, sending its
+	 * members to reconnect. Not used on the live-state hot path, which must never touch Redis.
+	 */
+	private void withOwnedRoom(Ctx ctx, java.util.function.Consumer<LivePartyRoom> action) {
+		if (ctx.roomId == null) {
+			return;
+		}
+		LivePartyRoom room = manager.room(ctx.roomId);
+		if (room == null) {
+			return;
+		}
+		if (!manager.ownsRoom(ctx.roomId)) {
+			log.info("Party V2: refusing authoritative action on {} — no longer owned here", ctx.roomId);
+			manager.recordFailover();
+			manager.drain(ctx.roomId, false);
+			return;
+		}
+		action.accept(room);
 	}
 
 	private void ensureMemberId(Ctx ctx) {

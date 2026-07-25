@@ -34,8 +34,14 @@ public class LocalPartyOwnershipService implements PartyOwnershipService {
 	}
 
 	@Override
-	public void renew(String room) {
+	public boolean renew(String room) {
 		// Nothing to renew: single-node ownership never expires.
+		return owned.contains(room);
+	}
+
+	@Override
+	public boolean ownedBySelf(String room) {
+		return owned.contains(room);
 	}
 
 	@Override

@@ -85,8 +85,8 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 	}
 
 	@Override
-	public void renew(String room) {
-		exec(RENEW, room);
+	public boolean renew(String room) {
+		return exec(RENEW, room);
 	}
 
 	@Override
@@ -94,13 +94,29 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 		exec(RELEASE, room);
 	}
 
-	private void exec(RedisScript<Long> script, String room) {
+	@Override
+	public boolean ownedBySelf(String room) {
 		try {
-			redis.execute(script, List.of(OWNER_PREFIX + room, PARTY_PREFIX + room),
-				nodeId, Long.toString(TTL_MS));
+			return nodeId.equals(redis.opsForValue().get(OWNER_PREFIX + room));
 		}
 		catch (Exception e) {
+			// Redis unreachable: keep serving rather than dropping a live party over a transient blip.
+			log.debug("Party V2 ownedBySelf({}) failed, assuming still owner: {}", room, e.toString());
+			return true;
+		}
+	}
+
+	/** @return true if the script reported that this node still holds the lock. */
+	private boolean exec(RedisScript<Long> script, String room) {
+		try {
+			Long held = redis.execute(script, List.of(OWNER_PREFIX + room, PARTY_PREFIX + room),
+				nodeId, Long.toString(TTL_MS));
+			return held != null && held == 1L;
+		}
+		catch (Exception e) {
+			// Treat a Redis blip as "still ours": dropping a live room is worse than a late handover.
 			log.debug("Party V2 ownership script failed for {}: {}", room, e.toString());
+			return true;
 		}
 	}
 

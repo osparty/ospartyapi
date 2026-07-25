@@ -1,14 +1,21 @@
 package net.osparty.api.v2;
 
+import java.util.ArrayList;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.SmartLifecycle;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Keeps this node's ownership alive (PARTY_V2_MIGRATION.md §10). Every renewal bumps the {@code pv2:owner:}
- * lock + {@code pv2:party:} hash TTLs for each room owned here; if this node stops (crash/kill), it stops
- * renewing, the locks expire, and the rooms become claimable by whichever node the clients reconnect to.
+ * Keeps this node's ownership alive (PARTY_V2_MIGRATION.md §10) and drains its rooms on the way out.
+ *
+ * <p>Every renewal bumps the {@code pv2:owner:} lock + {@code pv2:party:} hash TTLs for each room owned
+ * here. If a renewal reports the lock is gone, another node has claimed the room and this one stops serving
+ * it immediately (§16 R5). If this node dies outright it simply stops renewing, the locks expire, and the
+ * rooms become claimable by whichever node the clients reconnect to.
  *
  * <p>Renews well inside the 30 s TTL so a transient Redis blip doesn't drop a still-live owner. Skipped in
  * the {@code test} profile (single-node ownership never expires).
@@ -16,19 +23,76 @@ import org.springframework.stereotype.Component;
 @Component
 @Profile("!test")
 @ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
-public class PartyV2Heartbeat {
-	private final PartyV2Manager manager;
-	private final PartyOwnershipService ownership;
+public class PartyV2Heartbeat implements SmartLifecycle {
+	private static final Logger log = LoggerFactory.getLogger(PartyV2Heartbeat.class);
 
-	public PartyV2Heartbeat(PartyV2Manager manager, PartyOwnershipService ownership) {
+	/** Time allowed for drain frames to reach clients before the web server starts closing sockets. */
+	private static final long DRAIN_FLUSH_MS = 250;
+
+	private final PartyV2Manager manager;
+	private volatile boolean running;
+
+	public PartyV2Heartbeat(PartyV2Manager manager) {
 		this.manager = manager;
-		this.ownership = ownership;
 	}
 
 	@Scheduled(fixedRate = 10_000)
 	void renewOwned() {
-		for (String room : manager.ownedRoomIds()) {
-			ownership.renew(room);
+		// Copy the ids: draining a lost room mutates the live room map.
+		for (String room : new ArrayList<>(manager.ownedRoomIds())) {
+			if (!manager.renew(room)) {
+				// Our lock expired and another node claimed the room; stop serving it and send the members
+				// off to rebuild it on the new owner.
+				log.warn("Party V2: lost ownership of {}, draining", room);
+				manager.recordFailover();
+				manager.drain(room, false);
+			}
 		}
+	}
+
+	@Override
+	public void start() {
+		running = true;
+	}
+
+	/**
+	 * Graceful drain on shutdown (PARTY_V2_MIGRATION.md §16 R4): release each owned room's lock and tell its
+	 * members to reconnect, so parties migrate to another node *before* this one goes away rather than
+	 * waiting out the lock TTL.
+	 *
+	 * <p>This is a {@link SmartLifecycle} rather than a {@code @PreDestroy} because of ordering: by
+	 * destruction time Tomcat has already shut down (so the drain frames reach nobody) and the Redis
+	 * connection factory is closed (so the lock release silently fails). Running in the highest phase stops
+	 * this bean before the web server and before any connection pools are torn down.
+	 */
+	@Override
+	public void stop() {
+		running = false;
+		java.util.List<String> owned = new ArrayList<>(manager.ownedRoomIds());
+		if (owned.isEmpty()) {
+			return;
+		}
+		for (String room : owned) {
+			log.info("Party V2: draining {} on shutdown", room);
+			manager.drain(room, true);
+		}
+		try {
+			// Give the drain frames a moment on the wire; the sockets are about to be closed under us.
+			Thread.sleep(DRAIN_FLUSH_MS);
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+	}
+
+	@Override
+	public boolean isRunning() {
+		return running;
+	}
+
+	/** Highest phase: stopped first, while the sockets and Redis are both still usable. */
+	@Override
+	public int getPhase() {
+		return Integer.MAX_VALUE;
 	}
 }

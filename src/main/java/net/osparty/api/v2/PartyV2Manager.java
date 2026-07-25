@@ -25,6 +25,8 @@ public class PartyV2Manager {
 	private final NodeIdentity node;
 	private final Map<String, LivePartyRoom> rooms = new ConcurrentHashMap<>();
 	private final AtomicLong memberIds = new AtomicLong();
+	private final java.util.concurrent.atomic.LongAdder redirects = new java.util.concurrent.atomic.LongAdder();
+	private final java.util.concurrent.atomic.LongAdder failovers = new java.util.concurrent.atomic.LongAdder();
 
 	public PartyV2Manager(ObjectMapper mapper, PartyOwnershipService ownership, NodeIdentity node) {
 		this.mapper = mapper;
@@ -74,6 +76,36 @@ public class PartyV2Manager {
 		}
 	}
 
+	/**
+	 * Whether this node still owns {@code id}. Checked before authoritative actions (admit/kick/capacity/
+	 * host transfer) so a node that lost its lock can't keep mutating a room another node now owns
+	 * (PARTY_V2_MIGRATION.md §16 R5). Deliberately not on the live-state hot path.
+	 */
+	boolean ownsRoom(String id) {
+		return ownership.ownedBySelf(id);
+	}
+
+	/** Renew ownership of {@code id}; false means the lock was lost and the room must be drained. */
+	boolean renew(String id) {
+		return ownership.renew(id);
+	}
+
+	/**
+	 * Stop serving a room: tell its members to reconnect elsewhere, then drop it. Used on shutdown and when
+	 * ownership is lost. The lock is only released when we still hold it — a lost room already has a new
+	 * owner whose lock must not be deleted.
+	 */
+	void drain(String id, boolean releaseLock) {
+		LivePartyRoom room = rooms.remove(id);
+		if (room == null) {
+			return;
+		}
+		room.broadcastOwnerChanged();
+		if (releaseLock) {
+			ownership.release(id);
+		}
+	}
+
 	/** Ids of the rooms this node currently owns (for heartbeat renewal). */
 	Set<String> ownedRoomIds() {
 		return rooms.keySet();
@@ -81,5 +113,32 @@ public class PartyV2Manager {
 
 	public int roomCount() {
 		return rooms.size();
+	}
+
+	/** Members connected to rooms owned by this node (metrics). */
+	public int connectedMembers() {
+		int total = 0;
+		for (LivePartyRoom room : rooms.values()) {
+			total += room.memberCount();
+		}
+		return total;
+	}
+
+	// Counters are held here (rather than injected meters) so the manager stays trivially constructible
+	// in tests; PartyV2MetricsConfig binds them to Micrometer.
+	void recordRedirect() {
+		redirects.increment();
+	}
+
+	void recordFailover() {
+		failovers.increment();
+	}
+
+	public double redirectCount() {
+		return redirects.sum();
+	}
+
+	public double failoverCount() {
+		return failovers.sum();
 	}
 }

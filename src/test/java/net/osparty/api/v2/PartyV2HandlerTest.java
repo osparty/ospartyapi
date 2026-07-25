@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.TextMessage;
@@ -107,6 +108,53 @@ class PartyV2HandlerTest {
 	}
 
 	@Test
+	void losingOwnershipFencesAuthoritativeActionsAndDrainsTheRoom() throws Exception {
+		NodeIdentity node = new NodeIdentity("node-a", true);
+		// Ownership that is granted on claim and then yanked away, as an expired lock would be.
+		AtomicBoolean owned = new AtomicBoolean(true);
+		PartyOwnershipService flaky = new PartyOwnershipService() {
+			public Claim claim(String room) {
+				return Claim.CLAIMED;
+			}
+
+			public java.util.Optional<Owner> lookup(String room) {
+				return java.util.Optional.of(new Owner("node-a"));
+			}
+
+			public boolean renew(String room) {
+				return owned.get();
+			}
+
+			public boolean ownedBySelf(String room) {
+				return owned.get();
+			}
+
+			public void release(String room) {
+			}
+		};
+		PartyV2Manager manager = new PartyV2Manager(mapper, flaky, node);
+		PartyV2Handler fenced = new PartyV2Handler(manager, mapper);
+		fenced.afterConnectionEstablished(host);
+		fenced.afterConnectionEstablished(member);
+		fenced.handleTextMessage(host, new TextMessage(
+			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+		fenced.handleTextMessage(member, new TextMessage(
+			"{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}"));
+		long memberId = last(memberOut, "welcome").get("memberId").asLong();
+
+		owned.set(false);
+		fenced.handleTextMessage(host, new TextMessage(
+			"{\"type\":\"command\",\"action\":\"KICK\",\"target\":" + memberId + "}"));
+
+		// The kick is refused, and everyone is told to reconnect elsewhere.
+		assertThat(last(memberOut, "kicked")).isNull();
+		assertThat(last(memberOut, "ownerChanged")).isNotNull();
+		assertThat(last(hostOut, "ownerChanged")).isNotNull();
+		assertThat(manager.roomCount()).isZero();
+		assertThat(manager.failoverCount()).isEqualTo(1);
+	}
+
+	@Test
 	void joiningUnknownRoomErrors() throws Exception {
 		send(member, "{\"type\":\"join\",\"room\":\"nope\"}");
 		assertThat(last(memberOut, "error").get("detail").asText()).isEqualTo("no room");
@@ -125,7 +173,12 @@ class PartyV2HandlerTest {
 				return java.util.Optional.of(new Owner("node-b"));
 			}
 
-			public void renew(String room) {
+			public boolean renew(String room) {
+				return false;
+			}
+
+			public boolean ownedBySelf(String room) {
+				return false;
 			}
 
 			public void release(String room) {

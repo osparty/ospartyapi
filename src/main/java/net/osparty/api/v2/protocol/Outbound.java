@@ -81,6 +81,15 @@ public record Outbound(
 		return new Builder("redirect").nodeId(nodeId).build();
 	}
 
+	/**
+	 * This node is no longer serving the room (graceful drain on shutdown, or ownership lost). The client
+	 * drops its node hint and reconnects, landing wherever the gateway sends it; that node then claims the
+	 * room or resolves the new owner. Unlike {@code redirect} it names no destination — there isn't one yet.
+	 */
+	public static Outbound ownerChanged() {
+		return new Builder("ownerChanged").build();
+	}
+
 	/** Someone started a ready check; peers show the prompt and count {@code memberId} as already ready. */
 	public static Outbound readyStart(long memberId, long checkId, String starter) {
 		return new Builder("readyStart").memberId(memberId).checkId(checkId).starter(starter).build();

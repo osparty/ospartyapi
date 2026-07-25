@@ -23,6 +23,8 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 @ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class PartyV2WebSocketConfig implements WebSocketConfigurer {
 	public static final String WS_PATH = "/api/v2/ws/party";
+	/** Node-hint form (§3.2): the gateway routes the {@code {nodeId}} segment to the owning pod. */
+	public static final String NODE_HINT_PATH = "/n/{nodeId}/api/v2/ws/party";
 
 	private final PartyV2Handler handler;
 
@@ -32,6 +34,8 @@ public class PartyV2WebSocketConfig implements WebSocketConfigurer {
 
 	@Override
 	public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-		registry.addHandler(handler, WS_PATH).setAllowedOrigins("*");
+		// Both forms hit the same handler; the {nodeId} segment is a routing hint for the gateway, and in a
+		// single-node/dev run it is simply ignored (the one node always owns).
+		registry.addHandler(handler, WS_PATH, NODE_HINT_PATH).setAllowedOrigins("*");
 	}
 }

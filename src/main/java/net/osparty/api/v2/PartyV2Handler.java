@@ -127,11 +127,18 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			return;
 		}
 		leaveCurrentRoom(ctx, in.room());
+		LivePartyRoom room = manager.hostRoom(in.room(), in.activityId());
+		if (room == null) {
+			// Another node already owns this room; send the host to that owner.
+			manager.owner(in.room()).ifPresentOrElse(
+				owner -> send(ctx, Outbound.redirect(owner.nodeId())),
+				() -> send(ctx, Outbound.error("host claim failed")));
+			return;
+		}
 		ensureMemberId(ctx);
 		String name = in.hostName() != null ? in.hostName() : ctx.name;
 		long accountHash = in.accountHash() != null ? in.accountHash() : ctx.accountHash;
 		ctx.roomId = in.room();
-		LivePartyRoom room = manager.hostRoom(in.room(), in.activityId());
 		room.seatHost(ctx.memberId, ctx.session, name, accountHash,
 			in.capacity() == null ? 0 : in.capacity(),
 			Boolean.TRUE.equals(in.locked()), in.role(),
@@ -147,8 +154,10 @@ public class PartyV2Handler extends TextWebSocketHandler {
 		leaveCurrentRoom(ctx, in.room());
 		LivePartyRoom room = manager.room(in.room());
 		if (room == null) {
-			// P2: resolve the owner in Redis and answer with a redirect instead of an error.
-			send(ctx, Outbound.error("no room"));
+			// Not hosted here: if another node owns it, redirect there; otherwise no such party exists.
+			manager.owner(in.room()).ifPresentOrElse(
+				owner -> send(ctx, Outbound.redirect(owner.nodeId())),
+				() -> send(ctx, Outbound.error("no room")));
 			return;
 		}
 		ensureMemberId(ctx);

@@ -30,7 +30,9 @@ class PartyV2HandlerTest {
 
 	@BeforeEach
 	void setUp() {
-		handler = new PartyV2Handler(new PartyV2Manager(mapper), mapper);
+		NodeIdentity node = new NodeIdentity("node-a", true);
+		PartyV2Manager manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node);
+		handler = new PartyV2Handler(manager, mapper);
 		hostOut = new ArrayList<>();
 		memberOut = new ArrayList<>();
 		host = session("host", hostOut);
@@ -85,6 +87,35 @@ class PartyV2HandlerTest {
 	void joiningUnknownRoomErrors() throws Exception {
 		send(member, "{\"type\":\"join\",\"room\":\"nope\"}");
 		assertThat(last(memberOut, "error").get("detail").asText()).isEqualTo("no room");
+	}
+
+	@Test
+	void joiningRoomOwnedElsewhereRedirects() throws Exception {
+		// A room this node does not host but another node owns -> the joiner is sent to that owner.
+		NodeIdentity node = new NodeIdentity("node-a", true);
+		PartyOwnershipService foreign = new PartyOwnershipService() {
+			public Claim claim(String room) {
+				return Claim.OWNED_BY_OTHER;
+			}
+
+			public java.util.Optional<Owner> lookup(String room) {
+				return java.util.Optional.of(new Owner("node-b"));
+			}
+
+			public void renew(String room) {
+			}
+
+			public void release(String room) {
+			}
+		};
+		PartyV2Handler redirecting = new PartyV2Handler(new PartyV2Manager(mapper, foreign, node), mapper);
+		List<String> out = new ArrayList<>();
+		WebSocketSession joiner = session("joiner", out);
+		redirecting.afterConnectionEstablished(joiner);
+
+		redirecting.handleTextMessage(joiner, new TextMessage("{\"type\":\"join\",\"room\":\"elsewhere\"}"));
+
+		assertThat(last(out, "redirect").get("nodeId").asText()).isEqualTo("node-b");
 	}
 
 	@Test

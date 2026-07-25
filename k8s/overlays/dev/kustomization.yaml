@@ -6,50 +6,40 @@
 # keys are separate), its own ingress host (testing.osparty.net), its own image tag. Prod is untouched by
 # anything deployed here.
 #
-# One manual step before the first deploy — the base mounts the `osparty-api-env` secret, so the namespace
-# needs its own copy (the Redis StatefulSet reads SPRING_DATA_REDIS_PASSWORD from it too):
+# The base Deployment is replaced by a StatefulSet (see statefulset.yaml) because node-hint routing needs
+# individually addressable pods. That is the one structural difference from prod, and the thing this
+# environment exists to prove before prod follows.
+#
+# Manual steps before the first deploy — the namespace needs two secrets the base expects:
 #
 #   kubectl create namespace osparty-dev
 #   kubectl -n osparty-dev create secret generic osparty-api-env \
 #     --from-literal=SPRING_DATA_REDIS_PASSWORD="$(openssl rand -hex 24)"
-#
-# Discord is left unset here, so dev never calls the prod Discord service.
+#   # image pull credentials, copied from prod:
+#   kubectl -n osparty get secret ghcr-pull -o yaml \
+#     | sed 's/namespace: osparty/namespace: osparty-dev/' \
+#     | kubectl apply -f -
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: osparty-dev
 resources:
   - namespace.yaml
   - ../../base
+  - statefulset.yaml
+  - pod-services.yaml
 images:
   - name: ghcr.io/osparty/osparty-api
     newTag: latest
 patches:
-  # Party V2 on, and every pod told its own identity: NodeIdentity reads app.party-v2.node-id and uses it
-  # as the routing key stamped into pv2:owner:{room} and returned in redirect frames.
+  # The StatefulSet takes the Deployment's place; both would otherwise fight over the same pod labels.
   - patch: |-
       apiVersion: apps/v1
       kind: Deployment
       metadata:
         name: osparty-api
-      spec:
-        replicas: 2
-        template:
-          spec:
-            containers:
-              - name: api
-                env:
-                  - name: APP_PARTY_V2_ENABLED
-                    value: "true"
-                  - name: APP_PARTY_V2_NODE_ID
-                    valueFrom:
-                      fieldRef:
-                        fieldPath: metadata.name
-                resources:
-                  requests:
-                    cpu: 100m
-                    memory: 512Mi
-                  limits:
-                    memory: 1Gi
+      $patch: delete
+  # Node-hint routing: /n/{podName}/... goes to that exact pod, everything else round-robins as usual.
+  # Ingress gives the longest matching prefix priority, so the /n/ paths win over /.
   - patch: |-
       apiVersion: networking.k8s.io/v1
       kind: Ingress
@@ -64,6 +54,20 @@ patches:
           - host: testing.osparty.net
             http:
               paths:
+                - path: /n/osparty-api-0
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api-n0
+                      port:
+                        name: http
+                - path: /n/osparty-api-1
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api-n1
+                      port:
+                        name: http
                 - path: /
                   pathType: Prefix
                   backend:

@@ -1,0 +1,94 @@
+# Dev runs the API as a StatefulSet rather than a Deployment, because Party V2's node-hint routing needs
+# each pod to be individually addressable (PARTY_V2_MIGRATION.md §3.2, R1).
+#
+# A Deployment can't provide that: its pods have randomly suffixed names and carry no per-pod label, so
+# there is nothing stable for a Service to select. StatefulSet pods get stable ordinal names and an
+# automatic `statefulset.kubernetes.io/pod-name` label, which is exactly what the per-pod Services in
+# pod-services.yaml select on.
+#
+# The pod name is also the nodeId: it is injected below as APP_PARTY_V2_NODE_ID, stamped into
+# pv2:owner:{room}, returned in redirect frames, and travels back as /n/{nodeId}/api/v2/ws/party.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: osparty-api
+  labels:
+    app: osparty-api
+spec:
+  serviceName: osparty-api-hl
+  replicas: 2
+  # Both pods come up at once: there is no ordering dependency between API replicas, and OrderedReady
+  # would make a rolling update twice as slow for no benefit.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: osparty-api
+  template:
+    metadata:
+      labels:
+        app: osparty-api
+    spec:
+      # Spread across nodes so ownership failover actually crosses a machine boundary, but never block
+      # scheduling in dev if the cluster is tight.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: osparty-api
+      securityContext:
+        sysctls:
+          - name: net.core.somaxconn
+            value: "65535"
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: api
+          image: ghcr.io/osparty/osparty-api:latest
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9090
+          env:
+            - name: SPRING_DATA_REDIS_HOST
+              value: redis
+            - name: SPRING_DATA_REDIS_PORT
+              value: "6379"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=50.0"
+            # Dev never talks to the prod Discord service.
+            - name: DISCORD_SERVICE_URL
+              value: ""
+            - name: APP_PARTY_V2_ENABLED
+              value: "true"
+            - name: APP_PARTY_V2_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          envFrom:
+            - secretRef:
+                name: osparty-api-env
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi

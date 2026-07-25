@@ -1,0 +1,51 @@
+# One Service per pod, so the gateway can send a client to the exact node that owns its party
+# (PARTY_V2_MIGRATION.md §3.2). Each selects the `statefulset.kubernetes.io/pod-name` label the StatefulSet
+# controller adds automatically, which is the only stable per-pod selector Kubernetes offers.
+#
+# These deliberately do NOT carry `app: osparty-api`: that label is what the ServiceMonitor selects, and
+# matching here would scrape every pod once per Service and double-count the metrics.
+#
+# Adding a replica means adding a Service here and a matching ingress path — the cost of static per-pod
+# routing. Keep the count in step with the StatefulSet's `replicas`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: osparty-api-hl
+  labels:
+    app: osparty-api-headless
+spec:
+  clusterIP: None
+  selector:
+    app: osparty-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: osparty-api-n0
+  labels:
+    app: osparty-api-pod
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: osparty-api-0
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: osparty-api-n1
+  labels:
+    app: osparty-api-pod
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: osparty-api-1
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

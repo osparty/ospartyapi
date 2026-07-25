@@ -116,18 +116,20 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
           ENVIRONMENT: ${{ github.event.inputs.environment }}
           NAMESPACE: ${{ github.event.inputs.environment == 'dev' && 'osparty-dev' || 'osparty' }}
+          # Dev runs the API as a StatefulSet so its pods are individually routable (node-hint routing).
+          WORKLOAD: ${{ github.event.inputs.environment == 'dev' && 'statefulset/osparty-api' || 'deployment/osparty-api' }}
         with:
           host: ${{ secrets.API_SERVER_ADDRESS }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || '22' }}
-          envs: DEPLOY_DIR,VERSION,ENVIRONMENT,NAMESPACE
+          envs: DEPLOY_DIR,VERSION,ENVIRONMENT,NAMESPACE,WORKLOAD
           script: |
             set -euo pipefail
             kubectl apply -f "$DEPLOY_DIR/k8s-${ENVIRONMENT}.yaml"
             # Fails the job (non-zero) if the new pods never go Ready — old pods keep serving
             # (maxUnavailable: 0), so a broken image never takes traffic.
-            kubectl -n "$NAMESPACE" rollout status deployment/osparty-api --timeout=300s
+            kubectl -n "$NAMESPACE" rollout status "$WORKLOAD" --timeout=300s
             echo "Deployed osparty-api ${VERSION} to namespace ${NAMESPACE}"
 
   release:

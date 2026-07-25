@@ -23,6 +23,7 @@ import org.springframework.web.socket.WebSocketSession;
 class PartyV2HandlerTest {
 	private final ObjectMapper mapper = new ObjectMapper();
 	private PartyV2Handler handler;
+	private PartyV2Manager manager;
 
 	private WebSocketSession host;
 	private WebSocketSession member;
@@ -32,7 +33,7 @@ class PartyV2HandlerTest {
 	@BeforeEach
 	void setUp() {
 		NodeIdentity node = new NodeIdentity("node-a", true);
-		PartyV2Manager manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node);
+		manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node);
 		handler = new PartyV2Handler(manager, mapper);
 		hostOut = new ArrayList<>();
 		memberOut = new ArrayList<>();
@@ -131,6 +132,13 @@ class PartyV2HandlerTest {
 
 			public void release(String room) {
 			}
+
+			public void releaseForHandover(String room) {
+			}
+
+			public boolean handoverPending(String room) {
+				return false;
+			}
 		};
 		PartyV2Manager manager = new PartyV2Manager(mapper, flaky, node);
 		PartyV2Handler fenced = new PartyV2Handler(manager, mapper);
@@ -158,6 +166,8 @@ class PartyV2HandlerTest {
 	void joiningUnknownRoomErrors() throws Exception {
 		send(member, "{\"type\":\"join\",\"room\":\"nope\"}");
 		assertThat(last(memberOut, "error").get("detail").asText()).isEqualTo("no room");
+		// Terminal, not retriable: the retry path must not swallow a room that never existed.
+		assertThat(last(memberOut, "ownerPending")).isNull();
 	}
 
 	@Test
@@ -182,6 +192,13 @@ class PartyV2HandlerTest {
 			}
 
 			public void release(String room) {
+			}
+
+			public void releaseForHandover(String room) {
+			}
+
+			public boolean handoverPending(String room) {
+				return false;
 			}
 		};
 		PartyV2Handler redirecting = new PartyV2Handler(new PartyV2Manager(mapper, foreign, node), mapper);
@@ -295,6 +312,49 @@ class PartyV2HandlerTest {
 		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		return last(memberOut, "welcome").get("memberId").asLong();
+	}
+
+	/**
+	 * The drain race: a member reconnects after its owner node drained, but before the host has re-hosted
+	 * the room on its new node. It must be told to retry — answering "no room" strands it in a party whose
+	 * host it can never see again, which is the failure this whole handover path exists to prevent.
+	 */
+	@Test
+	void joinDuringHandoverIsRetriableNotTerminal() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
+
+		// The owning node drains on shutdown: everyone is told, the lock is handed over.
+		manager.drain("r", true);
+		assertThat(last(memberOut, "ownerChanged")).isNotNull();
+
+		// The member reconnects and re-sends its join before the host has re-claimed the room.
+		memberOut.clear();
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
+
+		JsonNode pending = last(memberOut, "ownerPending");
+		assertThat(pending).isNotNull();
+		assertThat(pending.get("retryAfterMs").asLong()).isPositive();
+		assertThat(last(memberOut, "error")).isNull();
+
+		// Once the host re-hosts, the retry seats the member for real.
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
+		memberOut.clear();
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222,\"invited\":true}");
+		assertThat(last(memberOut, "welcome")).isNotNull();
+		assertThat(last(memberOut, "welcome").get("status").asText()).isEqualTo("MEMBER");
+	}
+
+	/** A room that ended (host left, room discarded) is gone, not in transit. */
+	@Test
+	void joinAfterRoomEndedErrors() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\"}");
+		manager.discard("r");
+
+		memberOut.clear();
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\"}");
+		assertThat(last(memberOut, "ownerPending")).isNull();
+		assertThat(last(memberOut, "error").get("detail").asText()).isEqualTo("no room");
 	}
 
 	private void send(WebSocketSession session, String json) throws Exception {

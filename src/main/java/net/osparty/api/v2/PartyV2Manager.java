@@ -27,6 +27,7 @@ public class PartyV2Manager {
 	private final AtomicLong memberIds = new AtomicLong();
 	private final java.util.concurrent.atomic.LongAdder redirects = new java.util.concurrent.atomic.LongAdder();
 	private final java.util.concurrent.atomic.LongAdder failovers = new java.util.concurrent.atomic.LongAdder();
+	private final java.util.concurrent.atomic.LongAdder ownerPending = new java.util.concurrent.atomic.LongAdder();
 
 	public PartyV2Manager(ObjectMapper mapper, PartyOwnershipService ownership, NodeIdentity node) {
 		this.mapper = mapper;
@@ -102,8 +103,15 @@ public class PartyV2Manager {
 		}
 		room.broadcastOwnerChanged();
 		if (releaseLock) {
-			ownership.release(id);
+			// A handover, not an ending: the room's metadata stays behind so members that reconnect ahead
+			// of their host are told to retry rather than that the party is gone.
+			ownership.releaseForHandover(id);
 		}
+	}
+
+	/** Whether {@code id} is mid-handover — no owner, but owned within the grace window. */
+	boolean handoverPending(String id) {
+		return ownership.handoverPending(id);
 	}
 
 	/** Ids of the rooms this node currently owns (for heartbeat renewal). */
@@ -134,11 +142,19 @@ public class PartyV2Manager {
 		failovers.increment();
 	}
 
+	void recordOwnerPending() {
+		ownerPending.increment();
+	}
+
 	public double redirectCount() {
 		return redirects.sum();
 	}
 
 	public double failoverCount() {
 		return failovers.sum();
+	}
+
+	public double ownerPendingCount() {
+		return ownerPending.sum();
 	}
 }

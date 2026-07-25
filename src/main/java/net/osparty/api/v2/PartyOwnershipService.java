@@ -35,6 +35,20 @@ public interface PartyOwnershipService {
 	/** Whether this node currently holds {@code room}'s lock — the fence for authoritative actions (R5). */
 	boolean ownedBySelf(String room);
 
-	/** Release ownership of {@code room} (only if we still hold it). */
+	/** Release ownership of {@code room} (only if we still hold it), discarding its metadata with it. */
 	void release(String room);
+
+	/**
+	 * Release ownership as part of a handover: drop this node's lock but leave the room's metadata behind
+	 * for a short grace window. Used when draining rather than ending a room, so that the members — which
+	 * reconnect at the same moment as their host, but have less work to do before they arrive — can be told
+	 * to retry instead of being told the party no longer exists (PARTY_V2_MIGRATION.md §16 R4).
+	 */
+	void releaseForHandover(String room);
+
+	/**
+	 * Whether {@code room} has no owner but was owned within the grace window — a handover is in flight and
+	 * the host has yet to re-claim it. Only meaningful when {@link #lookup} came back empty.
+	 */
+	boolean handoverPending(String room);
 }

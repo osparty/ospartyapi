@@ -34,6 +34,9 @@ public class PartyV2MetricsConfig {
 			FunctionCounter.builder("osparty.partyv2.failovers", manager, PartyV2Manager::failoverCount)
 				.description("Rooms drained after this node lost ownership")
 				.register(registry);
+			FunctionCounter.builder("osparty.partyv2.ownerpending", manager, PartyV2Manager::ownerPendingCount)
+				.description("Joins deferred because the room was mid-handover (host had not re-claimed yet)")
+				.register(registry);
 		};
 	}
 }

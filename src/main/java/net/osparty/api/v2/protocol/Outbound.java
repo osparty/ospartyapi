@@ -40,7 +40,8 @@ public record Outbound(
 	Integer world,
 	String newHostKey,
 	String newHostName,
-	Boolean hostStays) {
+	Boolean hostStays,
+	Long retryAfterMs) {
 
 	/** Assigned identity + role on (re)join; followed by a {@code roster} and the current member states. */
 	public static Outbound welcome(long memberId, String status) {
@@ -88,6 +89,19 @@ public record Outbound(
 	 */
 	public static Outbound ownerChanged() {
 		return new Builder("ownerChanged").build();
+	}
+
+	/**
+	 * The room has no owner <em>yet</em>: its previous owner drained (shutdown or lost lock) and the host
+	 * has not re-claimed it on its new node. Distinct from {@code error("no room")}, which is terminal —
+	 * this says "come back in {@code retryAfterMs}", so a member that reconnects faster than its host does
+	 * not fall out of the party over a handover it merely arrived early for (PARTY_V2_MIGRATION.md §16 R4).
+	 *
+	 * <p>The window is bounded by the party metadata's TTL: once that lapses the room really is gone and
+	 * the next {@code join} gets {@code no room} instead.
+	 */
+	public static Outbound ownerPending(long retryAfterMs) {
+		return new Builder("ownerPending").retryAfterMs(retryAfterMs).build();
 	}
 
 	/** Someone started a ready check; peers show the prompt and count {@code memberId} as already ready. */
@@ -155,6 +169,7 @@ public record Outbound(
 		private String newHostKey;
 		private String newHostName;
 		private Boolean hostStays;
+		private Long retryAfterMs;
 
 		public Builder(String type) {
 			this.type = type;
@@ -295,10 +310,15 @@ public record Outbound(
 			return this;
 		}
 
+		public Builder retryAfterMs(Long v) {
+			this.retryAfterMs = v;
+			return this;
+		}
+
 		public Outbound build() {
 			return new Outbound(type, memberId, status, host, capacity, locked, closed, discordUrl, members,
 				state, x, y, plane, color, name, detail, nodeId, checkId, starter, kind, friendsChat,
-				npcIndex, weapon, hit, world, newHostKey, newHostName, hostStays);
+				npcIndex, weapon, hit, world, newHostKey, newHostName, hostStays, retryAfterMs);
 		}
 	}
 }

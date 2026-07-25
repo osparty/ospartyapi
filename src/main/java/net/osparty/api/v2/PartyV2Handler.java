@@ -34,6 +34,12 @@ public class PartyV2Handler extends TextWebSocketHandler {
 	private static final int SEND_TIME_LIMIT_MS = 10_000;
 	private static final int SEND_BUFFER_LIMIT = 512 * 1024;
 
+	/**
+	 * How long a joiner waits before retrying a room that is mid-handover. Short, because the gap it covers
+	 * is one host reconnect plus one claim; the client bounds the total number of retries.
+	 */
+	private static final long HANDOVER_RETRY_MS = 1_000;
+
 	private final PartyV2Manager manager;
 	private final ObjectMapper mapper;
 	private final Map<String, Ctx> contexts = new ConcurrentHashMap<>();
@@ -170,6 +176,8 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			manager.owner(in.room()).ifPresentOrElse(
 				owner -> {
 					manager.recordRedirect();
+					log.info("Party V2 host redirect: session={} room={} -> {}",
+						ctx.session.getId(), in.room(), owner.nodeId());
 					send(ctx, Outbound.redirect(owner.nodeId()));
 				},
 				() -> send(ctx, Outbound.error("host claim failed")));
@@ -194,13 +202,15 @@ public class PartyV2Handler extends TextWebSocketHandler {
 		leaveCurrentRoom(ctx, in.room());
 		LivePartyRoom room = manager.room(in.room());
 		if (room == null) {
-			// Not hosted here: if another node owns it, redirect there; otherwise no such party exists.
+			// Not hosted here: another node may own it, it may be mid-handover, or it may simply not exist.
 			manager.owner(in.room()).ifPresentOrElse(
 				owner -> {
 					manager.recordRedirect();
+					log.info("Party V2 redirect: session={} room={} -> {}",
+						ctx.session.getId(), in.room(), owner.nodeId());
 					send(ctx, Outbound.redirect(owner.nodeId()));
 				},
-				() -> send(ctx, Outbound.error("no room")));
+				() -> sendUnowned(ctx, in.room()));
 			return;
 		}
 		ensureMemberId(ctx);
@@ -211,6 +221,24 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			in.role(), Boolean.TRUE.equals(in.learner()), Boolean.TRUE.equals(in.teacher()),
 			Boolean.TRUE.equals(in.invited()));
 		log.info("Party V2 join: session={} room={} member={}", ctx.session.getId(), in.room(), ctx.memberId);
+	}
+
+	/**
+	 * Answer a join for a room nobody owns. A room whose owner drained moments ago is coming back — the
+	 * host is reconnecting and re-claiming it right now — so the joiner is told to retry rather than that
+	 * the party is gone. Members reconnect at the same instant as their host but have less to do before
+	 * they arrive, so without this they lose the race by default and drop out of the party (§16 R4).
+	 */
+	private void sendUnowned(Ctx ctx, String room) {
+		if (manager.handoverPending(room)) {
+			manager.recordOwnerPending();
+			log.info("Party V2 join during handover: session={} room={} — retry in {}ms",
+				ctx.session.getId(), room, HANDOVER_RETRY_MS);
+			send(ctx, Outbound.ownerPending(HANDOVER_RETRY_MS));
+			return;
+		}
+		log.info("Party V2 join refused: session={} room={} — no such room", ctx.session.getId(), room);
+		send(ctx, Outbound.error("no room"));
 	}
 
 	private void handlePing(Ctx ctx, Inbound in) {

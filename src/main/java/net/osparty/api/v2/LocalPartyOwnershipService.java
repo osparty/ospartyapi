@@ -18,6 +18,8 @@ import org.springframework.stereotype.Component;
 public class LocalPartyOwnershipService implements PartyOwnershipService {
 	private final String nodeId;
 	private final Set<String> owned = ConcurrentHashMap.newKeySet();
+	/** Rooms released for handover: no owner, but not gone either. Cleared by a re-claim or a release. */
+	private final Set<String> handingOver = ConcurrentHashMap.newKeySet();
 
 	public LocalPartyOwnershipService(NodeIdentity node) {
 		this.nodeId = node.nodeId();
@@ -25,6 +27,7 @@ public class LocalPartyOwnershipService implements PartyOwnershipService {
 
 	@Override
 	public Claim claim(String room) {
+		handingOver.remove(room);
 		return owned.add(room) ? Claim.CLAIMED : Claim.ALREADY_OWNED_BY_SELF;
 	}
 
@@ -47,5 +50,18 @@ public class LocalPartyOwnershipService implements PartyOwnershipService {
 	@Override
 	public void release(String room) {
 		owned.remove(room);
+		handingOver.remove(room);
+	}
+
+	@Override
+	public void releaseForHandover(String room) {
+		if (owned.remove(room)) {
+			handingOver.add(room);
+		}
+	}
+
+	@Override
+	public boolean handoverPending(String room) {
+		return handingOver.contains(room);
 	}
 }

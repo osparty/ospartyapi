@@ -30,11 +30,21 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 	private static final Duration TTL = Duration.ofSeconds(30);
 	private static final long TTL_MS = TTL.toMillis();
 
+	/**
+	 * How long the party hash outlives the owner lock. This is the handover window: within it a room with
+	 * no owner is "changing hands" rather than "gone", which is what lets a joiner be told to retry.
+	 * Applies to both drain paths — a graceful release shortens the hash to exactly this, and a hard kill
+	 * leaves it standing this much longer than the lock it outlived.
+	 */
+	private static final Duration HANDOVER = Duration.ofSeconds(15);
+	private static final long HANDOVER_MS = HANDOVER.toMillis();
+	private static final long PARTY_TTL_MS = TTL.plus(HANDOVER).toMillis();
+
 	/** Bump the owner-lock + party-hash TTLs only if this node still owns the lock. */
 	private static final RedisScript<Long> RENEW = new DefaultRedisScript<>(
 		"if redis.call('get', KEYS[1]) == ARGV[1] then "
 			+ "redis.call('pexpire', KEYS[1], ARGV[2]); "
-			+ "redis.call('pexpire', KEYS[2], ARGV[2]); "
+			+ "redis.call('pexpire', KEYS[2], ARGV[3]); "
 			+ "return 1 else return 0 end",
 		Long.class);
 
@@ -43,6 +53,17 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 		"if redis.call('get', KEYS[1]) == ARGV[1] then "
 			+ "redis.call('del', KEYS[1]); "
 			+ "redis.call('del', KEYS[2]); "
+			+ "return 1 else return 0 end",
+		Long.class);
+
+	/**
+	 * Hand the room over: drop our lock but keep the party hash alive for the handover window, so a joiner
+	 * arriving before the host re-claims sees a room in transit rather than no room at all.
+	 */
+	private static final RedisScript<Long> HANDOVER_RELEASE = new DefaultRedisScript<>(
+		"if redis.call('get', KEYS[1]) == ARGV[1] then "
+			+ "redis.call('del', KEYS[1]); "
+			+ "redis.call('pexpire', KEYS[2], ARGV[2]); "
 			+ "return 1 else return 0 end",
 		Long.class);
 
@@ -86,12 +107,31 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 
 	@Override
 	public boolean renew(String room) {
-		return exec(RENEW, room);
+		return exec(RENEW, room, Long.toString(TTL_MS), Long.toString(PARTY_TTL_MS));
 	}
 
 	@Override
 	public void release(String room) {
 		exec(RELEASE, room);
+	}
+
+	@Override
+	public void releaseForHandover(String room) {
+		exec(HANDOVER_RELEASE, room, Long.toString(HANDOVER_MS));
+	}
+
+	@Override
+	public boolean handoverPending(String room) {
+		try {
+			// The party hash outlives the owner lock by the handover window, so its presence with no owner
+			// is exactly "this room existed a moment ago and is being re-claimed".
+			return Boolean.TRUE.equals(redis.hasKey(PARTY_PREFIX + room));
+		}
+		catch (Exception e) {
+			// Redis unreachable: say no rather than park a joiner in a retry loop we cannot resolve.
+			log.debug("Party V2 handoverPending({}) failed: {}", room, e.toString());
+			return false;
+		}
 	}
 
 	@Override
@@ -106,11 +146,18 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 		}
 	}
 
-	/** @return true if the script reported that this node still holds the lock. */
-	private boolean exec(RedisScript<Long> script, String room) {
+	/**
+	 * Run a compare-and-act ownership script. {@code nodeId} is always {@code ARGV[1]} (the fence); each
+	 * script's own arguments follow.
+	 *
+	 * @return true if the script reported that this node still holds the lock.
+	 */
+	private boolean exec(RedisScript<Long> script, String room, String... argv) {
 		try {
-			Long held = redis.execute(script, List.of(OWNER_PREFIX + room, PARTY_PREFIX + room),
-				nodeId, Long.toString(TTL_MS));
+			Object[] args = new Object[argv.length + 1];
+			args[0] = nodeId;
+			System.arraycopy(argv, 0, args, 1, argv.length);
+			Long held = redis.execute(script, List.of(OWNER_PREFIX + room, PARTY_PREFIX + room), args);
 			return held != null && held == 1L;
 		}
 		catch (Exception e) {
@@ -125,7 +172,9 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 			redis.opsForHash().putAll(PARTY_PREFIX + room, java.util.Map.of(
 				"owner", nodeId,
 				"createdAt", Long.toString(System.currentTimeMillis())));
-			redis.expire(PARTY_PREFIX + room, TTL);
+			// Outlives the lock by the handover window (see HANDOVER): the hash is what marks a room as
+			// "in transit" once its owner is gone.
+			redis.expire(PARTY_PREFIX + room, Duration.ofMillis(PARTY_TTL_MS));
 		}
 		catch (Exception e) {
 			log.debug("Party V2 party-meta write failed for {}: {}", room, e.toString());

@@ -29,4 +29,33 @@ class LocalPartyOwnershipServiceTest {
 		assertThat(ownership.lookup("r")).isEmpty();
 		assertThat(ownership.claim("r")).isEqualTo(Claim.CLAIMED);
 	}
+
+	@Test
+	void releaseEndsTheRoomOutright() {
+		ownership.claim("r");
+		ownership.release("r");
+		// A released room is over, not in transit — a joiner must be told it is gone, not to wait.
+		assertThat(ownership.handoverPending("r")).isFalse();
+	}
+
+	@Test
+	void handoverLeavesTheRoomOwnerlessButPending() {
+		ownership.claim("r");
+		ownership.releaseForHandover("r");
+		assertThat(ownership.lookup("r")).isEmpty();
+		assertThat(ownership.handoverPending("r")).isTrue();
+	}
+
+	@Test
+	void reclaimingEndsTheHandover() {
+		ownership.claim("r");
+		ownership.releaseForHandover("r");
+		assertThat(ownership.claim("r")).isEqualTo(Claim.CLAIMED);
+		assertThat(ownership.handoverPending("r")).isFalse();
+	}
+
+	@Test
+	void unknownRoomIsNotPending() {
+		assertThat(ownership.handoverPending("nope")).isFalse();
+	}
 }

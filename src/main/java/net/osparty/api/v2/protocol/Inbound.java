@@ -29,5 +29,16 @@ public record Inbound(
 	Integer color,
 	String action,
 	Long target,
-	String url) {
+	String url,
+	Long checkId,
+	String starter,
+	String kind,
+	String friendsChat,
+	Integer npcIndex,
+	String weapon,
+	Integer hit,
+	Integer world,
+	String newHostKey,
+	String newHostName,
+	Boolean hostStays) {
 }

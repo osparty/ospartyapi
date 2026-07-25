@@ -119,6 +119,90 @@ class PartyV2HandlerTest {
 	}
 
 	@Test
+	void readyChecksAndSpecDrainsFanOutToPeers() throws Exception {
+		long memberId = hostWithAdmittedMember();
+
+		send(host, "{\"type\":\"readyStart\",\"checkId\":7,\"starter\":\"Host\"}");
+		JsonNode start = last(memberOut, "readyStart");
+		assertThat(start.get("checkId").asLong()).isEqualTo(7);
+		assertThat(start.get("starter").asText()).isEqualTo("Host");
+		// The sender doesn't receive its own broadcast (it applies the check locally).
+		assertThat(last(hostOut, "readyStart")).isNull();
+
+		send(member, "{\"type\":\"ready\",\"checkId\":7}");
+		assertThat(last(hostOut, "ready").get("memberId").asLong()).isEqualTo(memberId);
+
+		send(member, "{\"type\":\"specDrain\",\"npcIndex\":42,\"weapon\":\"DRAGON_WARHAMMER\",\"hit\":25,"
+			+ "\"world\":301}");
+		JsonNode drain = last(hostOut, "specDrain");
+		assertThat(drain.get("npcIndex").asInt()).isEqualTo(42);
+		assertThat(drain.get("weapon").asText()).isEqualTo("DRAGON_WARHAMMER");
+		assertThat(drain.get("hit").asInt()).isEqualTo(25);
+	}
+
+	@Test
+	void pendingApplicantCannotFanOutReadyOrSpec() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":2}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\"}"); // stays PENDING
+
+		send(member, "{\"type\":\"readyStart\",\"checkId\":1,\"starter\":\"Mem\"}");
+		send(member, "{\"type\":\"specDrain\",\"npcIndex\":1,\"weapon\":\"BANDOS_GODSWORD\",\"hit\":10}");
+
+		assertThat(last(hostOut, "readyStart")).isNull();
+		assertThat(last(hostOut, "specDrain")).isNull();
+	}
+
+	@Test
+	void fcRequestReachesOnlyTheTargetAndOnlyFromTheHost() throws Exception {
+		long memberId = hostWithAdmittedMember();
+
+		send(host, "{\"type\":\"fcRequest\",\"target\":" + memberId + ",\"kind\":\"FC\",\"friendsChat\":\"Zuk\"}");
+		JsonNode request = last(memberOut, "fcRequest");
+		assertThat(request.get("kind").asText()).isEqualTo("FC");
+		assertThat(request.get("friendsChat").asText()).isEqualTo("Zuk");
+		assertThat(request.get("host").asText()).isEqualTo("Host");
+
+		// A member cannot send prompts back at the host.
+		send(member, "{\"type\":\"fcRequest\",\"target\":1,\"kind\":\"FC\",\"friendsChat\":\"nope\"}");
+		assertThat(last(hostOut, "fcRequest")).isNull();
+	}
+
+	@Test
+	void hostTransferCommitMovesAuthoritativeHostStatus() throws Exception {
+		long memberId = hostWithAdmittedMember();
+		long hostId = last(hostOut, "welcome").get("memberId").asLong();
+
+		send(host, "{\"type\":\"transferHost\",\"kind\":\"OFFER\",\"target\":" + memberId
+			+ ",\"newHostKey\":\"k\",\"newHostName\":\"Mem\",\"hostStays\":true}");
+		assertThat(last(memberOut, "transferHost").get("kind").asText()).isEqualTo("OFFER");
+
+		// ACCEPT is the one member-initiated step, addressed back at the host.
+		send(member, "{\"type\":\"transferHost\",\"kind\":\"ACCEPT\",\"target\":" + hostId + "}");
+		assertThat(last(hostOut, "transferHost").get("kind").asText()).isEqualTo("ACCEPT");
+
+		send(host, "{\"type\":\"transferHost\",\"kind\":\"COMMIT\",\"target\":" + memberId
+			+ ",\"newHostKey\":\"k\",\"hostStays\":true}");
+		JsonNode roster = last(memberOut, "roster");
+		assertThat(statusOf(roster, memberId)).isEqualTo("HOST");
+		assertThat(statusOf(roster, hostId)).isEqualTo("MEMBER");
+		assertThat(roster.get("host").asText()).isEqualTo("Mem");
+	}
+
+	@Test
+	void hostTransferCommitDropsTheOldHostWhenItDoesNotStay() throws Exception {
+		long memberId = hostWithAdmittedMember();
+		long hostId = last(hostOut, "welcome").get("memberId").asLong();
+
+		send(host, "{\"type\":\"transferHost\",\"kind\":\"COMMIT\",\"target\":" + memberId
+			+ ",\"hostStays\":false}");
+
+		JsonNode roster = last(memberOut, "roster");
+		assertThat(roster.get("members")).hasSize(1);
+		assertThat(statusOf(roster, memberId)).isEqualTo("HOST");
+		assertThat(statusOf(roster, hostId)).isNull();
+	}
+
+	@Test
 	void hostLeavingClosesTheRoomForMembers() throws Exception {
 		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
@@ -129,6 +213,13 @@ class PartyV2HandlerTest {
 	}
 
 	// ---- helpers ------------------------------------------------------------
+
+	/** Host a room and admit one member (an invited joiner is seated straight away); returns its id. */
+	private long hostWithAdmittedMember() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		return last(memberOut, "welcome").get("memberId").asLong();
+	}
 
 	private void send(WebSocketSession session, String json) throws Exception {
 		handler.handleTextMessage(session, new TextMessage(json));

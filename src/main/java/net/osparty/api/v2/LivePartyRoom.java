@@ -143,6 +143,95 @@ final class LivePartyRoom {
 		}
 	}
 
+	/** Anyone may start a ready check; peers show the prompt and count the starter as already ready. */
+	void readyStart(long memberId, long checkId, String starter) {
+		synchronized (lock) {
+			if (!isAdmitted(memberId)) {
+				return;
+			}
+			broadcast(Outbound.readyStart(memberId, checkId, starter), memberId);
+		}
+	}
+
+	void ready(long memberId, long checkId) {
+		synchronized (lock) {
+			if (!isAdmitted(memberId)) {
+				return;
+			}
+			broadcast(Outbound.ready(memberId, checkId), memberId);
+		}
+	}
+
+	/** A defence-draining spec landed; peers merge it into their own defence tracker. */
+	void specDrain(long memberId, int npcIndex, String weapon, int hit, int world) {
+		synchronized (lock) {
+			if (!isAdmitted(memberId)) {
+				return;
+			}
+			broadcast(Outbound.specDrain(memberId, npcIndex, weapon, hit, world), memberId);
+		}
+	}
+
+	/** Host → one member: a join prompt (FC / notice board / obelisk). Delivered only to the target. */
+	void fcRequest(long actorMemberId, long targetMemberId, String kind, String friendsChat) {
+		synchronized (lock) {
+			if (actorMemberId != hostMemberId) {
+				return;
+			}
+			WebSocketSession target = sessions.get(targetMemberId);
+			if (target != null) {
+				send(target, Outbound.fcRequest(actorMemberId, hostName, kind, friendsChat));
+			}
+		}
+	}
+
+	/**
+	 * One step of the host-transfer handshake (PARTY_V2_MIGRATION.md §16 R8), relayed only to the member it
+	 * is aimed at. OFFER/COMMIT/ABORT come from the host; ACCEPT comes from the offered member and is
+	 * addressed back at the host. On COMMIT the server also moves the authoritative HOST status: the target
+	 * becomes host and the old host stays on as a member, or is dropped when {@code hostStays} is false.
+	 */
+	void transferHost(long actorMemberId, long targetMemberId, String kind, String newHostKey,
+		String newHostName, boolean hostStays) {
+		synchronized (lock) {
+			boolean fromHost = actorMemberId == hostMemberId;
+			// Only the host drives the handshake; the sole member-initiated step is ACCEPT, back at the host.
+			if (!fromHost && !("ACCEPT".equals(kind) && targetMemberId == hostMemberId)) {
+				return;
+			}
+			MemberState target = members.get(targetMemberId);
+			if (target == null) {
+				return;
+			}
+			WebSocketSession session = sessions.get(targetMemberId);
+			if (session != null) {
+				send(session, Outbound.transferHost(actorMemberId, kind, newHostKey, newHostName, hostStays));
+			}
+			if (fromHost && "COMMIT".equals(kind)) {
+				applyHostHandover(actorMemberId, target, hostStays);
+			}
+		}
+	}
+
+	/** Move HOST status to {@code target}; the old host stays a member or leaves. Call under lock. */
+	private void applyHostHandover(long oldHostMemberId, MemberState target, boolean hostStays) {
+		MemberState oldHost = members.get(oldHostMemberId);
+		target.status = MemberState.Status.HOST;
+		hostMemberId = target.memberId;
+		hostName = target.name;
+		if (oldHost != null) {
+			if (hostStays) {
+				oldHost.status = MemberState.Status.MEMBER;
+			}
+			else {
+				members.remove(oldHostMemberId);
+				sessions.remove(oldHostMemberId);
+				broadcast(Outbound.memberLeft(oldHostMemberId), null);
+			}
+		}
+		broadcastRoster();
+	}
+
 	void setCapacity(long actorMemberId, int capacity) {
 		synchronized (lock) {
 			if (actorMemberId == hostMemberId && capacity > 0 && capacity != this.capacity) {
@@ -198,6 +287,12 @@ final class LivePartyRoom {
 	}
 
 	// ---- internals (call under lock) ----------------------------------------
+
+	/** Whether {@code memberId} is seated and past admission (host or member, not a pending applicant). */
+	private boolean isAdmitted(long memberId) {
+		MemberState member = members.get(memberId);
+		return member != null && member.status != MemberState.Status.PENDING;
+	}
 
 	/** Whether another applicant can be admitted (host + admitted < capacity, or uncapped). */
 	private boolean canAdmit() {

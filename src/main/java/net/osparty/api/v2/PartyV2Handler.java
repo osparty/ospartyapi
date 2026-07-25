@@ -103,6 +103,40 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			case "setDiscord":
 				withRoom(ctx, room -> room.setDiscordUrl(ctx.memberId, in.url()));
 				break;
+			case "readyStart":
+				withRoom(ctx, room -> {
+					if (in.checkId() != null) {
+						room.readyStart(ctx.memberId, in.checkId(), in.starter());
+					}
+				});
+				break;
+			case "ready":
+				withRoom(ctx, room -> {
+					if (in.checkId() != null) {
+						room.ready(ctx.memberId, in.checkId());
+					}
+				});
+				break;
+			case "specDrain":
+				withRoom(ctx, room -> room.specDrain(ctx.memberId,
+					in.npcIndex() == null ? -1 : in.npcIndex(), in.weapon(),
+					in.hit() == null ? 0 : in.hit(), in.world() == null ? 0 : in.world()));
+				break;
+			case "fcRequest":
+				withRoom(ctx, room -> {
+					if (in.target() != null) {
+						room.fcRequest(ctx.memberId, in.target(), in.kind(), in.friendsChat());
+					}
+				});
+				break;
+			case "transferHost":
+				withRoom(ctx, room -> {
+					if (in.target() != null && in.kind() != null) {
+						room.transferHost(ctx.memberId, in.target(), in.kind(), in.newHostKey(),
+							in.newHostName(), Boolean.TRUE.equals(in.hostStays()));
+					}
+				});
+				break;
 			case "leave":
 				handleLeave(ctx);
 				break;

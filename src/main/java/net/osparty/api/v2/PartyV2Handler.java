@@ -205,6 +205,13 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			// Not hosted here: another node may own it, it may be mid-handover, or it may simply not exist.
 			manager.owner(in.room()).ifPresentOrElse(
 				owner -> {
+					if (manager.nodeId().equals(owner.nodeId())) {
+						// We hold the lock but not the room: this node reclaimed it from a dead owner and is
+						// waiting for the host to rebuild it. Redirecting here would point the client back at
+						// the node it is already talking to, which it would rightly ignore — so defer.
+						deferUntilHostReturns(ctx, in.room());
+						return;
+					}
 					manager.recordRedirect();
 					log.info("Party V2 redirect: session={} room={} -> {}",
 						ctx.session.getId(), in.room(), owner.nodeId());
@@ -231,14 +238,19 @@ public class PartyV2Handler extends TextWebSocketHandler {
 	 */
 	private void sendUnowned(Ctx ctx, String room) {
 		if (manager.handoverPending(room)) {
-			manager.recordOwnerPending();
-			log.info("Party V2 join during handover: session={} room={} — retry in {}ms",
-				ctx.session.getId(), room, HANDOVER_RETRY_MS);
-			send(ctx, Outbound.ownerPending(HANDOVER_RETRY_MS));
+			deferUntilHostReturns(ctx, room);
 			return;
 		}
 		log.info("Party V2 join refused: session={} room={} — no such room", ctx.session.getId(), room);
 		send(ctx, Outbound.error("no room"));
+	}
+
+	/** Tell a joiner the room is coming back and to try again shortly. */
+	private void deferUntilHostReturns(Ctx ctx, String room) {
+		manager.recordOwnerPending();
+		log.info("Party V2 join deferred: session={} room={} — awaiting host, retry in {}ms",
+			ctx.session.getId(), room, HANDOVER_RETRY_MS);
+		send(ctx, Outbound.ownerPending(HANDOVER_RETRY_MS));
 	}
 
 	private void handlePing(Ctx ctx, Inbound in) {

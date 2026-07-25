@@ -1,12 +1,16 @@
 package net.osparty.api.v2;
 
 import java.time.Duration;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -39,6 +43,10 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 	private static final Duration HANDOVER = Duration.ofSeconds(15);
 	private static final long HANDOVER_MS = HANDOVER.toMillis();
 	private static final long PARTY_TTL_MS = TTL.plus(HANDOVER).toMillis();
+
+	/** Keys per SCAN round-trip, and the most rooms one node will take over in a single scan. */
+	private static final int SCAN_BATCH = 256;
+	private static final int MAX_RECLAIMS_PER_SCAN = 50;
 
 	/** Bump the owner-lock + party-hash TTLs only if this node still owns the lock. */
 	private static final RedisScript<Long> RENEW = new DefaultRedisScript<>(
@@ -132,6 +140,38 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 			log.debug("Party V2 handoverPending({}) failed: {}", room, e.toString());
 			return false;
 		}
+	}
+
+	@Override
+	public Set<String> reclaimExpired() {
+		Set<String> claimed = new LinkedHashSet<>();
+		try (Cursor<String> cursor = redis.scan(ScanOptions.scanOptions()
+			.match(PARTY_PREFIX + "*").count(SCAN_BATCH).build())) {
+			while (cursor.hasNext()) {
+				String room = cursor.next().substring(PARTY_PREFIX.length());
+				if (Boolean.TRUE.equals(redis.hasKey(OWNER_PREFIX + room))) {
+					continue;
+				}
+				// Deliberately not claim(): that rewrites the party hash and pushes its TTL out. A reclaimed
+				// room holds no LivePartyRoom, so nothing renews its lock — it expires, the next scan
+				// re-claims, and a refreshed hash would keep a party nobody returned to alive forever. The
+				// hash's untouched TTL is the deadline: miss it and the room is genuinely gone.
+				if (Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(OWNER_PREFIX + room, nodeId, TTL))) {
+					claimed.add(room);
+				}
+				if (claimed.size() >= MAX_RECLAIMS_PER_SCAN) {
+					// Bounded so one node cannot absorb an entire dead cluster's rooms in a single pass;
+					// the rest are picked up on the next scan, by whichever node gets there first.
+					log.info("Party V2 reclaim: hit the {}-room cap, leaving the rest for the next scan",
+						MAX_RECLAIMS_PER_SCAN);
+					break;
+				}
+			}
+		}
+		catch (Exception e) {
+			log.debug("Party V2 reclaim scan failed: {}", e.toString());
+		}
+		return claimed;
 	}
 
 	@Override

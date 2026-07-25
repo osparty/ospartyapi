@@ -19,6 +19,10 @@ import org.springframework.stereotype.Component;
  *
  * <p>Renews well inside the 30 s TTL so a transient Redis blip doesn't drop a still-live owner. Skipped in
  * the {@code test} profile (single-node ownership never expires).
+ *
+ * <p>The same schedule also runs the reclaim scan: rooms whose owner died without draining are taken over
+ * here, so a party has a settled destination to reconnect to rather than one decided by whichever client
+ * happens to re-host first.
  */
 @Component
 @Profile("!test")
@@ -48,6 +52,21 @@ public class PartyV2Heartbeat implements SmartLifecycle {
 				manager.drain(room, false);
 			}
 		}
+	}
+
+	/**
+	 * Take over rooms whose owner died without draining (PARTY_V2_MIGRATION.md §10). Every node scans, and
+	 * the {@code SET NX} decides — so the room gets exactly one new owner however many nodes are looking.
+	 *
+	 * <p>Skipped once this node is shutting down: {@link #stop} has just handed its rooms over, and a scan
+	 * running between that and process exit would claim them straight back onto a node that is leaving.
+	 */
+	@Scheduled(fixedRate = 30_000)
+	void reclaimExpired() {
+		if (!running) {
+			return;
+		}
+		manager.reclaimExpired();
 	}
 
 	@Override

@@ -24,6 +24,7 @@ class PartyV2HandlerTest {
 	private final ObjectMapper mapper = new ObjectMapper();
 	private PartyV2Handler handler;
 	private PartyV2Manager manager;
+	private LocalPartyV2Bus bus;
 
 	private WebSocketSession host;
 	private WebSocketSession member;
@@ -33,7 +34,8 @@ class PartyV2HandlerTest {
 	@BeforeEach
 	void setUp() {
 		NodeIdentity node = new NodeIdentity("node-a", true);
-		manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node);
+		bus = new LocalPartyV2Bus();
+		manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node, bus);
 		handler = new PartyV2Handler(manager, mapper);
 		hostOut = new ArrayList<>();
 		memberOut = new ArrayList<>();
@@ -139,8 +141,12 @@ class PartyV2HandlerTest {
 			public boolean handoverPending(String room) {
 				return false;
 			}
+
+			public java.util.Set<String> reclaimExpired() {
+				return java.util.Set.of();
+			}
 		};
-		PartyV2Manager manager = new PartyV2Manager(mapper, flaky, node);
+		PartyV2Manager manager = new PartyV2Manager(mapper, flaky, node, new LocalPartyV2Bus());
 		PartyV2Handler fenced = new PartyV2Handler(manager, mapper);
 		fenced.afterConnectionEstablished(host);
 		fenced.afterConnectionEstablished(member);
@@ -200,8 +206,13 @@ class PartyV2HandlerTest {
 			public boolean handoverPending(String room) {
 				return false;
 			}
+
+			public java.util.Set<String> reclaimExpired() {
+				return java.util.Set.of();
+			}
 		};
-		PartyV2Handler redirecting = new PartyV2Handler(new PartyV2Manager(mapper, foreign, node), mapper);
+		PartyV2Handler redirecting = new PartyV2Handler(
+			new PartyV2Manager(mapper, foreign, node, new LocalPartyV2Bus()), mapper);
 		List<String> out = new ArrayList<>();
 		WebSocketSession joiner = session("joiner", out);
 		redirecting.afterConnectionEstablished(joiner);
@@ -343,6 +354,80 @@ class PartyV2HandlerTest {
 		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222,\"invited\":true}");
 		assertThat(last(memberOut, "welcome")).isNotNull();
 		assertThat(last(memberOut, "welcome").get("status").asText()).isEqualTo("MEMBER");
+	}
+
+	/**
+	 * A room whose owner died is taken over by the scan, and the takeover settles where everyone goes: the
+	 * reclaiming node holds the lock, defers joiners until the host rebuilds the room, then seats them.
+	 */
+	@Test
+	void reclaimTakesOverAnExpiredRoomAndWaitsForItsHost() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
+		// The owner goes away without ending the party.
+		manager.drain("r", true);
+		assertThat(manager.roomCount()).isZero();
+
+		assertThat(manager.reclaimExpired()).containsExactly("r");
+		assertThat(manager.reclaimCount()).isEqualTo(1);
+		// The lock is held here, but the room itself only comes back with its host.
+		assertThat(manager.owner("r")).map(PartyOwnershipService.Owner::nodeId).contains("node-a");
+		assertThat(manager.roomCount()).isZero();
+
+		// A joiner reaching the new owner before the host must be deferred, never redirected to this very
+		// node — a self-redirect is a dead end the client would ignore.
+		memberOut.clear();
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\"}");
+		assertThat(last(memberOut, "ownerPending")).isNotNull();
+		assertThat(last(memberOut, "redirect")).isNull();
+		assertThat(last(memberOut, "error")).isNull();
+
+		// The host returns and rebuilds the room on the node that reclaimed it.
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
+		memberOut.clear();
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		assertThat(last(memberOut, "welcome").get("status").asText()).isEqualTo("MEMBER");
+	}
+
+	/** A claim announced by another node drops this node's copy of the room immediately. */
+	@Test
+	void busOwnerChangedDrainsARoomWeNoLongerOwn() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		assertThat(manager.roomCount()).isEqualTo(1);
+
+		bus.listener().onOwnerChanged("r", "node-b");
+
+		assertThat(manager.roomCount()).isZero();
+		assertThat(manager.failoverCount()).isEqualTo(1);
+		assertThat(last(hostOut, "ownerChanged")).isNotNull();
+		assertThat(last(memberOut, "ownerChanged")).isNotNull();
+	}
+
+	/** Signals about rooms this node does not serve are other nodes' business. */
+	@Test
+	void busIgnoresSignalsForRoomsWeDoNotServe() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+
+		bus.listener().onOwnerChanged("someone-elses-room", "node-b");
+		bus.listener().onForceReconnect("someone-elses-room");
+
+		assertThat(manager.roomCount()).isEqualTo(1);
+		assertThat(manager.failoverCount()).isZero();
+	}
+
+	/** Force-reconnect hands the room over: members are sent off and the lock is released for the taking. */
+	@Test
+	void busForceReconnectDrainsAndReleasesTheRoom() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+
+		bus.listener().onForceReconnect("r");
+
+		assertThat(manager.roomCount()).isZero();
+		assertThat(last(memberOut, "ownerChanged")).isNotNull();
+		// Released for handover, so the room is claimable again rather than simply gone.
+		assertThat(manager.owner("r")).isEmpty();
+		assertThat(manager.handoverPending("r")).isTrue();
 	}
 
 	/** A room that ended (host left, room discarded) is gone, not in transit. */

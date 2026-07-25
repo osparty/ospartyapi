@@ -6,6 +6,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -20,19 +22,61 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class PartyV2Manager {
+	private static final Logger log = LoggerFactory.getLogger(PartyV2Manager.class);
+
 	private final ObjectMapper mapper;
 	private final PartyOwnershipService ownership;
 	private final NodeIdentity node;
+	private final PartyV2Bus bus;
 	private final Map<String, LivePartyRoom> rooms = new ConcurrentHashMap<>();
 	private final AtomicLong memberIds = new AtomicLong();
 	private final java.util.concurrent.atomic.LongAdder redirects = new java.util.concurrent.atomic.LongAdder();
 	private final java.util.concurrent.atomic.LongAdder failovers = new java.util.concurrent.atomic.LongAdder();
 	private final java.util.concurrent.atomic.LongAdder ownerPending = new java.util.concurrent.atomic.LongAdder();
+	private final java.util.concurrent.atomic.LongAdder reclaims = new java.util.concurrent.atomic.LongAdder();
 
-	public PartyV2Manager(ObjectMapper mapper, PartyOwnershipService ownership, NodeIdentity node) {
+	public PartyV2Manager(ObjectMapper mapper, PartyOwnershipService ownership, NodeIdentity node,
+		PartyV2Bus bus) {
 		this.mapper = mapper;
 		this.ownership = ownership;
 		this.node = node;
+		this.bus = bus;
+		// Control signals from other nodes act on the rooms held here, so the bus calls back into us.
+		bus.setListener(new PartyV2Bus.Listener() {
+			@Override
+			public void onOwnerChanged(String room, String nodeId) {
+				ownerChangedElsewhere(room, nodeId);
+			}
+
+			@Override
+			public void onForceReconnect(String room) {
+				forceReconnect(room);
+			}
+		});
+	}
+
+	/**
+	 * Another node claimed a room. If we were still serving it, we have lost it — drain now rather than
+	 * waiting for the next renewal to fail, which is up to a full heartbeat interval of members sending
+	 * state to a node that no longer owns their party.
+	 */
+	private void ownerChangedElsewhere(String room, String nodeId) {
+		if (!rooms.containsKey(room)) {
+			return;
+		}
+		log.info("Party V2: {} claimed by {}, draining here", room, nodeId);
+		recordFailover();
+		// The lock is already theirs — releasing it would delete a lock we no longer hold.
+		drain(room, false);
+	}
+
+	/** Operator-driven: stop serving a room and send its members to reconnect wherever they land. */
+	private void forceReconnect(String room) {
+		if (!rooms.containsKey(room)) {
+			return;
+		}
+		log.info("Party V2: force-reconnect for {}", room);
+		drain(room, true);
 	}
 
 	/** A fresh, process-unique member id assigned to a connecting client. */
@@ -54,8 +98,14 @@ public class PartyV2Manager {
 		if (existing != null) {
 			return existing;
 		}
-		if (ownership.claim(id) == PartyOwnershipService.Claim.OWNED_BY_OTHER) {
+		PartyOwnershipService.Claim claim = ownership.claim(id);
+		if (claim == PartyOwnershipService.Claim.OWNED_BY_OTHER) {
 			return null;
+		}
+		if (claim == PartyOwnershipService.Claim.CLAIMED) {
+			// A fresh claim may be a takeover from a node that died holding this room. Tell the cluster, so
+			// a node still serving it stops now instead of on its next failed renewal.
+			bus.publishOwnerChanged(id, node.nodeId());
 		}
 		return rooms.computeIfAbsent(id, k -> new LivePartyRoom(id, activityId, mapper));
 	}
@@ -114,6 +164,28 @@ public class PartyV2Manager {
 		return ownership.handoverPending(id);
 	}
 
+	/**
+	 * Take ownership of rooms whose owner died without draining (PARTY_V2_MIGRATION.md §10), and announce
+	 * each takeover on the bus.
+	 *
+	 * <p>No {@link LivePartyRoom} is created: the live state died with the old owner, and an empty room here
+	 * would be renewed by the heartbeat forever whether or not anyone came back for it. Holding only the
+	 * lock makes this node the room's single answer to {@code lookup} — the host is redirected here and
+	 * rebuilds the room with its {@code host} frame, members are told to retry until it does — and if
+	 * nobody returns, the unrenewed lock simply expires again.
+	 *
+	 * @return the rooms this node took over.
+	 */
+	Set<String> reclaimExpired() {
+		Set<String> claimed = ownership.reclaimExpired();
+		for (String room : claimed) {
+			reclaims.increment();
+			log.info("Party V2: reclaimed {} from an expired owner", room);
+			bus.publishOwnerChanged(room, node.nodeId());
+		}
+		return claimed;
+	}
+
 	/** Ids of the rooms this node currently owns (for heartbeat renewal). */
 	Set<String> ownedRoomIds() {
 		return rooms.keySet();
@@ -156,5 +228,9 @@ public class PartyV2Manager {
 
 	public double ownerPendingCount() {
 		return ownerPending.sum();
+	}
+
+	public double reclaimCount() {
+		return reclaims.sum();
 	}
 }

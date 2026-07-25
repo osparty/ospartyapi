@@ -1,6 +1,7 @@
 package net.osparty.api.v2;
 
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Party V2 ownership: which node owns a given live-party room (PARTY_V2_MIGRATION.md §5/§10). A room is
@@ -51,4 +52,18 @@ public interface PartyOwnershipService {
 	 * the host has yet to re-claim it. Only meaningful when {@link #lookup} came back empty.
 	 */
 	boolean handoverPending(String room);
+
+	/**
+	 * Claim every room whose metadata is still present but whose owner lock has expired — its owner died
+	 * without draining (PARTY_V2_MIGRATION.md §10). Every node runs this scan and races on the same
+	 * {@code SET NX}, so exactly one wins each room.
+	 *
+	 * <p>Winning makes this node the room's answer to {@code lookup} — a fixed destination for the host and
+	 * members to reconnect to, instead of each of them racing to claim it from wherever they happen to
+	 * land. The room's live state is not restored and cannot be: it lived only in the dead node's memory.
+	 * The clients bring it back when they arrive.
+	 *
+	 * @return the rooms newly claimed by this node.
+	 */
+	Set<String> reclaimExpired();
 }

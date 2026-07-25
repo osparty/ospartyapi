@@ -1,5 +1,6 @@
 package net.osparty.api.v2;
 
+import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -63,5 +64,14 @@ public class LocalPartyOwnershipService implements PartyOwnershipService {
 	@Override
 	public boolean handoverPending(String room) {
 		return handingOver.contains(room);
+	}
+
+	@Override
+	public Set<String> reclaimExpired() {
+		// Single-node: a room with no owner is one this node handed over and nobody took back. There is no
+		// other node that could have claimed it in the meantime, so every one of them is ours to reclaim.
+		Set<String> claimed = new LinkedHashSet<>(handingOver);
+		claimed.forEach(this::claim);
+		return claimed;
 	}
 }

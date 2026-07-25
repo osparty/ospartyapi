@@ -37,6 +37,9 @@ public class PartyV2MetricsConfig {
 			FunctionCounter.builder("osparty.partyv2.ownerpending", manager, PartyV2Manager::ownerPendingCount)
 				.description("Joins deferred because the room was mid-handover (host had not re-claimed yet)")
 				.register(registry);
+			FunctionCounter.builder("osparty.partyv2.reclaims", manager, PartyV2Manager::reclaimCount)
+				.description("Rooms taken over by this node after their owner expired")
+				.register(registry);
 		};
 	}
 }

@@ -1,0 +1,96 @@
+# Dev environment: a second, fully isolated copy of the API next to prod, used to exercise the Party V2
+# work that needs more than one pod — node-hint routing, redirect, ownership failover, drain across a
+# rolling deploy (PARTY_V2_MIGRATION.md P2/P4).
+#
+# Isolation from prod is by namespace: its own Redis (so both the ad board's `party:` keys and V2's `pv2:`
+# keys are separate), its own ingress host, its own image tag. Prod is untouched by anything deployed here.
+#
+# One manual step before the first deploy — the base mounts the `osparty-api-env` secret, so the namespace
+# needs its own copy (the Redis StatefulSet reads SPRING_DATA_REDIS_PASSWORD from it too):
+#
+#   kubectl create namespace osparty-dev
+#   kubectl -n osparty-dev create secret generic osparty-api-env \
+#     --from-literal=SPRING_DATA_REDIS_PASSWORD="$(openssl rand -hex 24)"
+#
+# Discord is left unset here, so dev never calls the prod Discord service.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: osparty-dev
+resources:
+  - namespace.yaml
+  - ../../base
+images:
+  - name: ghcr.io/osparty/osparty-api
+    newTag: latest
+patches:
+  # Party V2 on, and every pod told its own identity: NodeIdentity reads app.party-v2.node-id and uses it
+  # as the routing key stamped into pv2:owner:{room} and returned in redirect frames.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: osparty-api
+      spec:
+        replicas: 2
+        template:
+          spec:
+            containers:
+              - name: api
+                env:
+                  - name: APP_PARTY_V2_ENABLED
+                    value: "true"
+                  - name: APP_PARTY_V2_NODE_ID
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.name
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 512Mi
+                  limits:
+                    memory: 1Gi
+  - patch: |-
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: osparty-api
+      spec:
+        tls:
+          - hosts:
+              - dev-api.osparty.net
+            secretName: osparty-api-dev-tls
+        rules:
+          - host: dev-api.osparty.net
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api
+                      port:
+                        name: http
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: redis
+      spec:
+        template:
+          spec:
+            containers:
+              - name: redis
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    memory: 256Mi
+  # Drop the dashboard ConfigMap here: the Grafana sidecar watches all namespaces, so a second copy would
+  # fight with prod's over the same dashboard uid. Dev metrics still scrape via the ServiceMonitors.
+  - patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: grafana-dashboard-osparty-api
+      $patch: delete

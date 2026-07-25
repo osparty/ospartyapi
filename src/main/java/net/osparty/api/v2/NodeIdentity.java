@@ -1,6 +1,7 @@
 package net.osparty.api.v2;
 
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -18,6 +19,7 @@ import org.springframework.stereotype.Component;
 public class NodeIdentity {
 	private final String nodeId;
 
+	@Autowired
 	public NodeIdentity(@Value("${app.party-v2.node-id:${POD_NAME:}}") String configured) {
 		this.nodeId = (configured == null || configured.isBlank())
 			? UUID.randomUUID().toString().substring(0, 12)

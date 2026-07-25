@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Which environment to deploy. dev is the isolated osparty-dev namespace (own Redis, dev-api.osparty.net, Party V2 enabled).'
+        description: 'Which environment to deploy. dev is the isolated osparty-dev namespace (own Redis, testing.osparty.net, Party V2 enabled).'
         type: choice
         options: [prod, dev]
         default: prod

@@ -3,7 +3,8 @@
 # rolling deploy (PARTY_V2_MIGRATION.md P2/P4).
 #
 # Isolation from prod is by namespace: its own Redis (so both the ad board's `party:` keys and V2's `pv2:`
-# keys are separate), its own ingress host, its own image tag. Prod is untouched by anything deployed here.
+# keys are separate), its own ingress host (testing.osparty.net), its own image tag. Prod is untouched by
+# anything deployed here.
 #
 # One manual step before the first deploy — the base mounts the `osparty-api-env` secret, so the namespace
 # needs its own copy (the Redis StatefulSet reads SPRING_DATA_REDIS_PASSWORD from it too):
@@ -57,10 +58,10 @@ patches:
       spec:
         tls:
           - hosts:
-              - dev-api.osparty.net
-            secretName: osparty-api-dev-tls
+              - testing.osparty.net
+            secretName: osparty-api-testing-tls
         rules:
-          - host: dev-api.osparty.net
+          - host: testing.osparty.net
             http:
               paths:
                 - path: /

@@ -75,6 +75,25 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 			+ "return 1 else return 0 end",
 		Long.class);
 
+	/**
+	 * Write the party hash and its TTL together. Two calls could not do this: a failure between them --
+	 * a Redis blip, or the node dying between the writes -- left a hash with no expiry, and a hash with no
+	 * expiry never goes away. The reclaim scan treats any owner-less hash as a room to take over, so one
+	 * such key becomes a permanent loop: claim the lock, let it expire, re-claim on the next scan, forever,
+	 * with {@link #lookup} naming a node that owns no room the whole time.
+	 */
+	private static final RedisScript<Long> WRITE_META = new DefaultRedisScript<>(
+		"redis.call('hset', KEYS[1], 'owner', ARGV[1], 'createdAt', ARGV[2]); "
+			+ "redis.call('pexpire', KEYS[1], ARGV[3]); "
+			+ "return 1",
+		Long.class);
+
+	/** Give an owner-less hash the expiry it should have been written with. See {@link #WRITE_META}. */
+	private static final RedisScript<Long> REPAIR_META_TTL = new DefaultRedisScript<>(
+		"if redis.call('exists', KEYS[1]) == 1 and redis.call('pttl', KEYS[1]) < 0 then "
+			+ "redis.call('pexpire', KEYS[1], ARGV[1]); return 1 else return 0 end",
+		Long.class);
+
 	private final StringRedisTemplate redis;
 	private final String nodeId;
 
@@ -148,9 +167,17 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 		try (Cursor<String> cursor = redis.scan(ScanOptions.scanOptions()
 			.match(PARTY_PREFIX + "*").count(SCAN_BATCH).build())) {
 			while (cursor.hasNext()) {
-				String room = cursor.next().substring(PARTY_PREFIX.length());
+				String key = cursor.next();
+				String room = key.substring(PARTY_PREFIX.length());
 				if (Boolean.TRUE.equals(redis.hasKey(OWNER_PREFIX + room))) {
 					continue;
+				}
+				// A hash written before the atomic WRITE_META, or by a node that died between its two writes, can
+				// have no expiry at all. Left alone it is re-claimed on every scan for the life of the cluster.
+				// Give it the deadline it should have had and let it expire on its own.
+				Long repaired = redis.execute(REPAIR_META_TTL, List.of(key), Long.toString(PARTY_TTL_MS));
+				if (repaired != null && repaired == 1L) {
+					log.warn("Party V2 reclaim: {} had no expiry; applied one", room);
 				}
 				// Deliberately not claim(): that rewrites the party hash and pushes its TTL out. A reclaimed
 				// room holds no LivePartyRoom, so nothing renews its lock — it expires, the next scan
@@ -207,14 +234,15 @@ public class RedisPartyOwnershipService implements PartyOwnershipService {
 		}
 	}
 
+	/**
+	 * Write the room's party hash. It outlives the lock by the handover window (see HANDOVER): the hash is
+	 * what marks a room as "in transit" once its owner is gone. Written atomically with its expiry -- see
+	 * {@link #WRITE_META} for why that matters.
+	 */
 	private void writePartyMeta(String room) {
 		try {
-			redis.opsForHash().putAll(PARTY_PREFIX + room, java.util.Map.of(
-				"owner", nodeId,
-				"createdAt", Long.toString(System.currentTimeMillis())));
-			// Outlives the lock by the handover window (see HANDOVER): the hash is what marks a room as
-			// "in transit" once its owner is gone.
-			redis.expire(PARTY_PREFIX + room, Duration.ofMillis(PARTY_TTL_MS));
+			redis.execute(WRITE_META, List.of(PARTY_PREFIX + room),
+				nodeId, Long.toString(System.currentTimeMillis()), Long.toString(PARTY_TTL_MS));
 		}
 		catch (Exception e) {
 			log.debug("Party V2 party-meta write failed for {}: {}", room, e.toString());

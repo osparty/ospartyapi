@@ -320,7 +320,9 @@ class PartyV2HandlerTest {
 		// reports open indefinitely and the room never empties. Traffic is the only honest signal.
 		PartyV2Manager impatient = new PartyV2Manager(
 			mapper, new LocalPartyOwnershipService(new NodeIdentity("node-a", true)),
-			new NodeIdentity("node-a", true), new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), 0L);
+			// -1 rather than 0: with a zero timeout a member stamped in the same millisecond as the sweep is
+			// not yet stale, which makes the assertion depend on the clock. Negative means "everything is".
+			new NodeIdentity("node-a", true), new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), -1L);
 		PartyV2Handler sweeping = new PartyV2Handler(impatient, mapper);
 		sweeping.afterConnectionEstablished(host);
 		sweeping.afterConnectionEstablished(member);

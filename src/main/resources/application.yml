@@ -12,6 +12,15 @@ spring:
     name: osrs-party-api
   jackson:
     default-property-inclusion: always
+  task:
+    scheduling:
+      # Spring defaults this to a single thread, which every @Scheduled job then shares. Party V2's
+      # ownership renewal runs every 10s and its reclaim scan every 30s, and both walk hundreds of rooms
+      # doing a Redis round trip each — so on one thread the scan delays the renewal. Miss the 30s lock TTL
+      # and the room is taken by another node, which is a real handover for every member of every party
+      # involved. A 14k-socket run lost ownership of 251 rooms this way with no pod ever restarting.
+      pool:
+        size: 4
   data:
     redis:
       host: localhost

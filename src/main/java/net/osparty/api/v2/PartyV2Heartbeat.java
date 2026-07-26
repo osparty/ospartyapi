@@ -50,7 +50,12 @@ public class PartyV2Heartbeat implements SmartLifecycle {
 				log.warn("Party V2: lost ownership of {}, draining", room);
 				manager.recordFailover();
 				manager.drain(room, false);
+				continue;
 			}
+			// Still ours: drop any member whose socket died without the close callback firing, and discard
+			// the room if that leaves it hostless. Nothing else prunes membership, so a missed callback
+			// otherwise strands a room here for the life of the node.
+			manager.pruneRoom(room);
 		}
 		// Unconditional, and after the drains so it reports what this node is actually still carrying. An
 		// idle node has to publish a load of zero or it never appears as a placement candidate — which is

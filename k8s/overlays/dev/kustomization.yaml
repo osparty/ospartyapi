@@ -91,11 +91,24 @@ patches:
                     memory: 64Mi
                   limits:
                     memory: 256Mi
-  # Drop the dashboard ConfigMap here: the Grafana sidecar watches all namespaces, so a second copy would
-  # fight with prod's over the same dashboard uid. Dev metrics still scrape via the ServiceMonitors.
+  # Drop the base dashboard here: the Grafana sidecar watches all namespaces, so a second copy would fight
+  # with prod's over the same dashboard uid. Dev gets its own instead — see configMapGenerator below.
   - patch: |-
       apiVersion: v1
       kind: ConfigMap
       metadata:
         name: grafana-dashboard-osparty-api
       $patch: delete
+# Dev's own dashboard (uid osparty-api-dev), scoped to this namespace and led by the Party V2 panels the
+# base dashboard has no reason to carry. Prod's queries are namespace-scoped to `osparty`, so the two
+# environments no longer land in each other's graphs — which they did while dev ran the same app name and
+# the same ServiceMonitors one namespace over.
+configMapGenerator:
+  - name: grafana-dashboard-osparty-api-dev
+    files:
+      - dashboards/osparty-api-dev.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+generatorOptions:
+  disableNameSuffixHash: true

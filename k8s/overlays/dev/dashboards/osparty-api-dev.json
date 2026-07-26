@@ -1,0 +1,671 @@
+{
+ "annotations": {
+  "list": []
+ },
+ "editable": true,
+ "graphTooltip": 1,
+ "schemaVersion": 39,
+ "title": "OSParty API - dev (Party V2)",
+ "uid": "osparty-api-dev",
+ "tags": [
+  "osparty",
+  "dev"
+ ],
+ "description": "Dev environment only (namespace osparty-dev). Leads with Party V2 because that is what this environment exists to prove: a room is owned by a single pod, so the per-pod split and the routing counters are the signal, not fleet totals. Production is on the osparty-api dashboard.",
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "refresh": "10s",
+ "templating": {
+  "list": []
+ },
+ "panels": [
+  {
+   "type": "row",
+   "title": "Party V2 (live rooms)",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "panels": []
+  },
+  {
+   "type": "stat",
+   "title": "Rooms owned (fleet)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 0,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    }
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(osparty_partyv2_rooms_owned{namespace=\"osparty-dev\",application=\"osrs-party-api\"})",
+     "legendFormat": "rooms"
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "Members in rooms (fleet)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 6,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    }
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(osparty_partyv2_members_connected{namespace=\"osparty-dev\",application=\"osrs-party-api\"})",
+     "legendFormat": "members"
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "API pods up",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 12,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    }
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(up{job=\"osparty-api\",namespace=\"osparty-dev\"})",
+     "legendFormat": "pods"
+    }
+   ],
+   "description": "StatefulSet replicas answering scrapes. Node-hint routing needs every pod individually reachable, so a missing one is not just lost capacity."
+  },
+  {
+   "type": "stat",
+   "title": "Ad-board sockets",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 18,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    }
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(osparty_ws_connections_active{namespace=\"osparty-dev\",application=\"osrs-party-api\"})",
+     "legendFormat": "connections"
+    }
+   ],
+   "description": "V1 ad-board connections. Zero when the load test runs -mode v2, which only opens live-party sockets."
+  },
+  {
+   "type": "timeseries",
+   "title": "Rooms owned per pod",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 7
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 20,
+      "stacking": {
+       "mode": "normal"
+      }
+     }
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (pod) (osparty_partyv2_rooms_owned{namespace=\"osparty-dev\",application=\"osrs-party-api\"})",
+     "legendFormat": "{{pod}}"
+    }
+   ],
+   "description": "A room lives entirely on its owner pod. Lopsided ownership means the claim order, not the load balancer, decides where the RAM goes."
+  },
+  {
+   "type": "timeseries",
+   "title": "Members connected per pod",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 7
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 20,
+      "stacking": {
+       "mode": "normal"
+      }
+     }
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (pod) (osparty_partyv2_members_connected{namespace=\"osparty-dev\",application=\"osrs-party-api\"})",
+     "legendFormat": "{{pod}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Routing & ownership events (per second)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 15
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 20
+     }
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(osparty_partyv2_redirects_total{namespace=\"osparty-dev\",application=\"osrs-party-api\"}[5m]))",
+     "legendFormat": "redirects"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(osparty_partyv2_ownerpending_total{namespace=\"osparty-dev\",application=\"osrs-party-api\"}[5m]))",
+     "legendFormat": "ownerPending (deferred joins)"
+    },
+    {
+     "refId": "C",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(osparty_partyv2_failovers_total{namespace=\"osparty-dev\",application=\"osrs-party-api\"}[5m]))",
+     "legendFormat": "failovers (ownership lost)"
+    },
+    {
+     "refId": "D",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(osparty_partyv2_reclaims_total{namespace=\"osparty-dev\",application=\"osrs-party-api\"}[5m]))",
+     "legendFormat": "reclaims (expired owner)"
+    }
+   ],
+   "description": "Redirects are normal - a client lands anywhere and is sent to the owner. A steady rate of failovers or reclaims with no deploy running is not: it means ownership locks are expiring under load."
+  },
+  {
+   "type": "row",
+   "title": "JVM & pod resources",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 23
+   },
+   "panels": []
+  },
+  {
+   "type": "timeseries",
+   "title": "JVM heap used % per pod",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 24
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 20
+     },
+     "unit": "percent"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "100 * sum by (pod) (jvm_memory_used_bytes{namespace=\"osparty-dev\",application=\"osrs-party-api\",area=\"heap\"}) / sum by (pod) (jvm_memory_max_bytes{namespace=\"osparty-dev\",application=\"osrs-party-api\",area=\"heap\"})",
+     "legendFormat": "{{pod}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "GC pause rate & live threads per pod",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 24
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 20
+     }
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (pod) (rate(jvm_gc_pause_seconds_sum{namespace=\"osparty-dev\",application=\"osrs-party-api\"}[5m]))",
+     "legendFormat": "GC s/s {{pod}}"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (pod) (jvm_threads_live_threads{namespace=\"osparty-dev\",application=\"osrs-party-api\"})",
+     "legendFormat": "threads {{pod}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Pod CPU (cores)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 32
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 20
+     }
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{job=\"kubelet\",metrics_path=\"/metrics/cadvisor\",container!=\"\",container!=\"POD\",namespace=\"osparty-dev\"}[5m]))",
+     "legendFormat": "{{pod}}"
+    }
+   ],
+   "description": "Requests are 100m with no CPU limit, so this can exceed the request freely - it is scheduling pressure, not throttling."
+  },
+  {
+   "type": "timeseries",
+   "title": "Pod memory (working set) vs limit",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 32
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 20
+     },
+     "unit": "bytes"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (pod) (container_memory_working_set_bytes{job=\"kubelet\",metrics_path=\"/metrics/cadvisor\",container!=\"\",container!=\"POD\",namespace=\"osparty-dev\"})",
+     "legendFormat": "{{pod}}"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "min(kube_pod_container_resource_limits{namespace=\"osparty-dev\",resource=\"memory\",container=\"api\"})",
+     "legendFormat": "limit"
+    }
+   ],
+   "description": "Live room state is held in RAM on the owner, so this is the capacity number for V2. The limit series is the ceiling a pod gets OOM-killed at."
+  },
+  {
+   "type": "row",
+   "title": "Redis (dev instance)",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 40
+   },
+   "panels": []
+  },
+  {
+   "type": "timeseries",
+   "title": "Redis command latency by command (avg)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 41
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 20
+     },
+     "unit": "s"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (command) (rate(lettuce_command_completion_seconds_sum{namespace=\"osparty-dev\",application=\"osrs-party-api\"}[5m])) / sum by (command) (rate(lettuce_command_completion_seconds_count{namespace=\"osparty-dev\",application=\"osrs-party-api\"}[5m]))",
+     "legendFormat": "{{command}}"
+    }
+   ],
+   "description": "Ownership claims and renewals are the V2 traffic here; the live-state hot path deliberately never touches Redis."
+  },
+  {
+   "type": "timeseries",
+   "title": "Redis server: memory & connected clients",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 41
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 20
+     }
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "redis_memory_used_bytes{namespace=\"osparty-dev\"}",
+     "legendFormat": "memory used"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "redis_connected_clients{namespace=\"osparty-dev\"}",
+     "legendFormat": "clients"
+    }
+   ]
+  },
+  {
+   "type": "row",
+   "title": "Logs",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 49
+   },
+   "panels": []
+  },
+  {
+   "type": "logs",
+   "title": "Dev API logs (Loki)",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "gridPos": {
+    "h": 12,
+    "w": 24,
+    "x": 0,
+    "y": 50
+   },
+   "options": {
+    "showTime": true,
+    "wrapLogMessage": true,
+    "sortOrder": "Descending",
+    "enableLogDetails": true,
+    "dedupStrategy": "none"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "{namespace=\"osparty-dev\"}"
+    }
+   ]
+  }
+ ]
+}

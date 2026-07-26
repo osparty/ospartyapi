@@ -27,6 +27,8 @@ final class LivePartyRoom {
 
 	final String id;
 	final String activityId;
+	/** The node this room lives on — a room only ever exists on its owner. Reported on every welcome. */
+	final String nodeId;
 
 	private final ObjectMapper mapper;
 	private final Object lock = new Object();
@@ -42,9 +44,10 @@ final class LivePartyRoom {
 	/** The host's advertised party settings, stored and relayed verbatim (see {@link #setMeta}). */
 	private JsonNode meta;
 
-	LivePartyRoom(String id, String activityId, ObjectMapper mapper) {
+	LivePartyRoom(String id, String activityId, String nodeId, ObjectMapper mapper) {
 		this.id = id;
 		this.activityId = activityId;
+		this.nodeId = nodeId;
 		this.mapper = mapper;
 	}
 
@@ -62,7 +65,7 @@ final class LivePartyRoom {
 			host.teacher = teacher;
 			members.put(memberId, host);
 			sessions.put(memberId, session);
-			send(session, Outbound.welcome(memberId, MemberState.Status.HOST.name()));
+			send(session, Outbound.welcome(memberId, MemberState.Status.HOST.name(), nodeId));
 			sendSnapshotTo(session, memberId);
 			broadcastRoster();
 		}
@@ -84,7 +87,7 @@ final class LivePartyRoom {
 			member.invited = invited;
 			members.put(memberId, member);
 			sessions.put(memberId, session);
-			send(session, Outbound.welcome(memberId, status.name()));
+			send(session, Outbound.welcome(memberId, status.name(), nodeId));
 			sendSnapshotTo(session, memberId);
 			broadcastRoster();
 		}

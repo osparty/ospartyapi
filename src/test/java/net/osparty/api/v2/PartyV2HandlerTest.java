@@ -53,6 +53,8 @@ class PartyV2HandlerTest {
 		JsonNode welcome = last(hostOut, "welcome");
 		assertThat(welcome).isNotNull();
 		assertThat(welcome.get("status").asText()).isEqualTo("HOST");
+		// Names the node that actually owns the room, which placement may have moved off the one we dialled.
+		assertThat(welcome.get("nodeId").asText()).isEqualTo("node-a");
 		long hostId = welcome.get("memberId").asLong();
 		assertThat(last(hostOut, "roster").get("members")).hasSize(1);
 

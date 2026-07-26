@@ -144,7 +144,7 @@ public class PartyV2Manager {
 			// a node still serving it stops now instead of on its next failed renewal.
 			bus.publishOwnerChanged(id, node.nodeId());
 		}
-		return rooms.computeIfAbsent(id, k -> new LivePartyRoom(id, activityId, mapper));
+		return rooms.computeIfAbsent(id, k -> new LivePartyRoom(id, activityId, node.nodeId(), mapper));
 	}
 
 	/** The existing room for {@code id}, or null if none is hosted here. */

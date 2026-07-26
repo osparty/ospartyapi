@@ -44,9 +44,15 @@ public record Outbound(
 	Long retryAfterMs,
 	JsonNode meta) {
 
-	/** Assigned identity + role on (re)join; followed by a {@code roster} and the current member states. */
-	public static Outbound welcome(long memberId, String status) {
-		return new Builder("welcome").memberId(memberId).status(status).build();
+	/**
+	 * Assigned identity + role on (re)join; followed by a {@code roster} and the current member states.
+	 *
+	 * <p>Carries the owning node's id so a client knows where it landed without having to be redirected
+	 * there first. Placement can send a new party to a node other than the one its host dialled, so "the
+	 * node I connected to" is not reliably "the node that owns my party".
+	 */
+	public static Outbound welcome(long memberId, String status, String nodeId) {
+		return new Builder("welcome").memberId(memberId).status(status).nodeId(nodeId).build();
 	}
 
 	/** The server-authoritative roster and room meta. Re-sent on any membership/status/meta change. */

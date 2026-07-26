@@ -90,8 +90,14 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			case "state":
 				withRoom(ctx, room -> room.updateState(ctx.memberId, in.state()));
 				break;
-			// The three parts of a split live update. Handled identically and relayed under the matching
-			// outbound type; what makes them different is the sender's business, not the room's.
+			// A live update carrying whichever parts changed. Its own type rather than `state` because the
+			// payload is partial, and a client from before the split must ignore it rather than read it as
+			// a whole snapshot.
+			case "update":
+				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberUpdate", in.state()));
+				break;
+			// The parts as separate frames. Superseded by `update` — coalescing them costs the same bytes
+			// and a third fewer sends — but still accepted for clients that have not caught up.
 			case "vitals":
 				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberVitals", in.state()));
 				break;

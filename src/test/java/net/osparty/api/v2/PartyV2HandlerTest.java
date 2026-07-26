@@ -72,14 +72,15 @@ class PartyV2HandlerTest {
 		assertThat(hostRoster.get("members")).hasSize(2);
 		assertThat(statusOf(hostRoster, memberId)).isEqualTo("PENDING");
 
-		// A live snapshot from the host is relayed to the member (not echoed to the sender).
-		int before = countOf(hostOut, "memberState");
+		// A live update from the host reaches the member on the next flush, and is not echoed back.
+		int before = countOf(hostOut, "memberUpdates");
 		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301,\"currentHp\":50}}");
-		JsonNode memberState = last(memberOut, "memberState");
-		assertThat(memberState).isNotNull();
-		assertThat(memberState.get("memberId").asLong()).isEqualTo(hostId);
-		assertThat(memberState.get("state").get("world").asInt()).isEqualTo(301);
-		assertThat(countOf(hostOut, "memberState")).isEqualTo(before);
+		manager.flushRooms();
+		JsonNode relayed = onlyUpdate(last(memberOut, "memberUpdates"));
+		assertThat(relayed).isNotNull();
+		assertThat(relayed.get("memberId").asLong()).isEqualTo(hostId);
+		assertThat(relayed.get("state").get("world").asInt()).isEqualTo(301);
+		assertThat(countOf(hostOut, "memberUpdates")).isEqualTo(before);
 
 		// Host admits the applicant -> server-authoritative status flips to MEMBER for everyone.
 		send(host, "{\"type\":\"command\",\"action\":\"ADMIT\",\"target\":" + memberId + "}");
@@ -112,13 +113,62 @@ class PartyV2HandlerTest {
 	void aJoinerIsNotReplayedStateSentBeforeItArrived() throws Exception {
 		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301}}");
+		manager.flushRooms();
 
 		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
-		assertThat(countOf(memberOut, "memberState")).isZero();
+		assertThat(countOf(memberOut, "memberUpdates")).isZero();
 
 		// The host answers the resync and the joiner is caught up.
 		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301}}");
-		assertThat(last(memberOut, "memberState").get("state").get("world").asInt()).isEqualTo(301);
+		manager.flushRooms();
+		assertThat(onlyUpdate(last(memberOut, "memberUpdates")).get("state").get("world").asInt()).isEqualTo(301);
+	}
+
+	/**
+	 * The point of aggregating: a window's updates from several members become <em>one</em> send each, not one
+	 * send per sender per recipient. With three members that is 3 sends instead of 6, and the saving grows
+	 * with the square of the party.
+	 */
+	@Test
+	void aWindowOfUpdatesCostsOneSendPerMember() throws Exception {
+		List<String> thirdOut = new ArrayList<>();
+		WebSocketSession third = session("third", thirdOut);
+		handler.afterConnectionEstablished(third);
+
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":5}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
+		send(third, "{\"type\":\"join\",\"room\":\"r\"}");
+		int hostBefore = countOf(hostOut, "memberUpdates");
+		int memberBefore = countOf(memberOut, "memberUpdates");
+
+		send(host, "{\"type\":\"update\",\"state\":{\"currentHp\":10}}");
+		send(member, "{\"type\":\"update\",\"state\":{\"currentHp\":20}}");
+		send(third, "{\"type\":\"update\",\"state\":{\"currentHp\":30}}");
+		manager.flushRooms();
+
+		// One frame each, not one per peer.
+		assertThat(countOf(hostOut, "memberUpdates")).isEqualTo(hostBefore + 1);
+		assertThat(countOf(memberOut, "memberUpdates")).isEqualTo(memberBefore + 1);
+		// And each carries the other two, never its own.
+		JsonNode hostFrame = last(hostOut, "memberUpdates").get("updates");
+		assertThat(hostFrame).hasSize(2);
+		long hostId = last(hostOut, "welcome").get("memberId").asLong();
+		for (JsonNode update : hostFrame) {
+			assertThat(update.get("memberId").asLong()).isNotEqualTo(hostId);
+		}
+	}
+
+	/** Nothing queued means nothing sent — the flush must not wake a quiet room. */
+	@Test
+	void flushingAQuietRoomSendsNothing() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
+		int before = memberOut.size();
+
+		manager.flushRooms();
+		manager.flushRooms();
+
+		assertThat(memberOut).hasSize(before);
 	}
 
 	/** A party re-forming seats several members at once; that must cost one round, not one round each. */
@@ -154,26 +204,48 @@ class PartyV2HandlerTest {
 	}
 
 	/**
-	 * A live update is split by how often each part changes, and each part keeps its own type end to end.
-	 * The room relays whichever arrived without knowing what any of them mean.
+	 * The normal live update: one frame carrying whichever parts changed, delivered on the next flush under
+	 * its own type so a client from before the split ignores it rather than reading a partial payload as a
+	 * whole snapshot.
 	 */
 	@Test
-	void splitUpdatesKeepTheirOwnTypesAndAreNotEchoed() throws Exception {
+	void aCoalescedUpdateIsRelayedWholeAndNotEchoed() throws Exception {
 		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
 		long hostId = last(hostOut, "welcome").get("memberId").asLong();
-		int echoed = countOf(hostOut, "memberVitals");
+		int echoed = countOf(hostOut, "memberUpdates");
+
+		send(host, "{\"type\":\"update\",\"state\":{\"currentHp\":31,\"inventory\":[995]}}");
+		manager.flushRooms();
+
+		JsonNode relayed = onlyUpdate(last(memberOut, "memberUpdates"));
+		assertThat(relayed.get("memberId").asLong()).isEqualTo(hostId);
+		assertThat(relayed.get("state").get("currentHp").asInt()).isEqualTo(31);
+		assertThat(relayed.get("state").get("inventory")).hasSize(1);
+		assertThat(countOf(hostOut, "memberUpdates")).isEqualTo(echoed);
+	}
+
+	@Test
+	void splitUpdatesAreStillAcceptedAndArriveTogether() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
+		long hostId = last(hostOut, "welcome").get("memberId").asLong();
+		int echoed = countOf(hostOut, "memberUpdates");
 
 		send(host, "{\"type\":\"vitals\",\"state\":{\"currentHp\":31}}");
 		send(host, "{\"type\":\"items\",\"state\":{\"inventory\":[995]}}");
 		send(host, "{\"type\":\"profile\",\"state\":{\"name\":\"Host\",\"world\":301}}");
+		manager.flushRooms();
 
-		assertThat(last(memberOut, "memberVitals").get("state").get("currentHp").asInt()).isEqualTo(31);
-		assertThat(last(memberOut, "memberItems").get("state").get("inventory")).hasSize(1);
-		assertThat(last(memberOut, "memberProfile").get("state").get("world").asInt()).isEqualTo(301);
-		assertThat(last(memberOut, "memberVitals").get("memberId").asLong()).isEqualTo(hostId);
+		// All three land in one frame, in order, rather than three sends.
+		JsonNode updates = last(memberOut, "memberUpdates").get("updates");
+		assertThat(updates).hasSize(3);
+		assertThat(updates.get(0).get("state").get("currentHp").asInt()).isEqualTo(31);
+		assertThat(updates.get(1).get("state").get("inventory")).hasSize(1);
+		assertThat(updates.get(2).get("state").get("world").asInt()).isEqualTo(301);
+		assertThat(updates.get(0).get("memberId").asLong()).isEqualTo(hostId);
 		// Still never echoed to the sender.
-		assertThat(countOf(hostOut, "memberVitals")).isEqualTo(echoed);
+		assertThat(countOf(hostOut, "memberUpdates")).isEqualTo(echoed);
 	}
 
 	@Test
@@ -577,7 +649,8 @@ class PartyV2HandlerTest {
 		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301}}");
 
 		// The healthy member still got the frame, and the room dropped only the dead peer.
-		assertThat(last(memberOut, "memberState").get("state").get("world").asInt()).isEqualTo(301);
+		manager.flushRooms();
+		assertThat(onlyUpdate(last(memberOut, "memberUpdates")).get("state").get("world").asInt()).isEqualTo(301);
 		assertThat(last(memberOut, "roster").get("members")).hasSize(2);
 		assertThat(statusOf(last(memberOut, "roster"), memberId)).isEqualTo("MEMBER");
 	}
@@ -760,6 +833,15 @@ class PartyV2HandlerTest {
 			}
 		}
 		return found;
+	}
+
+	/** The single update inside a memberUpdates frame, for the cases that only ever produce one. */
+	private static JsonNode onlyUpdate(JsonNode frame) {
+		if (frame == null) {
+			return null;
+		}
+		JsonNode updates = frame.get("updates");
+		return updates == null || updates.isEmpty() ? null : updates.get(updates.size() - 1);
 	}
 
 	private int countOf(List<String> out, String type) throws Exception {

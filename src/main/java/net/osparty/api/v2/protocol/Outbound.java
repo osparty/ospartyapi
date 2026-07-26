@@ -42,6 +42,7 @@ public record Outbound(
 	String newHostName,
 	Boolean hostStays,
 	Long retryAfterMs,
+	List<MemberUpdate> updates,
 	JsonNode meta) {
 
 	/**
@@ -183,6 +184,28 @@ public record Outbound(
 			.newHostName(newHostName).hostStays(hostStays).build();
 	}
 
+	/**
+	 * Every live update a room collected in one aggregation window, as one frame per recipient.
+	 *
+	 * <p>Fan-out, not payload, is what a busy party costs the owner node: one member's update becomes a send
+	 * to each of its peers, so outbound frames grow with the square of party size. Collecting a window's
+	 * worth and giving each member a single frame makes that linear — five sends per tick instead of twenty
+	 * on a five-man, and the saving grows with the party.
+	 *
+	 * <p>Each recipient's copy omits its own updates, so nobody is echoed back to themselves. Updates are
+	 * listed in arrival order and never merged: the game tick is longer than the window, so a member almost
+	 * never contributes twice, and merging would mean the server reading a payload it has no business
+	 * understanding (PARTY_V2_OPTIMIZATION.md §5.2).
+	 */
+	public static Outbound memberUpdates(List<MemberUpdate> updates) {
+		return new Builder("memberUpdates").updates(updates).build();
+	}
+
+	/** One member's live update inside a {@code memberUpdates} frame. */
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	public record MemberUpdate(long memberId, JsonNode state) {
+	}
+
 	/** One member in the roster frame. {@code status} is HOST / MEMBER / PENDING. */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	public record RosterEntry(long memberId, String name, long accountHash, String status, String role,
@@ -200,6 +223,7 @@ public record Outbound(
 		private Boolean closed;
 		private String discordUrl;
 		private List<RosterEntry> members;
+		private List<MemberUpdate> updates;
 		private JsonNode state;
 		private Integer x;
 		private Integer y;
@@ -258,6 +282,11 @@ public record Outbound(
 
 		public Builder discordUrl(String v) {
 			this.discordUrl = v;
+			return this;
+		}
+
+		public Builder updates(List<MemberUpdate> v) {
+			this.updates = v;
 			return this;
 		}
 
@@ -374,7 +403,7 @@ public record Outbound(
 		public Outbound build() {
 			return new Outbound(type, memberId, status, host, capacity, locked, closed, discordUrl, members,
 				state, x, y, plane, color, name, detail, nodeId, checkId, starter, kind, friendsChat,
-				npcIndex, weapon, hit, world, newHostKey, newHostName, hostStays, retryAfterMs, meta);
+				npcIndex, weapon, hit, world, newHostKey, newHostName, hostStays, retryAfterMs, updates, meta);
 		}
 	}
 }

@@ -51,6 +51,8 @@ final class LivePartyRoom {
 	/** Shortest gap between resync rounds; see {@link #broadcastResync}. */
 	private static final long RESYNC_MIN_INTERVAL_MS = 3_000;
 
+	/** This window's updates, in arrival order. Drained by {@link #flush}. */
+	private final List<Outbound.MemberUpdate> pending = new ArrayList<>();
 	private long lastResyncAt;
 	private long hostMemberId;
 	private String hostName;
@@ -188,13 +190,51 @@ final class LivePartyRoom {
 		updateState(memberId, "memberState", live);
 	}
 
-	/** As {@link #updateState(long, JsonNode)}, under the outbound type the sender's frame maps to. */
+	/**
+	 * Queue a member's live update for the next flush.
+	 *
+	 * <p>Not sent immediately: one update owes a send to every peer, so a busy room's outbound frames grow
+	 * with the square of its size. Holding a short window and giving each member one frame with everything
+	 * that happened in it makes that linear. The window is shorter than a game tick, so this costs a fraction
+	 * of a tick of latency and a member almost never queues twice within one.
+	 *
+	 * <p>{@code outboundType} is ignored now that updates travel together — kept in the signature because the
+	 * split frames are still accepted from clients that have not caught up.
+	 */
 	void updateState(long memberId, String outboundType, JsonNode live) {
 		synchronized (lock) {
-			if (!members.containsKey(memberId)) {
+			if (!members.containsKey(memberId) || live == null) {
 				return;
 			}
-			broadcast(Outbound.memberState(memberId, outboundType, live), memberId);
+			pending.add(new Outbound.MemberUpdate(memberId, live));
+		}
+	}
+
+	/**
+	 * Send this window's updates: one frame per member, carrying everyone else's.
+	 *
+	 * <p>Each recipient's list omits its own updates rather than the whole frame being shared, so nobody is
+	 * echoed back to themselves. That costs one serialisation per member instead of one per room, which is
+	 * the cheap half — the expensive half is the send itself, and that is what drops.
+	 */
+	void flush() {
+		synchronized (lock) {
+			if (pending.isEmpty()) {
+				return;
+			}
+			List<Outbound.MemberUpdate> window = new ArrayList<>(pending);
+			pending.clear();
+			for (Map.Entry<Long, WebSocketSession> entry : recipients()) {
+				List<Outbound.MemberUpdate> theirs = new ArrayList<>(window.size());
+				for (Outbound.MemberUpdate update : window) {
+					if (update.memberId() != entry.getKey()) {
+						theirs.add(update);
+					}
+				}
+				if (!theirs.isEmpty()) {
+					send(entry.getValue(), Outbound.memberUpdates(theirs));
+				}
+			}
 		}
 	}
 

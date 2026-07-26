@@ -183,6 +183,25 @@ public class PartyV2Manager {
 		}
 	}
 
+	/**
+	 * Send every owned room the live updates it collected this window (see {@link PartyV2Aggregator}).
+	 *
+	 * <p>Walks all rooms rather than tracking which have something pending: the check is an empty-list read
+	 * under the room's own lock, and a set of dirty rooms would need maintaining on the hottest path in the
+	 * system to save it.
+	 */
+	void flushRooms() {
+		for (LivePartyRoom room : rooms.values()) {
+			try {
+				room.flush();
+			}
+			catch (Exception e) {
+				// One room's bad send must not stop the rest of this node's parties from being flushed.
+				log.debug("Party V2: flush failed for {}: {}", room.id, e.toString());
+			}
+		}
+	}
+
 	/** Note inbound traffic from a seated member, so the sweep can tell it apart from a ghost. */
 	void touch(String roomId, long memberId) {
 		LivePartyRoom room = rooms.get(roomId);

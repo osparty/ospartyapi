@@ -335,6 +335,39 @@ class PartyV2HandlerTest {
 		assertThat(statusOf(roster, hostId)).isNull();
 	}
 
+	/**
+	 * A dead peer must not take a healthy one down with it. Tomcat runs a failed send's close inline on the
+	 * sending thread, which re-enters onLeave and drops that member from the room mid-fan-out; iterating the
+	 * live session map there threw a ConcurrentModificationException out of the frame handler, killing the
+	 * sender's own session. Under load — every member broadcasting state each tick — that cascades.
+	 */
+	@Test
+	void aSendThatClosesItsOwnSessionDoesNotBreakTheFanOut() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":4}");
+
+		// Seated between the host and a healthy member, so the fan-out still has someone to visit after the
+		// removal — which is exactly when the iterator noticed and threw.
+		List<String> deadOut = new ArrayList<>();
+		WebSocketSession dead = session("dead", deadOut);
+		handler.afterConnectionEstablished(dead);
+		send(dead, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Dead\",\"invited\":true}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		long memberId = last(memberOut, "welcome").get("memberId").asLong();
+
+		// The peer's connection is gone: writing to it fails, and the container closes it on our thread.
+		doAnswer(inv -> {
+			handler.afterConnectionClosed(dead, org.springframework.web.socket.CloseStatus.SESSION_NOT_RELIABLE);
+			throw new java.io.IOException("broken pipe");
+		}).when(dead).sendMessage(any());
+
+		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301}}");
+
+		// The healthy member still got the frame, and the room dropped only the dead peer.
+		assertThat(last(memberOut, "memberState").get("state").get("world").asInt()).isEqualTo(301);
+		assertThat(last(memberOut, "roster").get("members")).hasSize(2);
+		assertThat(statusOf(last(memberOut, "roster"), memberId)).isEqualTo("MEMBER");
+	}
+
 	@Test
 	void hostLeavingClosesTheRoomForMembers() throws Exception {
 		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");

@@ -389,7 +389,8 @@ final class LivePartyRoom {
 		if (meta != null) {
 			send(session, Outbound.meta(meta));
 		}
-		for (MemberState m : members.values()) {
+		// Snapshot for the same reason as recipients(): these sends can re-enter onLeave and drop a member.
+		for (MemberState m : new ArrayList<>(members.values())) {
 			if (m.memberId != selfMemberId && m.live != null) {
 				send(session, Outbound.memberState(m.memberId, m.live));
 			}
@@ -402,12 +403,28 @@ final class LivePartyRoom {
 			return;
 		}
 		TextMessage message = new TextMessage(json);
-		for (Map.Entry<Long, WebSocketSession> entry : sessions.entrySet()) {
+		for (Map.Entry<Long, WebSocketSession> entry : recipients()) {
 			if (exceptMemberId != null && entry.getKey().equals(exceptMemberId)) {
 				continue;
 			}
 			sendRaw(entry.getValue(), message);
 		}
+	}
+
+	/**
+	 * A snapshot of the sessions to send to, rather than the live map.
+	 *
+	 * <p>A send can close its own session — a broken pipe, or a client that has already gone — and Tomcat
+	 * runs that close <em>inline on the sending thread</em>. That re-enters {@link #onLeave} and removes from
+	 * {@code sessions} midway through the fan-out. The room lock is no defence: it is the same thread, so it
+	 * simply re-enters. Iterating the map directly then dies with a {@code ConcurrentModificationException}
+	 * that propagates out of the frame handler and takes down the <em>sender's</em> session too — one dead
+	 * peer knocking out a healthy one, and under load that cascades.
+	 */
+	private List<Map.Entry<Long, WebSocketSession>> recipients() {
+		List<Map.Entry<Long, WebSocketSession>> out = new ArrayList<>(sessions.size());
+		sessions.forEach((memberId, session) -> out.add(Map.entry(memberId, session)));
+		return out;
 	}
 
 	private void send(WebSocketSession session, Outbound frame) {

@@ -32,6 +32,10 @@ app:
     # A redirect costs the host a reconnect, so small imbalances are left alone — parties end, which
     # levels them out on its own.
     rebalance-threshold: 20
+    # A member silent for this long is treated as gone. The socket cannot be trusted for this: a half-open
+    # connection leaves the session reporting open forever, so the room never empties and its ownership lock
+    # is renewed for the life of the node. Generous next to the plugin's forced resync every ~6s.
+    member-timeout-ms: 90000
   discord:
     service-url: ${DISCORD_SERVICE_URL:}
     internal-token: ${DISCORD_INTERNAL_TOKEN:}

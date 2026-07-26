@@ -21,6 +21,9 @@ import org.springframework.web.socket.WebSocketSession;
  * (as a PENDING applicant), live-state relay, server-authoritative admission, and kick.
  */
 class PartyV2HandlerTest {
+	/** Long enough that no test trips the silence sweep by accident; staleness is driven explicitly. */
+	private static final long MEMBER_TIMEOUT_MS = 90_000L;
+
 	private final ObjectMapper mapper = new ObjectMapper();
 	private PartyV2Handler handler;
 	private PartyV2Manager manager;
@@ -35,7 +38,7 @@ class PartyV2HandlerTest {
 	void setUp() {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		bus = new LocalPartyV2Bus();
-		manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node, bus, new LocalNodeLoadRegistry());
+		manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node, bus, new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS);
 		handler = new PartyV2Handler(manager, mapper);
 		hostOut = new ArrayList<>();
 		memberOut = new ArrayList<>();
@@ -148,7 +151,7 @@ class PartyV2HandlerTest {
 				return java.util.Set.of();
 			}
 		};
-		PartyV2Manager manager = new PartyV2Manager(mapper, flaky, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry());
+		PartyV2Manager manager = new PartyV2Manager(mapper, flaky, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS);
 		PartyV2Handler fenced = new PartyV2Handler(manager, mapper);
 		fenced.afterConnectionEstablished(host);
 		fenced.afterConnectionEstablished(member);
@@ -214,7 +217,7 @@ class PartyV2HandlerTest {
 			}
 		};
 		PartyV2Handler redirecting = new PartyV2Handler(
-			new PartyV2Manager(mapper, foreign, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry()), mapper);
+			new PartyV2Manager(mapper, foreign, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS), mapper);
 		List<String> out = new ArrayList<>();
 		WebSocketSession joiner = session("joiner", out);
 		redirecting.afterConnectionEstablished(joiner);
@@ -241,7 +244,8 @@ class PartyV2HandlerTest {
 			}
 		};
 		PartyV2Manager loaded = new PartyV2Manager(
-			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyV2Bus(), load);
+			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyV2Bus(), load,
+			MEMBER_TIMEOUT_MS);
 		PartyV2Handler placing = new PartyV2Handler(loaded, mapper);
 		List<String> out = new ArrayList<>();
 		WebSocketSession newHost = session("newHost", out);
@@ -308,6 +312,31 @@ class PartyV2HandlerTest {
 		manager.pruneRoom("r");
 		assertThat(manager.roomCount()).isZero();
 		assertThat(manager.prunedCount()).isEqualTo(2);
+	}
+
+	@Test
+	void sweepingDropsAMemberThatWentSilentWhileItsSocketStillLooksOpen() throws Exception {
+		// The case isOpen() cannot see: the client is gone but nothing closed the connection, so the session
+		// reports open indefinitely and the room never empties. Traffic is the only honest signal.
+		PartyV2Manager impatient = new PartyV2Manager(
+			mapper, new LocalPartyOwnershipService(new NodeIdentity("node-a", true)),
+			new NodeIdentity("node-a", true), new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), 0L);
+		PartyV2Handler sweeping = new PartyV2Handler(impatient, mapper);
+		sweeping.afterConnectionEstablished(host);
+		sweeping.afterConnectionEstablished(member);
+		sweeping.handleTextMessage(host, new TextMessage(
+			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+		sweeping.handleTextMessage(member, new TextMessage(
+			"{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}"));
+		assertThat(impatient.connectedMembers()).isEqualTo(2);
+
+		// Both sessions still report open — only silence gives them away.
+		assertThat(host.isOpen()).isTrue();
+		assertThat(member.isOpen()).isTrue();
+		impatient.pruneRoom("r");
+
+		assertThat(impatient.prunedCount()).isEqualTo(2);
+		assertThat(impatient.roomCount()).isZero();
 	}
 
 	@Test

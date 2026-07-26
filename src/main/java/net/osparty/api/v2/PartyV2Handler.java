@@ -73,6 +73,10 @@ public class PartyV2Handler extends TextWebSocketHandler {
 		if (in.type() == null) {
 			return;
 		}
+		if (ctx.roomId != null) {
+			// Any frame at all counts as proof of life; the sweep has nothing else to go on.
+			manager.touch(ctx.roomId, ctx.memberId);
+		}
 		switch (in.type()) {
 			case "hello":
 				handleHello(ctx, in);

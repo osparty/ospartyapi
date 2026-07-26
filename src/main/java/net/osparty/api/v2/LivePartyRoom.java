@@ -35,6 +35,17 @@ final class LivePartyRoom {
 
 	private final Map<Long, MemberState> members = new LinkedHashMap<>();
 	private final Map<Long, WebSocketSession> sessions = new LinkedHashMap<>();
+	/**
+	 * When each member was last heard from. Liveness cannot be read off the socket: a half-open connection
+	 * — client gone, proxy never tearing the backend leg down — leaves {@link WebSocketSession#isOpen()}
+	 * true indefinitely, so a room of the departed never empties and is never discarded. Traffic is the only
+	 * honest signal, and a live party always has some: the plugin re-sends its whole snapshot every ten ticks
+	 * even when nothing changed.
+	 *
+	 * <p>Concurrent and outside the room lock on purpose — {@link #touch} runs on every inbound frame, which
+	 * is the hottest path in the system.
+	 */
+	private final Map<Long, Long> lastSeen = new java.util.concurrent.ConcurrentHashMap<>();
 
 	private long hostMemberId;
 	private String hostName;
@@ -65,6 +76,7 @@ final class LivePartyRoom {
 			host.teacher = teacher;
 			members.put(memberId, host);
 			sessions.put(memberId, session);
+			lastSeen.put(memberId, System.currentTimeMillis());
 			send(session, Outbound.welcome(memberId, MemberState.Status.HOST.name(), nodeId));
 			sendSnapshotTo(session, memberId);
 			broadcastRoster();
@@ -87,6 +99,7 @@ final class LivePartyRoom {
 			member.invited = invited;
 			members.put(memberId, member);
 			sessions.put(memberId, session);
+			lastSeen.put(memberId, System.currentTimeMillis());
 			send(session, Outbound.welcome(memberId, status.name(), nodeId));
 			sendSnapshotTo(session, memberId);
 			broadcastRoster();
@@ -148,6 +161,7 @@ final class LivePartyRoom {
 				return;
 			}
 			WebSocketSession session = sessions.remove(targetMemberId);
+			lastSeen.remove(targetMemberId);
 			if (session != null) {
 				send(session, Outbound.kicked());
 			}
@@ -317,9 +331,11 @@ final class LivePartyRoom {
 		synchronized (lock) {
 			if (members.remove(memberId) == null) {
 				sessions.remove(memberId);
+				lastSeen.remove(memberId);
 				return false;
 			}
 			sessions.remove(memberId);
+			lastSeen.remove(memberId);
 			if (memberId == hostMemberId) {
 				broadcast(Outbound.roster(hostName, capacity, locked, true, discordUrl, roster()), null);
 				return true;
@@ -352,11 +368,14 @@ final class LivePartyRoom {
 	 *
 	 * @return what the sweep did.
 	 */
-	Prune pruneClosed() {
+	Prune pruneClosed(long silentAfterMs) {
 		List<Long> gone = new ArrayList<>();
 		synchronized (lock) {
+			long now = System.currentTimeMillis();
 			for (Map.Entry<Long, WebSocketSession> entry : sessions.entrySet()) {
-				if (!entry.getValue().isOpen()) {
+				Long seen = lastSeen.get(entry.getKey());
+				boolean silent = seen != null && now - seen > silentAfterMs;
+				if (!entry.getValue().isOpen() || silent) {
 					gone.add(entry.getKey());
 				}
 			}
@@ -370,6 +389,14 @@ final class LivePartyRoom {
 			hostLeft |= onLeave(memberId);
 		}
 		return new Prune(gone.size(), hostLeft || isEmpty());
+	}
+
+	/**
+	 * Note that we just heard from a member. Deliberately outside the room lock: this runs on every inbound
+	 * frame, and a live party's state traffic is the hottest path there is.
+	 */
+	void touch(long memberId) {
+		lastSeen.replace(memberId, System.currentTimeMillis());
 	}
 
 	boolean isEmpty() {

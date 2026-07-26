@@ -29,6 +29,12 @@ public class PartyV2Manager {
 	private final NodeIdentity node;
 	private final PartyV2Bus bus;
 	private final NodeLoadRegistry load;
+	/**
+	 * How long a member may go without sending anything before it is treated as gone. Generous next to the
+	 * plugin's forced resync (every ten ticks, so about six seconds) — this is the backstop for connections
+	 * nothing else reports as dead, not a tight liveness check.
+	 */
+	private final long memberTimeoutMs;
 	private final Map<String, LivePartyRoom> rooms = new ConcurrentHashMap<>();
 	private final AtomicLong memberIds = new AtomicLong();
 	private final java.util.concurrent.atomic.LongAdder redirects = new java.util.concurrent.atomic.LongAdder();
@@ -39,12 +45,15 @@ public class PartyV2Manager {
 	private final java.util.concurrent.atomic.LongAdder pruned = new java.util.concurrent.atomic.LongAdder();
 
 	public PartyV2Manager(ObjectMapper mapper, PartyOwnershipService ownership, NodeIdentity node,
-		PartyV2Bus bus, NodeLoadRegistry load) {
+		PartyV2Bus bus, NodeLoadRegistry load,
+		@org.springframework.beans.factory.annotation.Value("${app.party-v2.member-timeout-ms:90000}")
+		long memberTimeoutMs) {
 		this.mapper = mapper;
 		this.ownership = ownership;
 		this.node = node;
 		this.bus = bus;
 		this.load = load;
+		this.memberTimeoutMs = memberTimeoutMs;
 		// Control signals from other nodes act on the rooms held here, so the bus calls back into us.
 		bus.setListener(new PartyV2Bus.Listener() {
 			@Override
@@ -162,7 +171,7 @@ public class PartyV2Manager {
 		if (room == null) {
 			return;
 		}
-		LivePartyRoom.Prune prune = room.pruneClosed();
+		LivePartyRoom.Prune prune = room.pruneClosed(memberTimeoutMs);
 		if (prune.removed() == 0) {
 			return;
 		}
@@ -171,6 +180,14 @@ public class PartyV2Manager {
 		if (prune.discard()) {
 			log.info("Party V2: discarding {} — nothing left after the sweep", id);
 			discard(id);
+		}
+	}
+
+	/** Note inbound traffic from a seated member, so the sweep can tell it apart from a ghost. */
+	void touch(String roomId, long memberId) {
+		LivePartyRoom room = rooms.get(roomId);
+		if (room != null) {
+			room.touch(memberId);
 		}
 	}
 

@@ -368,6 +368,35 @@ class PartyV2HandlerTest {
 		assertThat(statusOf(last(memberOut, "roster"), memberId)).isEqualTo("MEMBER");
 	}
 
+	/** The same hazard on the leave path: onLeave broadcasts, and a dead peer removes itself mid-fan-out. */
+	@Test
+	void aDeadPeerDoesNotBreakTheFanOutOfSomeoneElseLeaving() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":6}");
+
+		List<String> deadOut = new ArrayList<>();
+		WebSocketSession dead = session("dead", deadOut);
+		List<String> leaverOut = new ArrayList<>();
+		WebSocketSession leaver = session("leaver", leaverOut);
+		handler.afterConnectionEstablished(dead);
+		handler.afterConnectionEstablished(leaver);
+		// Seated so the healthy member comes after the dead one in the fan-out, which is when it mattered.
+		send(dead, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Dead\",\"invited\":true}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		send(leaver, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Leaver\",\"invited\":true}");
+		long leaverId = last(leaverOut, "welcome").get("memberId").asLong();
+
+		doAnswer(inv -> {
+			handler.afterConnectionClosed(dead, org.springframework.web.socket.CloseStatus.SESSION_NOT_RELIABLE);
+			throw new java.io.IOException("broken pipe");
+		}).when(dead).sendMessage(any());
+
+		send(leaver, "{\"type\":\"leave\"}");
+
+		assertThat(last(memberOut, "memberLeft").get("memberId").asLong()).isEqualTo(leaverId);
+		// Host and the healthy member remain; the leaver and the dead peer are both gone.
+		assertThat(last(memberOut, "roster").get("members")).hasSize(2);
+	}
+
 	@Test
 	void hostLeavingClosesTheRoomForMembers() throws Exception {
 		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");

@@ -67,10 +67,13 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            # Far below the prod default: dev is exercised with a handful of clients, and a threshold of 20
-            # would mean placement never actually fires here. 1 makes every imbalance observable.
+            # Below the prod default of 20 so placement still fires at dev's scale, but not so low that it
+            # reacts to a single member. Parties are ~5 members, so anything under that is sub-party
+            # granularity: a gap of 1 exists almost always, and at a threshold of 1 roughly half of all
+            # hosts get redirected purely for being on the marginally heavier node. Each redirect costs the
+            # host a full reconnect, so it stops being free long before it stops being correct.
             - name: APP_PARTY_V2_REBALANCE_THRESHOLD
-              value: "1"
+              value: "10"
           envFrom:
             - secretRef:
                 name: osparty-api-env

@@ -102,9 +102,18 @@ spec:
           # threaded, stop-the-world. A 5000-socket run measured a 225 MB live set against a 358 MB tenured
           # gen -- 94% full -- and paid 14 full compactions for it, one of which shows up as a 5.1 s relay
           # outlier against a 67 ms p99.
+          # CPU and memory requests are what the scheduler places on, and 250m/1Gi was a fiction: load runs
+          # measure ~0.7 cores and 1.8 GiB working set. Believing it, the scheduler put one replica on a
+          # 2-core node that was already 113% overcommitted on memory limits. That pod ran out of CPU long
+          # before the other one did, and every symptom followed from it -- twice the live threads, sends
+          # backing up, handshake timeouts, and heartbeat renewals missing the 30s ownership TTL. Several
+          # runs' worth of "cluster ceiling" numbers were really one starved node.
+          #
+          # Requesting honestly is the fix rather than pinning to a node by name: it keeps these off the
+          # small nodes wherever they are scheduled, and it is the same thing prod needs.
           resources:
             requests:
-              cpu: 250m
-              memory: 1Gi
+              cpu: 1000m
+              memory: 1536Mi
             limits:
               memory: 2Gi

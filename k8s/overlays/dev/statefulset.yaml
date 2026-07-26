@@ -67,6 +67,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            # Far below the prod default: dev is exercised with a handful of clients, and a threshold of 20
+            # would mean placement never actually fires here. 1 makes every imbalance observable.
+            - name: APP_PARTY_V2_REBALANCE_THRESHOLD
+              value: "1"
           envFrom:
             - secretRef:
                 name: osparty-api-env

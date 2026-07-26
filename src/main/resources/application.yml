@@ -27,6 +27,11 @@ app:
     enabled: true
     reconcile-interval-ms: 5000
     touch-interval-ms: 5000
+  party-v2:
+    # Members this node must be carrying above the lightest node before a new party is placed elsewhere.
+    # A redirect costs the host a reconnect, so small imbalances are left alone — parties end, which
+    # levels them out on its own.
+    rebalance-threshold: 20
   discord:
     service-url: ${DISCORD_SERVICE_URL:}
     internal-token: ${DISCORD_INTERNAL_TOKEN:}

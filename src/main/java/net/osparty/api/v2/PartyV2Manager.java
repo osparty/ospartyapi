@@ -28,19 +28,22 @@ public class PartyV2Manager {
 	private final PartyOwnershipService ownership;
 	private final NodeIdentity node;
 	private final PartyV2Bus bus;
+	private final NodeLoadRegistry load;
 	private final Map<String, LivePartyRoom> rooms = new ConcurrentHashMap<>();
 	private final AtomicLong memberIds = new AtomicLong();
 	private final java.util.concurrent.atomic.LongAdder redirects = new java.util.concurrent.atomic.LongAdder();
 	private final java.util.concurrent.atomic.LongAdder failovers = new java.util.concurrent.atomic.LongAdder();
 	private final java.util.concurrent.atomic.LongAdder ownerPending = new java.util.concurrent.atomic.LongAdder();
 	private final java.util.concurrent.atomic.LongAdder reclaims = new java.util.concurrent.atomic.LongAdder();
+	private final java.util.concurrent.atomic.LongAdder rebalances = new java.util.concurrent.atomic.LongAdder();
 
 	public PartyV2Manager(ObjectMapper mapper, PartyOwnershipService ownership, NodeIdentity node,
-		PartyV2Bus bus) {
+		PartyV2Bus bus, NodeLoadRegistry load) {
 		this.mapper = mapper;
 		this.ownership = ownership;
 		this.node = node;
 		this.bus = bus;
+		this.load = load;
 		// Control signals from other nodes act on the rooms held here, so the bus calls back into us.
 		bus.setListener(new PartyV2Bus.Listener() {
 			@Override
@@ -87,6 +90,40 @@ public class PartyV2Manager {
 	/** This node's id (the node-hint returned to clients on {@code welcome}/{@code redirect}). */
 	String nodeId() {
 		return node.nodeId();
+	}
+
+	/**
+	 * Where a new room should be created: empty to host it here, or the id of a node the host should be
+	 * redirected to because this one is carrying materially more load.
+	 *
+	 * <p>Placement is a one-time decision. A client is pinned to its party's owner for the life of the room,
+	 * and its node-hint outlives the party — so without this, a room lands on whichever node its host's
+	 * socket happened to be on, which is biased by every redirect that client has taken since it started.
+	 * That bias is one-way (joiners are pulled to owners, never pushed back), so a single node accumulates
+	 * hosts indefinitely.
+	 *
+	 * <p>Only ever consulted for a room that does not exist yet. An existing room's placement is settled by
+	 * ownership, and one mid-handover belongs to whoever re-claims it — rebalancing either would bounce a
+	 * live party between nodes for the sake of a number.
+	 */
+	Optional<String> placementFor(String id) {
+		if (rooms.containsKey(id)) {
+			return Optional.empty();
+		}
+		if (ownership.lookup(id).isPresent() || ownership.handoverPending(id)) {
+			return Optional.empty();
+		}
+		return load.preferredHost(connectedMembers());
+	}
+
+	/** Publish this node's load for placement, and refresh its view of its peers'. Called on the heartbeat. */
+	void publishLoad() {
+		load.publish(connectedMembers());
+	}
+
+	/** Withdraw this node from placement, so a node on its way out stops attracting new parties. */
+	void retireLoad() {
+		load.retire();
 	}
 
 	/**
@@ -218,6 +255,10 @@ public class PartyV2Manager {
 		ownerPending.increment();
 	}
 
+	void recordRebalance() {
+		rebalances.increment();
+	}
+
 	public double redirectCount() {
 		return redirects.sum();
 	}
@@ -232,5 +273,9 @@ public class PartyV2Manager {
 
 	public double reclaimCount() {
 		return reclaims.sum();
+	}
+
+	public double rebalanceCount() {
+		return rebalances.sum();
 	}
 }

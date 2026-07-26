@@ -52,6 +52,10 @@ public class PartyV2Heartbeat implements SmartLifecycle {
 				manager.drain(room, false);
 			}
 		}
+		// Unconditional, and after the drains so it reports what this node is actually still carrying. An
+		// idle node has to publish a load of zero or it never appears as a placement candidate — which is
+		// exactly how one node ends up owning every party.
+		manager.publishLoad();
 	}
 
 	/**
@@ -87,6 +91,9 @@ public class PartyV2Heartbeat implements SmartLifecycle {
 	@Override
 	public void stop() {
 		running = false;
+		// Before anything else: a node that is going away must stop being a placement candidate, or it will
+		// be handed new parties during the very window it is draining the ones it has.
+		manager.retireLoad();
 		java.util.List<String> owned = new ArrayList<>(manager.ownedRoomIds());
 		if (owned.isEmpty()) {
 			return;

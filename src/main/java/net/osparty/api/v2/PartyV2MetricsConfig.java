@@ -40,6 +40,9 @@ public class PartyV2MetricsConfig {
 			FunctionCounter.builder("osparty.partyv2.reclaims", manager, PartyV2Manager::reclaimCount)
 				.description("Rooms taken over by this node after their owner expired")
 				.register(registry);
+			FunctionCounter.builder("osparty.partyv2.rebalances", manager, PartyV2Manager::rebalanceCount)
+				.description("New parties sent to a lighter node instead of being hosted here")
+				.register(registry);
 		};
 	}
 }

@@ -35,7 +35,7 @@ class PartyV2HandlerTest {
 	void setUp() {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		bus = new LocalPartyV2Bus();
-		manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node, bus);
+		manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node, bus, new LocalNodeLoadRegistry());
 		handler = new PartyV2Handler(manager, mapper);
 		hostOut = new ArrayList<>();
 		memberOut = new ArrayList<>();
@@ -146,7 +146,7 @@ class PartyV2HandlerTest {
 				return java.util.Set.of();
 			}
 		};
-		PartyV2Manager manager = new PartyV2Manager(mapper, flaky, node, new LocalPartyV2Bus());
+		PartyV2Manager manager = new PartyV2Manager(mapper, flaky, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry());
 		PartyV2Handler fenced = new PartyV2Handler(manager, mapper);
 		fenced.afterConnectionEstablished(host);
 		fenced.afterConnectionEstablished(member);
@@ -212,7 +212,7 @@ class PartyV2HandlerTest {
 			}
 		};
 		PartyV2Handler redirecting = new PartyV2Handler(
-			new PartyV2Manager(mapper, foreign, node, new LocalPartyV2Bus()), mapper);
+			new PartyV2Manager(mapper, foreign, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry()), mapper);
 		List<String> out = new ArrayList<>();
 		WebSocketSession joiner = session("joiner", out);
 		redirecting.afterConnectionEstablished(joiner);
@@ -220,6 +220,67 @@ class PartyV2HandlerTest {
 		redirecting.handleTextMessage(joiner, new TextMessage("{\"type\":\"join\",\"room\":\"elsewhere\"}"));
 
 		assertThat(last(out, "redirect").get("nodeId").asText()).isEqualTo("node-b");
+	}
+
+	@Test
+	void hostingOnALoadedNodeIsSentToALighterOne() throws Exception {
+		NodeIdentity node = new NodeIdentity("node-a", true);
+		java.util.concurrent.atomic.AtomicReference<String> lighter =
+			new java.util.concurrent.atomic.AtomicReference<>("node-b");
+		NodeLoadRegistry load = new NodeLoadRegistry() {
+			public void publish(int members) {
+			}
+
+			public void retire() {
+			}
+
+			public java.util.Optional<String> preferredHost(int selfMembers) {
+				return java.util.Optional.ofNullable(lighter.get());
+			}
+		};
+		PartyV2Manager loaded = new PartyV2Manager(
+			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyV2Bus(), load);
+		PartyV2Handler placing = new PartyV2Handler(loaded, mapper);
+		List<String> out = new ArrayList<>();
+		WebSocketSession newHost = session("newHost", out);
+		placing.afterConnectionEstablished(newHost);
+
+		placing.handleTextMessage(newHost, new TextMessage(
+			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+
+		// Redirected rather than claimed: nothing is hosted here, and the client will re-send host there.
+		assertThat(last(out, "redirect").get("nodeId").asText()).isEqualTo("node-b");
+		assertThat(last(out, "welcome")).isNull();
+		assertThat(loaded.roomCount()).isZero();
+		assertThat(loaded.rebalanceCount()).isEqualTo(1);
+
+		// Once the room exists here, load no longer decides: a host re-sending its frame after a reconnect
+		// must land back on its own room rather than being bounced to whichever node is lightest today.
+		lighter.set(null);
+		placing.handleTextMessage(newHost, new TextMessage(
+			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+		assertThat(last(out, "welcome").get("status").asText()).isEqualTo("HOST");
+		assertThat(loaded.roomCount()).isEqualTo(1);
+
+		lighter.set("node-b");
+		out.clear();
+		placing.handleTextMessage(newHost, new TextMessage(
+			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+		assertThat(last(out, "redirect")).isNull();
+		assertThat(loaded.rebalanceCount()).isEqualTo(1);
+
+		// A host that arrived on the node-hint path was sent here on purpose. Re-placing it would let two
+		// nodes with slightly different load snapshots bounce the same client between them.
+		List<String> hintedOut = new ArrayList<>();
+		WebSocketSession hinted = session("hinted", hintedOut);
+		when(hinted.getUri()).thenReturn(java.net.URI.create("/n/node-a/api/v2/ws/party"));
+		placing.afterConnectionEstablished(hinted);
+		placing.handleTextMessage(hinted, new TextMessage(
+			"{\"type\":\"host\",\"room\":\"r2\",\"hostName\":\"Other\",\"capacity\":3}"));
+
+		assertThat(last(hintedOut, "redirect")).isNull();
+		assertThat(last(hintedOut, "welcome").get("status").asText()).isEqualTo("HOST");
+		assertThat(loaded.rebalanceCount()).isEqualTo(1);
 	}
 
 	@Test

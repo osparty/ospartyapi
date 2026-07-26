@@ -173,6 +173,19 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			return;
 		}
 		leaveCurrentRoom(ctx, in.room());
+		// Placement, before the claim: a new room goes where there is capacity, not where its host's socket
+		// happens to have landed. Redirecting reuses the join path the client already implements — it adopts
+		// the hint, reconnects, and re-sends this same frame from onOpen.
+		java.util.Optional<String> lighter = ctx.nodeHinted
+			? java.util.Optional.empty()
+			: manager.placementFor(in.room());
+		if (lighter.isPresent()) {
+			manager.recordRebalance();
+			log.info("Party V2 host rebalance: session={} room={} -> {}",
+				ctx.session.getId(), in.room(), lighter.get());
+			send(ctx, Outbound.redirect(lighter.get()));
+			return;
+		}
 		LivePartyRoom room = manager.hostRoom(in.room(), in.activityId());
 		if (room == null) {
 			// Another node already owns this room; send the host to that owner.
@@ -373,6 +386,13 @@ public class PartyV2Handler extends TextWebSocketHandler {
 	/** Per-connection state: the (guarded) session, its assigned member id, identity and current room. */
 	private static final class Ctx {
 		final WebSocketSession session;
+		/**
+		 * Whether this client connected on the {@code /n/{nodeId}} form — it was sent here deliberately,
+		 * either by a redirect or by resolving the owner up front. Placement must not second-guess that:
+		 * two nodes acting on slightly different load snapshots could otherwise pass the same host back and
+		 * forth, and each hop is a real reconnect.
+		 */
+		final boolean nodeHinted;
 		volatile long memberId;
 		volatile long accountHash;
 		volatile String name;
@@ -380,6 +400,8 @@ public class PartyV2Handler extends TextWebSocketHandler {
 
 		Ctx(WebSocketSession session) {
 			this.session = session;
+			this.nodeHinted = session.getUri() != null && session.getUri().getPath() != null
+				&& session.getUri().getPath().startsWith("/n/");
 		}
 	}
 }

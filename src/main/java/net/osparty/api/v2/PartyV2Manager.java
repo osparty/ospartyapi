@@ -31,7 +31,7 @@ public class PartyV2Manager {
 	private final NodeLoadRegistry load;
 	/**
 	 * How long a member may go without sending anything before it is treated as gone. Generous next to the
-	 * plugin's forced resync (every ten ticks, so about six seconds) — this is the backstop for connections
+	 * plugin's heartbeat (every five seconds when it has nothing else to say) — this is the backstop for connections
 	 * nothing else reports as dead, not a tight liveness check.
 	 */
 	private final long memberTimeoutMs;

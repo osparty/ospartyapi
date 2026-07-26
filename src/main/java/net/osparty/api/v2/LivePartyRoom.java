@@ -39,14 +39,19 @@ final class LivePartyRoom {
 	 * When each member was last heard from. Liveness cannot be read off the socket: a half-open connection
 	 * — client gone, proxy never tearing the backend leg down — leaves {@link WebSocketSession#isOpen()}
 	 * true indefinitely, so a room of the departed never empties and is never discarded. Traffic is the only
-	 * honest signal, and a live party always has some: the plugin re-sends its whole snapshot every ten ticks
-	 * even when nothing changed.
+	 * honest signal, and a live party always has some: a member with nothing to report still heartbeats every
+	 * few seconds, which is exactly what that frame is for. (It used to be the plugin's periodic full resync
+	 * — that is gone, and the heartbeat replaced it precisely so this sweep kept working.)
 	 *
 	 * <p>Concurrent and outside the room lock on purpose — {@link #touch} runs on every inbound frame, which
 	 * is the hottest path in the system.
 	 */
 	private final Map<Long, Long> lastSeen = new java.util.concurrent.ConcurrentHashMap<>();
 
+	/** Shortest gap between resync rounds; see {@link #broadcastResync}. */
+	private static final long RESYNC_MIN_INTERVAL_MS = 3_000;
+
+	private long lastResyncAt;
 	private long hostMemberId;
 	private String hostName;
 	private int capacity;
@@ -78,8 +83,9 @@ final class LivePartyRoom {
 			sessions.put(memberId, session);
 			lastSeen.put(memberId, System.currentTimeMillis());
 			send(session, Outbound.welcome(memberId, MemberState.Status.HOST.name(), nodeId));
-			sendSnapshotTo(session, memberId);
+			sendSnapshotTo(session);
 			broadcastRoster();
+			broadcastResync(memberId);
 		}
 	}
 
@@ -101,8 +107,9 @@ final class LivePartyRoom {
 			sessions.put(memberId, session);
 			lastSeen.put(memberId, System.currentTimeMillis());
 			send(session, Outbound.welcome(memberId, status.name(), nodeId));
-			sendSnapshotTo(session, memberId);
+			sendSnapshotTo(session);
 			broadcastRoster();
+			broadcastResync(memberId);
 		}
 	}
 
@@ -170,15 +177,34 @@ final class LivePartyRoom {
 		}
 	}
 
-	/** Store a member's latest live snapshot and relay it to every other session in the room. */
+	/**
+	 * Relay a member's live snapshot to every other session in the room, and forget it.
+	 *
+	 * <p>Nothing is stored: once frames carry only what changed, the last one is a fragment rather than a
+	 * picture, and an owner that kept it would hand that fragment to the next joiner as though it were
+	 * complete. Joiners are served by {@link #broadcastResync} instead (PARTY_V2_OPTIMIZATION.md §5.2).
+	 */
 	void updateState(long memberId, JsonNode live) {
+		updateState(memberId, "memberState", live);
+	}
+
+	/** As {@link #updateState(long, JsonNode)}, under the outbound type the sender's frame maps to. */
+	void updateState(long memberId, String outboundType, JsonNode live) {
 		synchronized (lock) {
-			MemberState member = members.get(memberId);
-			if (member == null) {
+			if (!members.containsKey(memberId)) {
 				return;
 			}
-			member.live = live;
-			broadcast(Outbound.memberState(memberId, live), memberId);
+			broadcast(Outbound.memberState(memberId, outboundType, live), memberId);
+		}
+	}
+
+	/** Relay a member's keep-alive to its peers, so an idle party does not time itself out (§4). */
+	void alive(long memberId) {
+		synchronized (lock) {
+			if (!members.containsKey(memberId)) {
+				return;
+			}
+			broadcast(Outbound.alive(memberId), memberId);
 		}
 	}
 
@@ -455,18 +481,38 @@ final class LivePartyRoom {
 		broadcast(Outbound.roster(hostName, capacity, locked, false, discordUrl, roster()), null);
 	}
 
-	/** Give a freshly-seated member the current roster, the host's ad meta and every peer's live snapshot. */
-	private void sendSnapshotTo(WebSocketSession session, long selfMemberId) {
+	/**
+	 * Give a freshly-seated member the room's own state: the roster and the host's ad meta, both of which
+	 * this node owns. Peers' live state is not here — the owner does not hold any — and arrives instead from
+	 * the {@link #broadcastResync} the peers answer on their next tick.
+	 */
+	private void sendSnapshotTo(WebSocketSession session) {
 		send(session, Outbound.roster(hostName, capacity, locked, false, discordUrl, roster()));
 		if (meta != null) {
 			send(session, Outbound.meta(meta));
 		}
-		// Snapshot for the same reason as recipients(): these sends can re-enter onLeave and drop a member.
-		for (MemberState m : new ArrayList<>(members.values())) {
-			if (m.memberId != selfMemberId && m.live != null) {
-				send(session, Outbound.memberState(m.memberId, m.live));
-			}
+	}
+
+	/**
+	 * Ask the seated members to re-send their full live state for the benefit of {@code joinerMemberId}.
+	 *
+	 * <p>Rate-limited per room: several members seated in the same moment (a party re-forming, or a wave of
+	 * reconnects) would otherwise each trigger a full round from everyone. One round covers all of them,
+	 * since it is a broadcast and the answers reach every session.
+	 *
+	 * <p>Skipped for the first member — there is nobody to answer — and the joiner is excluded because it
+	 * pushes its own state unprompted on its next tick anyway.
+	 */
+	private void broadcastResync(long joinerMemberId) {
+		if (members.size() < 2) {
+			return;
 		}
+		long now = System.currentTimeMillis();
+		if (now - lastResyncAt < RESYNC_MIN_INTERVAL_MS) {
+			return;
+		}
+		lastResyncAt = now;
+		broadcast(Outbound.resync(), joinerMemberId);
 	}
 
 	private void broadcast(Outbound frame, Long exceptMemberId) {

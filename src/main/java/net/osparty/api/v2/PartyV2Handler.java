@@ -90,6 +90,22 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			case "state":
 				withRoom(ctx, room -> room.updateState(ctx.memberId, in.state()));
 				break;
+			// The three parts of a split live update. Handled identically and relayed under the matching
+			// outbound type; what makes them different is the sender's business, not the room's.
+			case "vitals":
+				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberVitals", in.state()));
+				break;
+			case "items":
+				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberItems", in.state()));
+				break;
+			case "profile":
+				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberProfile", in.state()));
+				break;
+			case "heartbeat":
+				// The touch() above already fed the ghost sweep; this only tells the peers, whose own
+				// timeout has nothing else to go on once live frames are sent purely on change.
+				withRoom(ctx, room -> room.alive(ctx.memberId));
+				break;
 			case "ping":
 				handlePing(ctx, in);
 				break;

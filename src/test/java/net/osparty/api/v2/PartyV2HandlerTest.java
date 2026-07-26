@@ -92,6 +92,90 @@ class PartyV2HandlerTest {
 		assertThat(last(hostOut, "roster").get("members")).hasSize(1);
 	}
 
+	/**
+	 * The owner keeps no live state, so a joiner's baseline comes from the peers, not from a replay: seating
+	 * someone asks the room to re-send. The joiner itself is skipped — it pushes its own state unprompted.
+	 */
+	@Test
+	void seatingAJoinerAsksThePeersToResendTheirState() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		// Nobody to ask while the host is alone.
+		assertThat(countOf(hostOut, "resync")).isZero();
+
+		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
+		assertThat(countOf(hostOut, "resync")).isEqualTo(1);
+		assertThat(countOf(memberOut, "resync")).isZero();
+	}
+
+	/** State sent before a joiner arrived is gone — the room never stored it. Only the resync brings it back. */
+	@Test
+	void aJoinerIsNotReplayedStateSentBeforeItArrived() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301}}");
+
+		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
+		assertThat(countOf(memberOut, "memberState")).isZero();
+
+		// The host answers the resync and the joiner is caught up.
+		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301}}");
+		assertThat(last(memberOut, "memberState").get("state").get("world").asInt()).isEqualTo(301);
+	}
+
+	/** A party re-forming seats several members at once; that must cost one round, not one round each. */
+	@Test
+	void resyncIsRateLimitedSoAWaveOfJoinersCostsOneRound() throws Exception {
+		List<String> thirdOut = new ArrayList<>();
+		WebSocketSession third = session("third", thirdOut);
+		handler.afterConnectionEstablished(third);
+
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":5}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
+		send(third, "{\"type\":\"join\",\"room\":\"r\"}");
+
+		assertThat(countOf(hostOut, "resync")).isEqualTo(1);
+	}
+
+	/**
+	 * Once live frames are sent only on change, an idle member emits nothing — so the heartbeat is the only
+	 * thing keeping its peers from timing it out. It reaches them, and is not echoed to the sender.
+	 */
+	@Test
+	void heartbeatReachesPeersAsAliveAndIsNotEchoed() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
+		long memberId = last(memberOut, "welcome").get("memberId").asLong();
+
+		send(member, "{\"type\":\"heartbeat\"}");
+
+		JsonNode alive = last(hostOut, "alive");
+		assertThat(alive).isNotNull();
+		assertThat(alive.get("memberId").asLong()).isEqualTo(memberId);
+		assertThat(countOf(memberOut, "alive")).isZero();
+	}
+
+	/**
+	 * A live update is split by how often each part changes, and each part keeps its own type end to end.
+	 * The room relays whichever arrived without knowing what any of them mean.
+	 */
+	@Test
+	void splitUpdatesKeepTheirOwnTypesAndAreNotEchoed() throws Exception {
+		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
+		long hostId = last(hostOut, "welcome").get("memberId").asLong();
+		int echoed = countOf(hostOut, "memberVitals");
+
+		send(host, "{\"type\":\"vitals\",\"state\":{\"currentHp\":31}}");
+		send(host, "{\"type\":\"items\",\"state\":{\"inventory\":[995]}}");
+		send(host, "{\"type\":\"profile\",\"state\":{\"name\":\"Host\",\"world\":301}}");
+
+		assertThat(last(memberOut, "memberVitals").get("state").get("currentHp").asInt()).isEqualTo(31);
+		assertThat(last(memberOut, "memberItems").get("state").get("inventory")).hasSize(1);
+		assertThat(last(memberOut, "memberProfile").get("state").get("world").asInt()).isEqualTo(301);
+		assertThat(last(memberOut, "memberVitals").get("memberId").asLong()).isEqualTo(hostId);
+		// Still never echoed to the sender.
+		assertThat(countOf(hostOut, "memberVitals")).isEqualTo(echoed);
+	}
+
 	@Test
 	void aLaterHelloFillsInAnAlreadySeatedMembersIdentity() throws Exception {
 		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");

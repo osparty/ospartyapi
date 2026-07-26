@@ -1,13 +1,16 @@
 package net.osparty.api.v2;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import net.osparty.api.v2.protocol.Outbound;
 
 /**
  * One member's live presence in a {@link LivePartyRoom}. Identity and roster {@link Status} are
- * server-authoritative (assigned/changed only by the owner node); {@link #live} is the last opaque state
- * snapshot the member sent (a serialised plugin {@code PlayerUpdate}), relayed to peers without
- * interpretation. Held entirely in RAM — never written to Redis (PARTY_V2_MIGRATION.md §10/§11).
+ * server-authoritative (assigned/changed only by the owner node). Held entirely in RAM — never written to
+ * Redis (PARTY_V2_MIGRATION.md §10/§11).
+ *
+ * <p>Deliberately holds <em>no</em> live state. Member snapshots are relayed to peers and forgotten; a
+ * member seated later gets its baseline from a {@code resync} the peers answer, not from anything stored
+ * here (PARTY_V2_OPTIMIZATION.md §5.2). Storing the last snapshot was wrong the moment frames stopped being
+ * complete — the owner would have been replaying a fragment while believing it a full picture.
  */
 final class MemberState {
 	enum Status { HOST, MEMBER, PENDING }
@@ -20,8 +23,6 @@ final class MemberState {
 	volatile boolean learner;
 	volatile boolean teacher;
 	volatile boolean invited;
-	/** Last state payload from this member; null until they first send one. */
-	volatile JsonNode live;
 
 	MemberState(long memberId, String name, long accountHash, Status status) {
 		this.memberId = memberId;

@@ -77,6 +77,39 @@ public record Outbound(
 		return new Builder("memberState").memberId(memberId).state(state).build();
 	}
 
+	/**
+	 * Part of a peer's live state, relayed verbatim under the type the sender chose.
+	 *
+	 * <p>A live update is split by how often it changes — vitals every tick, items on a swap, profile almost
+	 * never — and each part travels as its own type so a receiver that predates the split ignores it rather
+	 * than mistaking a fragment for a whole snapshot (PARTY_V2_OPTIMIZATION.md §8). The room does not know
+	 * or care what distinguishes them; {@code type} is passed through and the payload is never read.
+	 */
+	public static Outbound memberState(long memberId, String type, JsonNode state) {
+		return new Builder(type).memberId(memberId).state(state).build();
+	}
+
+	/**
+	 * Everyone re-send your full live state: someone has just been seated and has no picture of the room.
+	 *
+	 * <p>This is what replaces the owner node storing each member's last snapshot and replaying it. The
+	 * server holds no live state at all, so a joiner's baseline has to come from the members that own it
+	 * (PARTY_V2_OPTIMIZATION.md §5.2). Broadcast rather than targeted: routing it to the joiner alone would
+	 * mean tracking who is awaiting one, which is exactly the server-held state this design removes.
+	 */
+	public static Outbound resync() {
+		return new Builder("resync").build();
+	}
+
+	/**
+	 * A peer is still there. Relayed from their {@code heartbeat} so an idle party does not grey itself out:
+	 * receivers time a member out after 20s of silence, and once live frames are only sent on change there
+	 * is no other traffic to prove liveness (PARTY_V2_OPTIMIZATION.md §4).
+	 */
+	public static Outbound alive(long memberId) {
+		return new Builder("alive").memberId(memberId).build();
+	}
+
 	public static Outbound memberLeft(long memberId) {
 		return new Builder("memberLeft").memberId(memberId).build();
 	}

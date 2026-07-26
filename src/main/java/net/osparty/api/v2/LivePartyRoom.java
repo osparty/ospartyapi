@@ -39,6 +39,8 @@ final class LivePartyRoom {
 	private int capacity;
 	private boolean locked;
 	private String discordUrl;
+	/** The host's advertised party settings, stored and relayed verbatim (see {@link #setMeta}). */
+	private JsonNode meta;
 
 	LivePartyRoom(String id, String activityId, ObjectMapper mapper) {
 		this.id = id;
@@ -279,6 +281,22 @@ final class LivePartyRoom {
 		}
 	}
 
+	/**
+	 * Host publishes its advertised party settings (description, world, loot rule, requirements, host name).
+	 * Opaque here — the room neither parses nor validates it, exactly as with a member's live state. Members
+	 * hold only the snapshot they took when they applied, so without this an edit, or the host name moving in
+	 * a transfer, never reaches them.
+	 */
+	void setMeta(long actorMemberId, JsonNode meta) {
+		synchronized (lock) {
+			if (actorMemberId != hostMemberId || meta == null || meta.equals(this.meta)) {
+				return;
+			}
+			this.meta = meta;
+			broadcast(Outbound.meta(meta), actorMemberId);
+		}
+	}
+
 	void setDiscordUrl(long actorMemberId, String url) {
 		synchronized (lock) {
 			if (actorMemberId == hostMemberId && !java.util.Objects.equals(url, discordUrl)) {
@@ -365,9 +383,12 @@ final class LivePartyRoom {
 		broadcast(Outbound.roster(hostName, capacity, locked, false, discordUrl, roster()), null);
 	}
 
-	/** Give a freshly-seated member the current roster and every peer's last live snapshot. */
+	/** Give a freshly-seated member the current roster, the host's ad meta and every peer's live snapshot. */
 	private void sendSnapshotTo(WebSocketSession session, long selfMemberId) {
 		send(session, Outbound.roster(hostName, capacity, locked, false, discordUrl, roster()));
+		if (meta != null) {
+			send(session, Outbound.meta(meta));
+		}
 		for (MemberState m : members.values()) {
 			if (m.memberId != selfMemberId && m.live != null) {
 				send(session, Outbound.memberState(m.memberId, m.live));

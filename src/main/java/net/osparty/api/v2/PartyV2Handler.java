@@ -109,6 +109,9 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			case "setDiscord":
 				withOwnedRoom(ctx, room -> room.setDiscordUrl(ctx.memberId, in.url()));
 				break;
+			case "setMeta":
+				withOwnedRoom(ctx, room -> room.setMeta(ctx.memberId, in.meta()));
+				break;
 			case "readyStart":
 				withRoom(ctx, room -> {
 					if (in.checkId() != null) {

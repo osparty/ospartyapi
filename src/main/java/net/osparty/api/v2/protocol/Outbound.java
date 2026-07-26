@@ -41,7 +41,8 @@ public record Outbound(
 	String newHostKey,
 	String newHostName,
 	Boolean hostStays,
-	Long retryAfterMs) {
+	Long retryAfterMs,
+	JsonNode meta) {
 
 	/** Assigned identity + role on (re)join; followed by a {@code roster} and the current member states. */
 	public static Outbound welcome(long memberId, String status) {
@@ -53,6 +54,16 @@ public record Outbound(
 		String discordUrl, List<RosterEntry> members) {
 		return new Builder("roster").host(host).capacity(capacity).locked(locked).closed(closed)
 			.discordUrl(discordUrl).members(members).build();
+	}
+
+	/**
+	 * The host's advertised party settings, relayed verbatim. Distinct from the {@code roster} frame's room
+	 * meta: those fields the room itself owns, while this is the backend ad (description, world, loot rule,
+	 * requirements, and the host's name) which only the host knows and which members would otherwise never
+	 * see change after they joined.
+	 */
+	public static Outbound meta(JsonNode meta) {
+		return new Builder("meta").meta(meta).build();
 	}
 
 	/** A peer's live snapshot, relayed verbatim ({@code state} is the opaque payload they sent). */
@@ -170,6 +181,7 @@ public record Outbound(
 		private String newHostName;
 		private Boolean hostStays;
 		private Long retryAfterMs;
+		private JsonNode meta;
 
 		public Builder(String type) {
 			this.type = type;
@@ -315,10 +327,15 @@ public record Outbound(
 			return this;
 		}
 
+		public Builder meta(JsonNode v) {
+			this.meta = v;
+			return this;
+		}
+
 		public Outbound build() {
 			return new Outbound(type, memberId, status, host, capacity, locked, closed, discordUrl, members,
 				state, x, y, plane, color, name, detail, nodeId, checkId, starter, kind, friendsChat,
-				npcIndex, weapon, hit, world, newHostKey, newHostName, hostStays, retryAfterMs);
+				npcIndex, weapon, hit, world, newHostKey, newHostName, hostStays, retryAfterMs, meta);
 		}
 	}
 }

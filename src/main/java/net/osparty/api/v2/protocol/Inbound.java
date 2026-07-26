@@ -6,8 +6,9 @@ import com.fasterxml.jackson.databind.JsonNode;
  * A decoded client → server Party V2 frame. Only the fields relevant to {@link #type} are populated; the
  * rest are null (the client omits them). See PARTY_V2_MIGRATION.md §8.
  *
- * <p>{@link #state} is opaque to the server — it is the member's live self-snapshot (a serialised plugin
- * {@code PlayerUpdate}) which the owner node stores and relays verbatim without interpreting.
+ * <p>{@link #state} and {@link #meta} are opaque to the server — the member's live self-snapshot (a
+ * serialised plugin {@code PlayerUpdate}) and the host's advertised party settings respectively, which the
+ * owner node stores and relays verbatim without interpreting.
  */
 public record Inbound(
 	String type,
@@ -40,5 +41,6 @@ public record Inbound(
 	Integer world,
 	String newHostKey,
 	String newHostName,
-	Boolean hostStays) {
+	Boolean hostStays,
+	JsonNode meta) {
 }

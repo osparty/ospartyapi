@@ -271,6 +271,35 @@ class PartyV2HandlerTest {
 		assertThat(last(hostOut, "fcRequest")).isNull();
 	}
 
+	/**
+	 * The host's ad settings reach members that are already seated and members that arrive later — the
+	 * latter matters most, since a joiner's own copy of the ad is a snapshot of whatever the search board
+	 * showed it.
+	 */
+	@Test
+	void hostAdMetaReachesSeatedMembersAndLaterJoiners() throws Exception {
+		hostWithAdmittedMember();
+
+		send(host, "{\"type\":\"setMeta\",\"meta\":{\"host\":\"Host\",\"world\":\"301\",\"lootRule\":\"FFA\"}}");
+		JsonNode meta = last(memberOut, "meta");
+		assertThat(meta.get("meta").get("world").asText()).isEqualTo("301");
+		assertThat(meta.get("meta").get("lootRule").asText()).isEqualTo("FFA");
+		// Relayed verbatim: the server stores the payload without interpreting it.
+		assertThat(last(hostOut, "meta")).isNull();
+
+		// A member cannot rewrite the ad settings under the host.
+		send(member, "{\"type\":\"setMeta\",\"meta\":{\"host\":\"Mem\",\"world\":\"999\"}}");
+		assertThat(last(hostOut, "meta")).isNull();
+		assertThat(last(memberOut, "meta").get("meta").get("world").asText()).isEqualTo("301");
+
+		// A later joiner gets the current settings in its seating snapshot.
+		List<String> lateOut = new ArrayList<>();
+		WebSocketSession late = session("late", lateOut);
+		handler.afterConnectionEstablished(late);
+		send(late, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Late\",\"invited\":true}");
+		assertThat(last(lateOut, "meta").get("meta").get("lootRule").asText()).isEqualTo("FFA");
+	}
+
 	@Test
 	void hostTransferCommitMovesAuthoritativeHostStatus() throws Exception {
 		long memberId = hostWithAdmittedMember();

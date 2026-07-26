@@ -43,6 +43,9 @@ public class PartyV2MetricsConfig {
 			FunctionCounter.builder("osparty.partyv2.rebalances", manager, PartyV2Manager::rebalanceCount)
 				.description("New parties sent to a lighter node instead of being hosted here")
 				.register(registry);
+			FunctionCounter.builder("osparty.partyv2.pruned", manager, PartyV2Manager::prunedCount)
+				.description("Members swept after their socket closed without a close callback")
+				.register(registry);
 		};
 	}
 }

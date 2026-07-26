@@ -286,6 +286,42 @@ class PartyV2HandlerTest {
 	}
 
 	@Test
+	void sweepingDropsMembersWhoseSocketDiedWithoutACloseCallback() throws Exception {
+		long memberId = hostWithAdmittedMember();
+		assertThat(manager.connectedMembers()).isEqualTo(2);
+
+		// The member's socket dies without afterConnectionClosed ever firing. Sends to it are silently
+		// skipped, so nothing else in the system would ever notice it had gone.
+		when(member.isOpen()).thenReturn(false);
+		manager.pruneRoom("r");
+
+		assertThat(manager.connectedMembers()).isEqualTo(1);
+		assertThat(manager.prunedCount()).isEqualTo(1);
+		// The host hears about it exactly as it would for a clean leave.
+		assertThat(last(hostOut, "memberLeft").get("memberId").asLong()).isEqualTo(memberId);
+		// The room survives — its host is still connected.
+		assertThat(manager.roomCount()).isEqualTo(1);
+
+		// When the host goes the same way the room goes with it, releasing its ownership lock instead of
+		// being renewed forever.
+		when(host.isOpen()).thenReturn(false);
+		manager.pruneRoom("r");
+		assertThat(manager.roomCount()).isZero();
+		assertThat(manager.prunedCount()).isEqualTo(2);
+	}
+
+	@Test
+	void sweepingLeavesALiveRoomAlone() throws Exception {
+		hostWithAdmittedMember();
+		manager.pruneRoom("r");
+		// Nothing closed, so nothing removed — and no discard, which would otherwise be free to release the
+		// lock of a room created microseconds ago whose host is still being seated.
+		assertThat(manager.prunedCount()).isZero();
+		assertThat(manager.roomCount()).isEqualTo(1);
+		assertThat(manager.connectedMembers()).isEqualTo(2);
+	}
+
+	@Test
 	void readyChecksAndSpecDrainsFanOutToPeers() throws Exception {
 		long memberId = hostWithAdmittedMember();
 

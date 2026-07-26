@@ -36,6 +36,7 @@ public class PartyV2Manager {
 	private final java.util.concurrent.atomic.LongAdder ownerPending = new java.util.concurrent.atomic.LongAdder();
 	private final java.util.concurrent.atomic.LongAdder reclaims = new java.util.concurrent.atomic.LongAdder();
 	private final java.util.concurrent.atomic.LongAdder rebalances = new java.util.concurrent.atomic.LongAdder();
+	private final java.util.concurrent.atomic.LongAdder pruned = new java.util.concurrent.atomic.LongAdder();
 
 	public PartyV2Manager(ObjectMapper mapper, PartyOwnershipService ownership, NodeIdentity node,
 		PartyV2Bus bus, NodeLoadRegistry load) {
@@ -145,6 +146,32 @@ public class PartyV2Manager {
 			bus.publishOwnerChanged(id, node.nodeId());
 		}
 		return rooms.computeIfAbsent(id, k -> new LivePartyRoom(id, activityId, node.nodeId(), mapper));
+	}
+
+	/**
+	 * Drop ghost members from {@code id} — sockets that closed without the container reporting it — and
+	 * discard the room if that leaves it hostless or empty.
+	 *
+	 * <p>Membership is otherwise pruned only by the close callback, so a single missed callback strands a
+	 * room forever: it never empties, so it is never discarded, so the heartbeat renews its ownership lock
+	 * for the life of the node. Sweeping on the same schedule that renews those locks means a leak can
+	 * outlive its clients by at most one heartbeat.
+	 */
+	void pruneRoom(String id) {
+		LivePartyRoom room = rooms.get(id);
+		if (room == null) {
+			return;
+		}
+		LivePartyRoom.Prune prune = room.pruneClosed();
+		if (prune.removed() == 0) {
+			return;
+		}
+		pruned.add(prune.removed());
+		log.info("Party V2: pruned {} closed session(s) from {}", prune.removed(), id);
+		if (prune.discard()) {
+			log.info("Party V2: discarding {} — nothing left after the sweep", id);
+			discard(id);
+		}
 	}
 
 	/** The existing room for {@code id}, or null if none is hosted here. */
@@ -277,5 +304,9 @@ public class PartyV2Manager {
 
 	public double rebalanceCount() {
 		return rebalances.sum();
+	}
+
+	public double prunedCount() {
+		return pruned.sum();
 	}
 }

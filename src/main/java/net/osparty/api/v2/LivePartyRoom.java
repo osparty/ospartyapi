@@ -330,6 +330,48 @@ final class LivePartyRoom {
 		}
 	}
 
+	/**
+	 * The outcome of a {@link #pruneClosed} sweep: how many ghosts were dropped, and whether that leaves
+	 * the room to be discarded.
+	 */
+	record Prune(int removed, boolean discard) {
+	}
+
+	/**
+	 * Drop members whose socket has closed without the container ever telling us.
+	 *
+	 * <p>Membership is otherwise only ever pruned by {@code afterConnectionClosed}. Miss that callback once
+	 * — an abrupt teardown under load, a send that fails after the session is already gone — and the member
+	 * is immortal: {@link #sendRaw} quietly skips a closed session rather than removing it, so the room
+	 * never empties, is never discarded, and its ownership lock is renewed by the heartbeat for as long as
+	 * the node lives. Every such room is a permanent leak of RAM and of a Redis key.
+	 *
+	 * <p>Only reports {@code discard} when it actually removed someone. A room that is merely empty may be
+	 * one that was created microseconds ago and whose host is being seated right now — discarding that
+	 * would release an ownership lock out from under a live host.
+	 *
+	 * @return what the sweep did.
+	 */
+	Prune pruneClosed() {
+		List<Long> gone = new ArrayList<>();
+		synchronized (lock) {
+			for (Map.Entry<Long, WebSocketSession> entry : sessions.entrySet()) {
+				if (!entry.getValue().isOpen()) {
+					gone.add(entry.getKey());
+				}
+			}
+		}
+		if (gone.isEmpty()) {
+			return new Prune(0, false);
+		}
+		// Outside the collection loop: onLeave takes the lock itself and broadcasts, which can re-enter.
+		boolean hostLeft = false;
+		for (long memberId : gone) {
+			hostLeft |= onLeave(memberId);
+		}
+		return new Prune(gone.size(), hostLeft || isEmpty());
+	}
+
 	boolean isEmpty() {
 		synchronized (lock) {
 			return members.isEmpty();

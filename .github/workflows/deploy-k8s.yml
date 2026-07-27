@@ -61,11 +61,11 @@ jobs:
             echo "tags=${IMAGE}:${VERSION},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Set up JDK 17
+      - name: Set up JDK 25
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '25'
           cache: gradle
       - name: Build and test
         run: ./gradlew --no-daemon clean test bootJar -PappVersion=${{ steps.version.outputs.version }}

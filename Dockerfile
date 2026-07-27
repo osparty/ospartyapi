@@ -1,9 +1,20 @@
-FROM eclipse-temurin:17-jre
+# Stage 1: Build
+FROM eclipse-temurin:25-jdk AS builder
+
+RUN groupadd -r app && useradd -r -g app app
+
+WORKDIR /app
+COPY . .
+
+RUN ./gradlew --no-daemon clean test bootJar -PappVersion=local-test
+
+# Stage 2: Run
+FROM eclipse-temurin:25-jre
 
 RUN groupadd -r app && useradd -r -g app app
 WORKDIR /app
 
-COPY build/libs/app.jar app.jar
+COPY --from=builder /app/build/libs/app.jar app.jar
 USER app
 
 EXPOSE 8080

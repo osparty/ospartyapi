@@ -328,11 +328,18 @@ Postgres tables: `ad_ban`, `ad_report`, `discord_link`, `account_preference`,
 `data_migration`.
 
 The test suite runs against in-memory fakes (`@Profile("test")`), so
-`./gradlew test` needs neither Redis nor Postgres. Two test classes opt back in:
-`LiquibaseMigrationTest` needs Docker (Testcontainers), and the Redis-backed
-tests (`ReportRateLimiterTest`, `DiscordLinkImporterTest`) run only when
-something is listening on `localhost:6379`. Both skip cleanly otherwise —
-except in CI, where the schema test fails loudly rather than silently skipping.
+`./gradlew test` needs neither Redis nor Postgres, and every test either works
+without them or skips itself. Three classes opt back in:
+
+| Class | Needs | Without it |
+|---|---|---|
+| `LiquibaseMigrationTest` | Docker (Testcontainers) | skips locally, **fails in CI** — a silently-skipping schema test is worse than none |
+| `ReportRateLimiterTest` | Redis on `localhost:6379` | skips |
+| `DiscordLinkImporterTest` | Redis on `localhost:6379` | skips |
+
+CI provides Redis as a service so those two actually run there rather than
+skipping into zero coverage. Start one locally the same way with
+`docker compose up -d redis`.
 
 ## Run the stack with Docker
 

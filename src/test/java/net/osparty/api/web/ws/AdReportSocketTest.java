@@ -90,17 +90,28 @@ class AdReportSocketTest {
 	}
 
 	/**
-	 * Clears the rate limiter's Redis state before each case.
+	 * Clears any rate-limiter state left in Redis by a previous run, when there is a Redis to clear.
 	 *
-	 * <p>Necessary because {@code FakePartyRepository}'s id sequence restarts with the JVM, so party
-	 * ids repeat from run to run — and the limiter's per-party keys, correctly, do not. Without this
-	 * a passing run leaves behind "already notified about party 1001" and fails the next one.
+	 * <p>Needed because {@code FakePartyRepository}'s id sequence restarts with the JVM, so party ids
+	 * repeat from run to run — while the limiter's per-party keys, correctly, do not. Without this a
+	 * passing run leaves behind "already notified about party 1001" and fails the next one.
+	 *
+	 * <p>Absent Redis is not an error here: the limiter fails open by design, and the assertions
+	 * below are about report ingress rather than about throttling (that is
+	 * {@code ReportRateLimiterTest}, which is gated on Redis being reachable). So this test has to
+	 * pass both with and without one, and the cleanup degrades to a no-op.
 	 */
 	@BeforeEach
 	void clearRateLimiterState() {
-		java.util.Set<String> keys = redis.keys("reports:*");
-		if (keys != null && !keys.isEmpty()) {
-			redis.delete(keys);
+		try (org.springframework.data.redis.core.Cursor<String> cursor = redis.scan(
+			org.springframework.data.redis.core.ScanOptions.scanOptions()
+				.match("reports:*").count(500).build())) {
+			while (cursor.hasNext()) {
+				redis.delete(cursor.next());
+			}
+		}
+		catch (Exception e) {
+			// No Redis on this machine; nothing was carried over from a previous run either.
 		}
 	}
 

@@ -374,7 +374,7 @@ Manager) pointed at host port `8080`. Two things matter for the live push:
   every 20s), so upgraded connections aren't cut. Then point the plugin's `API
   base URL` at `https://party.example.com`.
 
-> The jar is Java 17 bytecode on an `eclipse-temurin:17-jre` base. Rebuild the jar
+> The jar is Java 25 bytecode on an `eclipse-temurin:25-jre` base. Rebuild the jar
 > and re-run `up --build` to deploy a new version.
 
 ## Monitoring (production)
@@ -522,4 +522,30 @@ src/main/java/net/osparty/api/
 src/test/java/net/osparty/api/        MockMvc + WebSocket tests (FakePartyRepository, @Profile("test"))
 ```
 
-> Requires JDK 17+. Compiles to Java 17 bytecode; runs on newer JDKs too.
+> Requires JDK 25 — pinned via a Gradle toolchain, so the build fetches it if your
+> default JDK is older.
+
+## Threading
+
+Requests and WebSocket frames are handled on **virtual threads**
+(`spring.threads.virtual.enabled`). Nearly everything this service does on a socket
+frame ends in a blocking Redis or Postgres call, so the old 800-thread Tomcat pool
+was really a ceiling on how many of those could be in flight before work started
+queueing. Virtual threads make blocking cheap, and the limit becomes the datastore
+rather than the pool.
+
+Java 25 rather than 21 is what makes this worth doing: before JEP 491 (Java 24) a
+virtual thread that blocked inside a `synchronized` block pinned its carrier, and
+Tomcat's WebSocket send path is synchronized — so on 21 this would have swapped a
+visible thread pool for a smaller and much less obvious one.
+
+Two consequences worth knowing:
+
+- **`@Scheduled` tasks no longer share a single thread.** Spring swaps in
+  `SimpleAsyncTaskScheduler`, so the reconciler, presence broadcast, TTL touch and
+  the purges now run concurrently instead of queueing behind each other. The state
+  they share is already concurrent (`ConcurrentHashMap`, `AtomicLong`, volatile
+  snapshots); `PartyReconciler.lastKnown` is volatile for exactly this reason.
+- **The Hikari pool is now the only bound on concurrent database work**, since
+  there is no request-thread pool in front of it. Hence `maximum-pool-size: 10`
+  rather than 5, and a short `connection-timeout` so saturation fails fast.

@@ -37,7 +37,13 @@ public class PartyReconciler {
 	private final net.osparty.api.service.DiscordBadgeService badges;
 	private final BanService bans;
 
-	private Map<String, Known> lastKnown = new HashMap<>();
+	/**
+	 * Volatile because scheduled tasks no longer share one thread. Under virtual threads each
+	 * execution gets a fresh one, so a plain field would depend on the executor's own handoff for
+	 * visibility of the previous tick's snapshot. Successive runs of a fixed-delay task never
+	 * overlap, so the whole map is simply published by the reference write at the end of each pass.
+	 */
+	private volatile Map<String, Known> lastKnown = new HashMap<>();
 
 	public PartyReconciler(PartyRepository store, PartyBroadcaster broadcaster,
 		net.osparty.api.service.VoiceChannelService voice,

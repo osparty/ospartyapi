@@ -9,8 +9,11 @@ version = findProperty('appVersion') ?: '1.0.0'
 description = 'Advertising/bulletin-board API for the OSParty RuneLite plugin'
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    // Toolchain rather than source/targetCompatibility so the compiler, tests and the runtime the
+    // image ships are pinned to one version instead of whatever JDK happens to launch Gradle.
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
 }
 
 repositories {

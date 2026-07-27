@@ -1,15 +1,27 @@
 server:
   port: 8080
   tomcat:
+    # Connection limits still matter under virtual threads — they bound sockets and the accept
+    # backlog, not threads. The `threads.max`/`min-spare` pool sizing that used to sit here does
+    # not: with virtual threads Tomcat takes a thread-per-request executor and ignores it.
     max-connections: 20000
     accept-count: 2000
-    threads:
-      max: 800
-      min-spare: 50
 
 spring:
   application:
     name: osrs-party-api
+  threads:
+    virtual:
+      # Every socket frame this service handles ends in a blocking Redis or Postgres call, so the
+      # old 800-thread pool was really a cap on how many of those could be in flight at once —
+      # queueing behind each other under load. Virtual threads make blocking cheap, so the limit
+      # becomes the datastore rather than the pool.
+      #
+      # This needs Java 21+ to exist and Java 24+ to be worth having: before JEP 491 a virtual
+      # thread blocking inside a `synchronized` block pinned its carrier, and Tomcat's WebSocket
+      # send path is synchronized — so on 21 this would have traded a thread pool for a smaller,
+      # subtler one. On 25 it does not.
+      enabled: true
   jackson:
     default-property-inclusion: always
   data:
@@ -22,9 +34,14 @@ spring:
     password: ${POSTGRES_PASSWORD:osparty}
     hikari:
       pool-name: osparty-pg
-      # 5 per replica x 3 replicas is well under Postgres' default max_connections of 100.
-      maximum-pool-size: ${POSTGRES_POOL_MAX:5}
+      # With virtual threads there is no longer a request-thread pool in front of this, so the
+      # connection pool is the only thing bounding concurrent database work — worth a little more
+      # headroom than when 800 platform threads were the real ceiling. 10 per replica x 3 replicas
+      # is still well under Postgres' default max_connections of 100.
+      maximum-pool-size: ${POSTGRES_POOL_MAX:10}
       minimum-idle: 1
+      # Fail fast rather than pile up: a saturated pool should surface as an error on the rare
+      # database path, not as unbounded waiting on the socket path.
       connection-timeout: 3000
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml

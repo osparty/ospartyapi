@@ -10,7 +10,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration;
+import org.springframework.boot.autoconfigure.jdbc.JdbcClientAutoConfiguration;
+import org.springframework.boot.autoconfigure.jdbc.JdbcTemplateAutoConfiguration;
+import org.springframework.boot.autoconfigure.liquibase.LiquibaseAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -30,8 +38,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * active ban. That index is what makes the ban endpoint idempotent under two moderators clicking
  * at once, so it needs a test against Postgres rather than against a fake.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE,
-	properties = {"app.ws.enabled=false", "app.ads.stale-purge-cron=-"})
+@SpringBootTest(classes = LiquibaseMigrationTest.SqlOnlyContext.class,
+	webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @ActiveProfiles("pgtest")
 @Testcontainers
 @EnabledIf("dockerUsableOrCi")
@@ -39,6 +47,27 @@ class LiquibaseMigrationTest {
 	@Container
 	@SuppressWarnings("resource")
 	static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+
+	/**
+	 * Just enough context to exercise SQL: a datasource, the changelog, and the three JDBC
+	 * repositories.
+	 *
+	 * <p>Booting the whole application here would drag in the Redis-backed beans as well — and
+	 * {@code RedisInviteBus} opens its pub/sub listener eagerly at startup, so the context would
+	 * fail to build on any machine without Redis running, for a test that never touches it. Naming
+	 * the beans explicitly keeps the test honest about its one dependency, and starts in a fraction
+	 * of the time.
+	 */
+	@Configuration(proxyBeanMethods = false)
+	@ImportAutoConfiguration({
+		DataSourceAutoConfiguration.class,
+		DataSourceTransactionManagerAutoConfiguration.class,
+		JdbcTemplateAutoConfiguration.class,
+		JdbcClientAutoConfiguration.class,
+		LiquibaseAutoConfiguration.class})
+	@Import({JdbcBanRepository.class, JdbcAdReportRepository.class, JdbcDiscordLinkRepository.class})
+	static class SqlOnlyContext {
+	}
 
 	/**
 	 * Skips locally when Docker is not reachable so {@code ./gradlew test} stays runnable on a
@@ -62,8 +91,6 @@ class LiquibaseMigrationTest {
 		registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
 		registry.add("spring.datasource.username", POSTGRES::getUsername);
 		registry.add("spring.datasource.password", POSTGRES::getPassword);
-		// Redis is not involved in these assertions, but the context still builds the beans.
-		registry.add("spring.data.redis.host", () -> "localhost");
 	}
 
 	@Autowired
@@ -206,6 +233,27 @@ class LiquibaseMigrationTest {
 		assertThat(bans.ban("spam guy", "Spam Guy", 9999L, "x", "111", "mod", null).getAccountHash())
 			.isEqualTo(4242L);
 		assertThat(bans.findActive()).hasSize(1);
+	}
+
+	/**
+	 * The older-client case: an advertisement with no account hash at all. Worth its own test
+	 * because a null parameter is what exposes an untyped placeholder — Postgres cannot infer a type
+	 * for a bare {@code ?} in {@code ? IS NOT NULL}, so this path failed to prepare at all while
+	 * every hash-bearing ban worked fine.
+	 */
+	@Test
+	void banAndRevokeByNameAloneWithNoAccountHash() {
+		AdBan ban = bans.ban("legacy host", "Legacy Host", null, "boosting", "111", "mod", null);
+		assertThat(ban.getAccountHash()).isNull();
+		assertThat(bans.findActive()).extracting(BanRepository.ActiveBan::hostName)
+			.containsExactly("legacy host");
+
+		// Re-banning the same name resolves to the existing row rather than a constraint violation.
+		assertThat(bans.ban("legacy host", "Legacy Host", null, "again", "111", "mod", null).getId())
+			.isEqualTo(ban.getId());
+
+		assertThat(bans.revoke("legacy host", null, "222", "mod2", "appealed")).hasSize(1);
+		assertThat(bans.findActive()).isEmpty();
 	}
 
 	@Test

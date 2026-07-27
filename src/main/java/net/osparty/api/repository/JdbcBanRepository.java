@@ -88,7 +88,8 @@ public class JdbcBanRepository implements BanRepository {
 				       revoked_by_discord_name = ?,
 				       revoke_reason = ?
 				 WHERE revoked_at IS NULL
-				   AND ((? <> '' AND host_name = ?) OR (? IS NOT NULL AND account_hash = ?))
+				   AND ((CAST(? AS text) <> '' AND host_name = ?)
+				        OR (CAST(? AS bigint) IS NOT NULL AND account_hash = ?))
 				RETURNING
 				""" + COLUMNS)
 			.params(moderatorDiscordId, moderatorDiscordName, reason,
@@ -97,12 +98,20 @@ public class JdbcBanRepository implements BanRepository {
 			.list();
 	}
 
-	/** Matches on either identifier: a name ban and a hash ban are both bans on the same person. */
+	/**
+	 * Matches on either identifier: a name ban and a hash ban are both bans on the same person.
+	 *
+	 * <p>The casts are load-bearing, not decoration. A bare {@code ?} in {@code ? IS NOT NULL} gives
+	 * Postgres nothing to infer a type from and the statement fails to prepare at all — which only
+	 * shows up when the account hash is null, i.e. exactly the older-client case this dual-identifier
+	 * scheme exists to serve.
+	 */
 	private Optional<AdBan> findActiveBySubject(String hostName, Long accountHash) {
 		return db.sql("SELECT " + COLUMNS + """
 				  FROM ad_ban
 				 WHERE revoked_at IS NULL
-				   AND ((? <> '' AND host_name = ?) OR (? IS NOT NULL AND account_hash = ?))
+				   AND ((CAST(? AS text) <> '' AND host_name = ?)
+				        OR (CAST(? AS bigint) IS NOT NULL AND account_hash = ?))
 				 ORDER BY id
 				 LIMIT 1
 				""")

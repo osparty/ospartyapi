@@ -23,6 +23,12 @@ import org.springframework.stereotype.Component;
  * for the rest of the tick regardless of when in it the value arrived. Pings, ready checks and spec drains
  * are <em>not</em> collected here: those are one-off, reaction-timed, and want to be prompt.
  *
+ * <p><b>The window is not the whole story.</b> This runs every {@code aggregate-ms}, but a room only sends on
+ * a tick where something urgent came in — a vital that moved down, which is the sender's own judgement — or
+ * where {@code aggregate-idle-ms} has passed since it last sent. Combat therefore keeps the short window,
+ * while the banking, travelling and waiting that make up most of a session cost one round a second. That is
+ * a send-count cut, and send count is what this service's CPU tracks (PARTY_V2_OPTIMIZATION.md §6.5).
+ *
  * <p>This is a periodic sweep of all owned rooms, which §11.1 of the migration plan warns against on the hot
  * path. It is cheap by construction: a room with nothing pending returns on an empty check, and the flush
  * itself takes only that room's own lock, so rooms stay independent.
@@ -31,13 +37,17 @@ import org.springframework.stereotype.Component;
 @ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class PartyV2Aggregator {
 	private final PartyV2Manager manager;
+	private final long idleMs;
 
-	public PartyV2Aggregator(PartyV2Manager manager) {
+	public PartyV2Aggregator(PartyV2Manager manager,
+		@org.springframework.beans.factory.annotation.Value("${app.party-v2.aggregate-idle-ms:1000}")
+		long idleMs) {
 		this.manager = manager;
+		this.idleMs = idleMs;
 	}
 
 	@Scheduled(fixedRateString = "${app.party-v2.aggregate-ms:300}")
 	void flush() {
-		manager.flushRooms();
+		manager.flushRooms(idleMs);
 	}
 }

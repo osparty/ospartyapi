@@ -694,6 +694,37 @@ class PartyV2HandlerTest {
 		assertThat(roster.get("closed").asBoolean()).isTrue();
 	}
 
+	/**
+	 * The two-speed flush: an ordinary update waits out the idle window, one the sender marked urgent does
+	 * not — and the waiting one goes out with it rather than being dropped.
+	 */
+	@Test
+	void anUrgentUpdateFlushesTheOnesWaitingOutTheIdleWindow() throws Exception {
+		hostWithAdmittedMember();
+		// A window long enough that nothing elapses it during the test; the gate is driven by the flag alone.
+		long idleMs = 60_000;
+
+		// The first flush after a quiet spell is always immediate — the gap is measured from the last flush.
+		send(host, "{\"type\":\"update\",\"state\":{\"currentHp\":50}}");
+		manager.flushRooms(idleMs);
+		assertThat(countOf(memberOut, "memberUpdates")).isEqualTo(1);
+
+		// Now the room has just sent, so an ordinary update waits.
+		send(host, "{\"type\":\"update\",\"state\":{\"currentHp\":51}}");
+		manager.flushRooms(idleMs);
+		assertThat(countOf(memberOut, "memberUpdates")).isEqualTo(1);
+
+		// Damage taken. It goes out at once, and takes the held update with it in arrival order.
+		send(host, "{\"type\":\"update\",\"urgent\":true,\"state\":{\"currentHp\":22}}");
+		manager.flushRooms(idleMs);
+		assertThat(countOf(memberOut, "memberUpdates")).isEqualTo(2);
+
+		JsonNode updates = last(memberOut, "memberUpdates").get("updates");
+		assertThat(updates).hasSize(2);
+		assertThat(updates.get(0).get("state").get("currentHp").asInt()).isEqualTo(51);
+		assertThat(updates.get(1).get("state").get("currentHp").asInt()).isEqualTo(22);
+	}
+
 	// ---- helpers ------------------------------------------------------------
 
 	/** Host a room and admit one member (an invited joiner is seated straight away); returns its id. */

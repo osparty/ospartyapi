@@ -94,18 +94,18 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			// payload is partial, and a client from before the split must ignore it rather than read it as
 			// a whole snapshot.
 			case "update":
-				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberUpdate", in.state()));
+				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberUpdate", in.state(), urgent(in)));
 				break;
 			// The parts as separate frames. Superseded by `update` — coalescing them costs the same bytes
 			// and a third fewer sends — but still accepted for clients that have not caught up.
 			case "vitals":
-				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberVitals", in.state()));
+				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberVitals", in.state(), urgent(in)));
 				break;
 			case "items":
-				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberItems", in.state()));
+				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberItems", in.state(), urgent(in)));
 				break;
 			case "profile":
-				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberProfile", in.state()));
+				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberProfile", in.state(), urgent(in)));
 				break;
 			case "heartbeat":
 				// The touch() above already fed the ghost sweep; this only tells the peers, whose own
@@ -178,6 +178,14 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			default:
 				break;
 		}
+	}
+
+	/**
+	 * Whether the sender asked for this update to skip the idle window. Absent means no — a client from
+	 * before the flag simply never gets the fast path, which costs it latency and nothing else.
+	 */
+	private static boolean urgent(Inbound in) {
+		return Boolean.TRUE.equals(in.urgent());
 	}
 
 	private void handleHello(Ctx ctx, Inbound in) {

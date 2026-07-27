@@ -11,6 +11,10 @@ import com.fasterxml.jackson.databind.util.TokenBuffer;
  * <p>{@link #state} and {@link #meta} are opaque to the server — the member's live self-snapshot (a
  * serialised plugin {@code PlayerUpdate}) and the host's advertised party settings respectively, which the
  * owner node stores and relays verbatim without interpreting.
+ *
+ * <p>{@link #urgent} is the one thing the server is told <em>about</em> a live update, and it is a field of
+ * the frame rather than of the payload for exactly that reason: the owner still never reads the state, it
+ * only learns whether the sender wants it delivered promptly (see {@code LivePartyRoom#flush}).
  */
 public record Inbound(
 	String type,
@@ -26,6 +30,7 @@ public record Inbound(
 	Boolean teacher,
 	Boolean invited,
 	@JsonDeserialize(using = RawJson.class) TokenBuffer state,
+	Boolean urgent,
 	Integer x,
 	Integer y,
 	Integer plane,

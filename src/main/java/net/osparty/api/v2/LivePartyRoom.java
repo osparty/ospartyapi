@@ -54,6 +54,9 @@ final class LivePartyRoom {
 
 	/** This window's updates, in arrival order. Drained by {@link #flush}. */
 	private List<Outbound.MemberUpdate> pending = new ArrayList<>();
+	/** Whether anything in {@link #pending} was sent as urgent, which overrides the idle window. */
+	private boolean pendingUrgent;
+	private long lastFlushAt;
 	private long lastResyncAt;
 	private long hostMemberId;
 	private String hostName;
@@ -188,7 +191,7 @@ final class LivePartyRoom {
 	 * complete. Joiners are served by {@link #broadcastResync} instead (PARTY_V2_OPTIMIZATION.md §5.2).
 	 */
 	void updateState(long memberId, TokenBuffer live) {
-		updateState(memberId, "memberState", live);
+		updateState(memberId, "memberState", live, false);
 	}
 
 	/**
@@ -201,13 +204,17 @@ final class LivePartyRoom {
 	 *
 	 * <p>{@code outboundType} is ignored now that updates travel together — kept in the signature because the
 	 * split frames are still accepted from clients that have not caught up.
+	 *
+	 * <p>{@code urgent} is the sender's own judgement that this one should not wait out the idle window: a
+	 * vital that moved <em>down</em>, which is damage taken, prayer drained or a spec spent. See {@link #flush}.
 	 */
-	void updateState(long memberId, String outboundType, TokenBuffer live) {
+	void updateState(long memberId, String outboundType, TokenBuffer live, boolean urgent) {
 		synchronized (lock) {
 			if (!members.containsKey(memberId) || live == null) {
 				return;
 			}
 			pending.add(new Outbound.MemberUpdate(memberId, live));
+			pendingUrgent |= urgent;
 		}
 	}
 
@@ -229,13 +236,26 @@ final class LivePartyRoom {
 	 * information in 12% more frames and 13% more bytes (a member whose update was alone in a window used to
 	 * receive nothing, and then received a frame containing only itself) for no CPU saving anyone could
 	 * detect. Serialisation is not what this costs; the send is.
+	 *
+	 * <p>Two speeds, because sends are what this costs and most of a party's wall-clock time is not combat.
+	 * An urgent update — a vital that moved down — goes out on this call. Everything else waits until
+	 * {@code idleMs} has passed since the room last flushed, so a party standing in a bank pays one round a
+	 * second instead of one every window. The gap is measured from the last flush rather than from the oldest
+	 * pending update, so the first update after a quiet spell is still immediate; only sustained non-urgent
+	 * chatter is throttled.
 	 */
-	void flush() {
+	void flush(long idleMs) {
 		List<Outbound.MemberUpdate> window;
 		synchronized (lock) {
 			if (pending.isEmpty()) {
 				return;
 			}
+			long now = System.currentTimeMillis();
+			if (!pendingUrgent && now - lastFlushAt < idleMs) {
+				return;
+			}
+			lastFlushAt = now;
+			pendingUrgent = false;
 			// Swap rather than copy: the outgoing list is handed to Jackson, so it cannot be the one the
 			// next window appends to.
 			window = pending;

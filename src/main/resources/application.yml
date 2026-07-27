@@ -67,6 +67,11 @@ app:
     reconcile-interval-ms: 5000
     touch-interval-ms: 5000
   party-v2:
+    # How long a room with nothing urgent pending may hold its live updates. The aggregation window
+    # (aggregate-ms, 300) still governs anything a sender marked urgent — a vital that moved down — so
+    # combat is unaffected and the banking/travelling that fills most of a session costs one round a
+    # second instead of three. Sends are what this service's CPU tracks.
+    aggregate-idle-ms: 1000
     # Members this node must be carrying above the lightest node before a new party is placed elsewhere.
     # A redirect costs the host a reconnect, so small imbalances are left alone — parties end, which
     # levels them out on its own.

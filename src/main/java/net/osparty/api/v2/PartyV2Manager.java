@@ -189,11 +189,18 @@ public class PartyV2Manager {
 	 * <p>Walks all rooms rather than tracking which have something pending: the check is an empty-list read
 	 * under the room's own lock, and a set of dirty rooms would need maintaining on the hottest path in the
 	 * system to save it.
+	 *
+	 * <p>{@code idleMs} is how long a room with nothing urgent may hold its updates; zero flushes every room
+	 * on every call, which is what the tests want.
 	 */
 	void flushRooms() {
+		flushRooms(0);
+	}
+
+	void flushRooms(long idleMs) {
 		for (LivePartyRoom room : rooms.values()) {
 			try {
-				room.flush();
+				room.flush(idleMs);
 			}
 			catch (Exception e) {
 				// One room's bad send must not stop the rest of this node's parties from being flushed.

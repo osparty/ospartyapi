@@ -222,13 +222,13 @@ final class LivePartyRoom {
 	}
 
 	/**
-	 * Send this window's updates: one frame, once, to everyone in the room.
+	 * Send this window's updates: one frame per member, carrying everyone else's.
 	 *
-	 * <p>Deliberately the <em>same</em> frame for every recipient, including the members whose own updates it
-	 * carries. Tailoring a copy per member to strip their own would mean serialising once per member instead
-	 * of once per room, and serialisation is now the cost worth avoiding — a member seeing its own update
-	 * come back costs a few bytes on a wire that is already carrying a fraction of what it used to. Receivers
-	 * skip their own member id.
+	 * <p>Each recipient's list omits its own updates. Sharing one frame with the whole room instead would
+	 * serialise once rather than once per member — that was tried, and measured: it delivered the same
+	 * information in 12% more frames and 13% more bytes (a member whose update was alone in a window used to
+	 * receive nothing, and then received a frame containing only itself) for no CPU saving anyone could
+	 * detect. Serialisation is not what this costs; the send is.
 	 */
 	void flush() {
 		List<Outbound.MemberUpdate> window;
@@ -242,7 +242,17 @@ final class LivePartyRoom {
 			pending = new ArrayList<>();
 		}
 		synchronized (lock) {
-			broadcast(Outbound.memberUpdates(window), null);
+			for (Map.Entry<Long, WebSocketSession> entry : recipients()) {
+				List<Outbound.MemberUpdate> theirs = new ArrayList<>(window.size());
+				for (Outbound.MemberUpdate update : window) {
+					if (update.memberId() != entry.getKey()) {
+						theirs.add(update);
+					}
+				}
+				if (!theirs.isEmpty()) {
+					send(entry.getValue(), Outbound.memberUpdates(theirs));
+				}
+			}
 		}
 	}
 

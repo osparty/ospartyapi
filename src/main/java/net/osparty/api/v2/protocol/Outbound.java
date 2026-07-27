@@ -2,6 +2,7 @@ package net.osparty.api.v2.protocol;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.util.TokenBuffer;
 import java.util.List;
 
 /**
@@ -22,7 +23,7 @@ public record Outbound(
 	Boolean closed,
 	String discordUrl,
 	List<RosterEntry> members,
-	JsonNode state,
+	TokenBuffer state,
 	Integer x,
 	Integer y,
 	Integer plane,
@@ -74,7 +75,7 @@ public record Outbound(
 	}
 
 	/** A peer's live snapshot, relayed verbatim ({@code state} is the opaque payload they sent). */
-	public static Outbound memberState(long memberId, JsonNode state) {
+	public static Outbound memberState(long memberId, TokenBuffer state) {
 		return new Builder("memberState").memberId(memberId).state(state).build();
 	}
 
@@ -86,7 +87,7 @@ public record Outbound(
 	 * than mistaking a fragment for a whole snapshot (PARTY_V2_OPTIMIZATION.md §8). The room does not know
 	 * or care what distinguishes them; {@code type} is passed through and the payload is never read.
 	 */
-	public static Outbound memberState(long memberId, String type, JsonNode state) {
+	public static Outbound memberState(long memberId, String type, TokenBuffer state) {
 		return new Builder(type).memberId(memberId).state(state).build();
 	}
 
@@ -203,7 +204,7 @@ public record Outbound(
 
 	/** One member's live update inside a {@code memberUpdates} frame. */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
-	public record MemberUpdate(long memberId, JsonNode state) {
+	public record MemberUpdate(long memberId, TokenBuffer state) {
 	}
 
 	/** One member in the roster frame. {@code status} is HOST / MEMBER / PENDING. */
@@ -224,7 +225,7 @@ public record Outbound(
 		private String discordUrl;
 		private List<RosterEntry> members;
 		private List<MemberUpdate> updates;
-		private JsonNode state;
+		private TokenBuffer state;
 		private Integer x;
 		private Integer y;
 		private Integer plane;
@@ -295,7 +296,7 @@ public record Outbound(
 			return this;
 		}
 
-		public Builder state(JsonNode v) {
+		public Builder state(TokenBuffer v) {
 			this.state = v;
 			return this;
 		}

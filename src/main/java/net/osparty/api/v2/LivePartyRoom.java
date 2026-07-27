@@ -2,6 +2,7 @@ package net.osparty.api.v2;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.util.TokenBuffer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -52,7 +53,7 @@ final class LivePartyRoom {
 	private static final long RESYNC_MIN_INTERVAL_MS = 3_000;
 
 	/** This window's updates, in arrival order. Drained by {@link #flush}. */
-	private final List<Outbound.MemberUpdate> pending = new ArrayList<>();
+	private List<Outbound.MemberUpdate> pending = new ArrayList<>();
 	private long lastResyncAt;
 	private long hostMemberId;
 	private String hostName;
@@ -186,7 +187,7 @@ final class LivePartyRoom {
 	 * picture, and an owner that kept it would hand that fragment to the next joiner as though it were
 	 * complete. Joiners are served by {@link #broadcastResync} instead (PARTY_V2_OPTIMIZATION.md §5.2).
 	 */
-	void updateState(long memberId, JsonNode live) {
+	void updateState(long memberId, TokenBuffer live) {
 		updateState(memberId, "memberState", live);
 	}
 
@@ -201,40 +202,12 @@ final class LivePartyRoom {
 	 * <p>{@code outboundType} is ignored now that updates travel together — kept in the signature because the
 	 * split frames are still accepted from clients that have not caught up.
 	 */
-	void updateState(long memberId, String outboundType, JsonNode live) {
+	void updateState(long memberId, String outboundType, TokenBuffer live) {
 		synchronized (lock) {
 			if (!members.containsKey(memberId) || live == null) {
 				return;
 			}
 			pending.add(new Outbound.MemberUpdate(memberId, live));
-		}
-	}
-
-	/**
-	 * Send this window's updates: one frame per member, carrying everyone else's.
-	 *
-	 * <p>Each recipient's list omits its own updates rather than the whole frame being shared, so nobody is
-	 * echoed back to themselves. That costs one serialisation per member instead of one per room, which is
-	 * the cheap half — the expensive half is the send itself, and that is what drops.
-	 */
-	void flush() {
-		synchronized (lock) {
-			if (pending.isEmpty()) {
-				return;
-			}
-			List<Outbound.MemberUpdate> window = new ArrayList<>(pending);
-			pending.clear();
-			for (Map.Entry<Long, WebSocketSession> entry : recipients()) {
-				List<Outbound.MemberUpdate> theirs = new ArrayList<>(window.size());
-				for (Outbound.MemberUpdate update : window) {
-					if (update.memberId() != entry.getKey()) {
-						theirs.add(update);
-					}
-				}
-				if (!theirs.isEmpty()) {
-					send(entry.getValue(), Outbound.memberUpdates(theirs));
-				}
-			}
 		}
 	}
 
@@ -245,6 +218,31 @@ final class LivePartyRoom {
 				return;
 			}
 			broadcast(Outbound.alive(memberId), memberId);
+		}
+	}
+
+	/**
+	 * Send this window's updates: one frame, once, to everyone in the room.
+	 *
+	 * <p>Deliberately the <em>same</em> frame for every recipient, including the members whose own updates it
+	 * carries. Tailoring a copy per member to strip their own would mean serialising once per member instead
+	 * of once per room, and serialisation is now the cost worth avoiding — a member seeing its own update
+	 * come back costs a few bytes on a wire that is already carrying a fraction of what it used to. Receivers
+	 * skip their own member id.
+	 */
+	void flush() {
+		List<Outbound.MemberUpdate> window;
+		synchronized (lock) {
+			if (pending.isEmpty()) {
+				return;
+			}
+			// Swap rather than copy: the outgoing list is handed to Jackson, so it cannot be the one the
+			// next window appends to.
+			window = pending;
+			pending = new ArrayList<>();
+		}
+		synchronized (lock) {
+			broadcast(Outbound.memberUpdates(window), null);
 		}
 	}
 
@@ -561,12 +559,24 @@ final class LivePartyRoom {
 			return;
 		}
 		TextMessage message = new TextMessage(json);
+		if (exceptMemberId == null) {
+			// The common case, and the one the flush takes: no key comparison, no entry objects.
+			for (WebSocketSession session : openSessions()) {
+				sendRaw(session, message);
+			}
+			return;
+		}
 		for (Map.Entry<Long, WebSocketSession> entry : recipients()) {
-			if (exceptMemberId != null && entry.getKey().equals(exceptMemberId)) {
+			if (entry.getKey().equals(exceptMemberId)) {
 				continue;
 			}
 			sendRaw(entry.getValue(), message);
 		}
+	}
+
+	/** As {@link #recipients()}, for the sends that go to everyone — same snapshot rule, no entry boxing. */
+	private List<WebSocketSession> openSessions() {
+		return new ArrayList<>(sessions.values());
 	}
 
 	/**

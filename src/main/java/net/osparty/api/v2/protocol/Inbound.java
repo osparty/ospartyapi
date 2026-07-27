@@ -1,6 +1,8 @@
 package net.osparty.api.v2.protocol;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.util.TokenBuffer;
 
 /**
  * A decoded client → server Party V2 frame. Only the fields relevant to {@link #type} are populated; the
@@ -23,7 +25,7 @@ public record Inbound(
 	Boolean learner,
 	Boolean teacher,
 	Boolean invited,
-	JsonNode state,
+	@JsonDeserialize(using = RawJson.class) TokenBuffer state,
 	Integer x,
 	Integer y,
 	Integer plane,

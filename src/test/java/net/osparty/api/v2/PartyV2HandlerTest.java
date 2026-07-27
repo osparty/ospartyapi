@@ -72,15 +72,13 @@ class PartyV2HandlerTest {
 		assertThat(hostRoster.get("members")).hasSize(2);
 		assertThat(statusOf(hostRoster, memberId)).isEqualTo("PENDING");
 
-		// A live update from the host reaches the member on the next flush, and is not echoed back.
-		int before = countOf(hostOut, "memberUpdates");
+		// A live update from the host reaches the member on the next flush.
 		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301,\"currentHp\":50}}");
 		manager.flushRooms();
 		JsonNode relayed = onlyUpdate(last(memberOut, "memberUpdates"));
 		assertThat(relayed).isNotNull();
 		assertThat(relayed.get("memberId").asLong()).isEqualTo(hostId);
 		assertThat(relayed.get("state").get("world").asInt()).isEqualTo(301);
-		assertThat(countOf(hostOut, "memberUpdates")).isEqualTo(before);
 
 		// Host admits the applicant -> server-authoritative status flips to MEMBER for everyone.
 		send(host, "{\"type\":\"command\",\"action\":\"ADMIT\",\"target\":" + memberId + "}");
@@ -128,6 +126,9 @@ class PartyV2HandlerTest {
 	 * The point of aggregating: a window's updates from several members become <em>one</em> send each, not one
 	 * send per sender per recipient. With three members that is 3 sends instead of 6, and the saving grows
 	 * with the square of the party.
+	 *
+	 * <p>The frame is identical for everyone, sender included — tailoring a copy per member would cost a
+	 * serialisation each. Recipients drop their own entries.
 	 */
 	@Test
 	void aWindowOfUpdatesCostsOneSendPerMember() throws Exception {
@@ -149,13 +150,13 @@ class PartyV2HandlerTest {
 		// One frame each, not one per peer.
 		assertThat(countOf(hostOut, "memberUpdates")).isEqualTo(hostBefore + 1);
 		assertThat(countOf(memberOut, "memberUpdates")).isEqualTo(memberBefore + 1);
-		// And each carries the other two, never its own.
+		// The same frame for everyone: all three updates, in arrival order.
 		JsonNode hostFrame = last(hostOut, "memberUpdates").get("updates");
-		assertThat(hostFrame).hasSize(2);
-		long hostId = last(hostOut, "welcome").get("memberId").asLong();
-		for (JsonNode update : hostFrame) {
-			assertThat(update.get("memberId").asLong()).isNotEqualTo(hostId);
-		}
+		assertThat(hostFrame).hasSize(3);
+		assertThat(hostFrame.get(0).get("state").get("currentHp").asInt()).isEqualTo(10);
+		assertThat(hostFrame.get(1).get("state").get("currentHp").asInt()).isEqualTo(20);
+		assertThat(hostFrame.get(2).get("state").get("currentHp").asInt()).isEqualTo(30);
+		assertThat(last(memberOut, "memberUpdates").get("updates")).hasSize(3);
 	}
 
 	/** Nothing queued means nothing sent — the flush must not wake a quiet room. */
@@ -209,11 +210,10 @@ class PartyV2HandlerTest {
 	 * whole snapshot.
 	 */
 	@Test
-	void aCoalescedUpdateIsRelayedWholeAndNotEchoed() throws Exception {
+	void aCoalescedUpdateIsRelayedWhole() throws Exception {
 		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
 		long hostId = last(hostOut, "welcome").get("memberId").asLong();
-		int echoed = countOf(hostOut, "memberUpdates");
 
 		send(host, "{\"type\":\"update\",\"state\":{\"currentHp\":31,\"inventory\":[995]}}");
 		manager.flushRooms();
@@ -222,7 +222,6 @@ class PartyV2HandlerTest {
 		assertThat(relayed.get("memberId").asLong()).isEqualTo(hostId);
 		assertThat(relayed.get("state").get("currentHp").asInt()).isEqualTo(31);
 		assertThat(relayed.get("state").get("inventory")).hasSize(1);
-		assertThat(countOf(hostOut, "memberUpdates")).isEqualTo(echoed);
 	}
 
 	@Test
@@ -230,7 +229,6 @@ class PartyV2HandlerTest {
 		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
 		long hostId = last(hostOut, "welcome").get("memberId").asLong();
-		int echoed = countOf(hostOut, "memberUpdates");
 
 		send(host, "{\"type\":\"vitals\",\"state\":{\"currentHp\":31}}");
 		send(host, "{\"type\":\"items\",\"state\":{\"inventory\":[995]}}");
@@ -244,8 +242,6 @@ class PartyV2HandlerTest {
 		assertThat(updates.get(1).get("state").get("inventory")).hasSize(1);
 		assertThat(updates.get(2).get("state").get("world").asInt()).isEqualTo(301);
 		assertThat(updates.get(0).get("memberId").asLong()).isEqualTo(hostId);
-		// Still never echoed to the sender.
-		assertThat(countOf(hostOut, "memberUpdates")).isEqualTo(echoed);
 	}
 
 	@Test

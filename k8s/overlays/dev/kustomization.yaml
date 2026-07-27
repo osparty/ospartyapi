@@ -13,8 +13,14 @@
 # Manual steps before the first deploy — the namespace needs two secrets the base expects:
 #
 #   kubectl create namespace osparty-dev
+#   # POSTGRES_DB has to match the database in POSTGRES_URL (statefulset.yaml), and the same three keys
+#   # feed both the API and the Postgres container itself -- it reads its own initdb credentials from
+#   # this secret, so it will not start without them either.
 #   kubectl -n osparty-dev create secret generic osparty-api-env \
-#     --from-literal=SPRING_DATA_REDIS_PASSWORD="$(openssl rand -hex 24)"
+#     --from-literal=SPRING_DATA_REDIS_PASSWORD="$(openssl rand -hex 24)" \
+#     --from-literal=POSTGRES_DB=osparty \
+#     --from-literal=POSTGRES_USER=osparty \
+#     --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 #   # image pull credentials, copied from prod:
 #   kubectl -n osparty get secret ghcr-pull -o yaml \
 #     | sed 's/namespace: osparty/namespace: osparty-dev/' \

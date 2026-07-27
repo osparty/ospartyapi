@@ -56,6 +56,12 @@ spec:
               value: redis
             - name: SPRING_DATA_REDIS_PORT
               value: "6379"
+            # Repeated from the base Deployment because dev deletes that object outright rather than
+            # patching it, so nothing here is inherited. Left out, the datasource falls back to
+            # application.yml's localhost default and every pod dies during startup on a refused
+            # connection -- Liquibase runs before the app is up, so it never reaches a probe.
+            - name: POSTGRES_URL
+              value: jdbc:postgresql://postgres:5432/osparty
             # G1 is pinned rather than left to ergonomics: the collector the JVM picks depends on how much
             # memory and how many CPUs the container happens to see, which is not something the choice of
             # collector should hinge on. Serial's full compactions are stop-the-world and scale with the

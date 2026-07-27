@@ -205,6 +205,39 @@ class AdReportSocketTest {
 		}
 	}
 
+	/**
+	 * The per-session set of reported ads must only ever hold ids that named a real party. If
+	 * made-up ids were recorded before that check, a client could grow it without bound and turn a
+	 * rate limit into a memory leak — so a client that spams nonsense must still be able to file a
+	 * genuine report afterwards, proving nothing was consumed by the nonsense.
+	 */
+	@Test
+	void madeUpPartyIdsNeitherConsumeTheSessionQuotaNorAreRemembered() throws Exception {
+		BlockingQueue<JsonNode> a = new LinkedBlockingQueue<>();
+		BlockingQueue<JsonNode> b = new LinkedBlockingQueue<>();
+		WebSocketSession hostSession = connect(a);
+		WebSocketSession reporterSession = connect(b);
+		try {
+			String id = host(hostSession, a, uniqueHost("QuotaTarget"), "k-quota", "spam");
+			identify(reporterSession, 58L, "Spammer");
+
+			// Far more junk than the per-session cap allows.
+			for (int i = 0; i < 50; i++) {
+				report(reporterSession, "made-up-" + i);
+			}
+			settle();
+			assertThat(reports.all()).isEmpty();
+
+			report(reporterSession, id);
+			awaitCondition(() -> !reports.all().isEmpty(), "genuine report still accepted");
+			assertThat(reports.all()).hasSize(1);
+			assertThat(reports.all().get(0).getPartyId()).isEqualTo(id);
+		}
+		finally {
+			close(hostSession, reporterSession);
+		}
+	}
+
 	/** Re-reporting a host already dealt with would just re-notify moderators about a closed case. */
 	@Test
 	void reportingAnAlreadyBannedAdIsIgnored() throws Exception {

@@ -19,9 +19,13 @@ feed used by the bot — there is no REST party CRUD.
 | **WebSocket** (all party traffic) | `/api/v1/ws/parties` (`wss://` behind TLS) | the plugin |
 | Discord OAuth return | `GET /api/v1/discord/link/callback` | the user's browser |
 | Internal badge feed | `POST` / `PUT /internal/badges` | the `osparty-discord` bot |
+| Ad moderation | `POST /internal/bans`, `/internal/bans/unban`, `/internal/reports/{id}/dismiss` | the `osparty-discord` bot |
+| Operator tasks | `POST /internal/admin/import-discord-links`, `/internal/admin/warm-discord-links` | operators |
 
 `/internal/*` is gated by the **`X-Internal-Token`** header (constant-time
 compared against `app.discord.internal-token`); a missing/wrong token is `401`.
+Note it **fails closed**: with no token configured, every `/internal/*` call is
+rejected rather than waved through.
 The Discord callback renders a small HTML result page.
 
 ## WebSocket protocol
@@ -124,6 +128,33 @@ client → {"type":"kickVoiceMember","id":"7","key":"<uuid>","accountHash":123} 
 - **Role badges** are pushed to the API by the bot via `/internal/badges` and
   attached to party members (by `accountHash → Discord id`) when a snapshot/batch
   is built. A user can hide their own badges with `setBadgeVisibility`.
+
+### Reporting and shadowbans
+
+```
+client → {"type":"report","id":"7"}     // no reply, ever
+```
+
+A player reports an advertisement; the API records it (with the whole ad as
+JSONB, since ads TTL out in 90s and the row is the only surviving evidence) and
+forwards it to the Discord bot, where a moderator gets Ban / Dismiss buttons.
+
+**Reports are never acknowledged.** The server rate-limits them silently, and a
+reply distinguishing "recorded" from "throttled" would tell an abuser exactly
+which of their reports landed. The plugin confirms to the reporter regardless.
+
+A **ban is a shadowban**: the host keeps hosting, keeps seeing their own ad in
+their own client, and gets no error anywhere — the ad is simply absent from
+everyone else's `snapshot` and `batch`, invisible to `getByHost`/`getByCode`, and
+their friend invites are dropped while still acking `delivered: true`. Every one
+of those is a route by which the ban could otherwise announce itself.
+
+Enforcement reads an in-memory snapshot refreshed every `app.bans.refresh-ms`, so
+a ban propagates cluster-wide within one refresh plus one reconcile tick with no
+inter-node messaging. It **fails open** on a database error: a moderation outage
+must never blank the board. `app.bans.filter-get-by-host` /
+`filter-get-by-code` are kill switches for the two lookup paths, both reachable
+by the banned host's own client.
 
 ## Why it scales
 
@@ -256,26 +287,52 @@ echo '{"type":"subscribe"}' | websocat -n1 ws://localhost:8080/api/v1/ws/parties
 
 ## Storage
 
-**Redis only.** Ads persist across restarts and Redis' **native key expiry** is
-the liveness mechanism: each ad is written with a TTL (`app.ads.ttl-ms`), the
-host's open socket keeps it fresh, and Redis evicts it automatically when the
-host goes quiet.
+**Redis for anything with a lifetime; Postgres for anything that is a record.**
+
+The split is the useful thing to remember. If losing it means "a warm-up" it
+lives in Redis; if losing it means "every user has to redo something, or an
+audit trail is gone", it lives in Postgres.
+
+| Postgres (durable) | Redis (ephemeral / cache) |
+|---|---|
+| Ad bans + who banned/unbanned and why | Live ads, the id index, host/code/key indexes |
+| Ad reports + the reported ad verbatim | Node presence, cross-node invite pub/sub |
+| Discord account links | Mirror of those links (rebuildable) |
+| Badge-visibility preferences | Role badges (a projection of Discord roles) |
+| One-shot data-migration ledger | In-flight OAuth nonces, report rate-limit counters |
+
+Schema changes go through Liquibase (`src/main/resources/db/changelog/`), applied
+at startup. Migrations run during context refresh, so Postgres is a hard startup
+dependency — as Redis already was.
+
+**Ads** persist across restarts and Redis' **native key expiry** is the liveness
+mechanism: each ad is written with a TTL (`app.ads.ttl-ms`), the host's open
+socket keeps it fresh, and Redis evicts it automatically when the host goes quiet.
 
 ```sh
-docker run --rm -p 6379:6379 redis:7-alpine   # then bootRun points at it
+docker compose up -d redis postgres   # then bootRun points at both
 ./gradlew bootRun
-# connection: spring.data.redis.host/port (default localhost:6379)
+# connections: spring.data.redis.host/port (default localhost:6379)
+#              POSTGRES_URL/USER/PASSWORD  (default localhost:5432/osparty)
 ```
 
-Keys:
+Redis keys:
 
 - `party:{id}` → JSON ad · `party:ids` → the id index set · `party:seq` → id counter
 - `partyhost:{host}` → id (enforces one ad per host) · `partycode:{code}` → id · `partykey:{id}` → host credential
-- `discordlink:hash:{accountHash}` ↔ `discordlink:discord:{discordId}` → account link · `discordlink:nonce:{nonce}` → in-flight OAuth state
-- `discordlink:badges:{discordId}` → role badges · `discordlink:badgeshidden:{accountHash}` → badge-privacy flag
+- `discordlink:hash:{accountHash}` → account-link **mirror** (Postgres is authoritative; warmed at startup, self-heals on a miss) · `discordlink:nonce:{nonce}` → in-flight OAuth state
+- `discordlink:badges:{discordId}` → role badges · `discordlink:badgeshidden:{accountHash}` → badge-privacy mirror
+- `reports:*` → report rate-limit counters (see `ReportRateLimiter`)
 
-The test suite runs against an in-memory fake (`@Profile("test")`), so
-`./gradlew test` needs no Redis.
+Postgres tables: `ad_ban`, `ad_report`, `discord_link`, `account_preference`,
+`data_migration`.
+
+The test suite runs against in-memory fakes (`@Profile("test")`), so
+`./gradlew test` needs neither Redis nor Postgres. Two test classes opt back in:
+`LiquibaseMigrationTest` needs Docker (Testcontainers), and the Redis-backed
+tests (`ReportRateLimiterTest`, `DiscordLinkImporterTest`) run only when
+something is listening on `localhost:6379`. Both skip cleanly otherwise —
+except in CI, where the schema test fails loudly rather than silently skipping.
 
 ## Run the stack with Docker
 
@@ -337,9 +394,14 @@ public Service; only Prometheus reaches it inside the cluster.
 ## Test / build
 
 ```sh
-./gradlew test     # MockMvc + WebSocket tests (in-memory fake, no Redis needed)
+./gradlew test     # MockMvc + WebSocket tests (in-memory fakes; no Redis or Postgres needed)
 ./gradlew build    # full build (jar in build/libs/app.jar)
 ```
+
+`LiquibaseMigrationTest` needs Docker and skips without it (but never in CI).
+On Docker Desktop 4.7x+, Testcontainers can fail with "could not find a valid
+Docker environment" because docker-java asks for API v1.32 and the daemon
+answers `400`; `export DOCKER_API_VERSION=1.44` fixes it.
 
 ## Deploy (production, k3s)
 
@@ -382,14 +444,44 @@ pulls via its `ghcr-pull` secret.
 Runtime configuration lives in namespace secrets, created once by hand:
 
 - **`osparty-api-env`** (namespace `osparty`): `SPRING_DATA_REDIS_PASSWORD`,
+  `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD`,
   `DISCORD_INTERNAL_TOKEN` (shared secret with the bot), `DISCORD_CLIENT_ID` /
   `DISCORD_CLIENT_SECRET` / `DISCORD_REDIRECT_URI` (OAuth linking),
-  `DISCORD_SERVICE_URL` (the bot's in-cluster URL).
+  `DISCORD_SERVICE_URL` (the bot's in-cluster URL), and optionally
+  `REPORT_IP_PEPPER` (salt for the stored reporter-IP hash).
 - **`ghcr-pull`** (namespace `osparty`): pull credentials for the internal GHCR packages.
 - **`grafana-env`** (namespace `monitoring`): `DISCORD_ALERT_WEBHOOK_URL`.
 
 The Discord bot deploys from its own repo (`osparty-discord`) into the same
-namespace; the api pods reach it at `http://osparty-discord:8090`.
+namespace; the api pods reach it at `http://osparty-discord:8090`. Moderator
+review additionally needs `DISCORD_REVIEW_CHANNEL_ID` and `DISCORD_ROLE_ADMIN`
+in that repo's `osparty-discord-env` secret — the review buttons stay inert
+until both are set, because anyone who can see the channel can click one.
+
+### Database migrations
+
+Liquibase runs during context refresh, so a pod that cannot reach Postgres will
+not start. With `maxSurge: 1 / maxUnavailable: 0` only one new pod starts at a
+time, so the changelog lock is never contended during a normal rollout, and a
+failed migration leaves the existing pods serving.
+
+If a pod is killed mid-migration (OOM, node loss) it leaves the lock held and
+every subsequent pod hangs waiting for it. Recovery:
+
+```sh
+kubectl -n osparty exec -it postgres-0 -- psql -U osparty -d osparty \
+  -c "SELECT * FROM databasechangeloglock;"           # confirm it is stale
+  -c "DELETE FROM databasechangeloglock;"
+```
+
+The first deploy after the Postgres cutover replays the existing Discord links
+out of Redis automatically (once per cluster, tracked in `data_migration`). To
+verify or re-run it by hand:
+
+```sh
+curl -sX POST -H "X-Internal-Token: $TOKEN" http://osparty-api:8080/internal/admin/import-discord-links
+# {"ran":false,...} means it already completed — that is the expected steady state
+```
 
 ## Layout
 

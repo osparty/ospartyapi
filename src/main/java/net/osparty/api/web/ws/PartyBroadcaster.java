@@ -577,11 +577,16 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		// One report per advertisement per session. Trivially bypassed by reconnecting, which is
 		// exactly why it is the weakest of the layers and not the one being relied on.
-		if (!sub.reportedPartyIds.add(id)) {
+		//
+		// Note the ordering: the id is only remembered once it has been checked against a real
+		// party, and the cap is enforced before that. Recording ids up front would let a client
+		// grow this set without bound by reporting made-up ids, turning a rate limit into a memory
+		// leak.
+		if (sub.reportedPartyIds.contains(id)) {
 			reportSuppressed("duplicate-session");
 			return;
 		}
-		if (sub.reportedPartyIds.size() > reportsPerSession) {
+		if (sub.reportedPartyIds.size() >= reportsPerSession) {
 			reportSuppressed("session-cap");
 			return;
 		}
@@ -605,6 +610,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			reportSuppressed("ip-cap");
 			return;
 		}
+		sub.reportedPartyIds.add(id);
 		reportsReceived.increment();
 
 		String normalizedHost = normalizeName(party.getHost());

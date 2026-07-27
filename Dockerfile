@@ -20,5 +20,7 @@ WORKDIR /app
 COPY --from=builder /app/build/libs/app.jar app.jar
 USER app
 
-EXPOSE 8080
+# 8080 carries the ad board and REST; 8081 is the Party V2 live socket when it is served by Netty
+# (app.party-v2.transport=netty), which is a separate server on a separate port.
+EXPOSE 8080 8081
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

@@ -67,6 +67,11 @@ app:
     reconcile-interval-ms: 5000
     touch-interval-ms: 5000
   party-v2:
+    # Which server carries the live socket: `tomcat` (the servlet container, alongside everything else on
+    # server.port) or `netty` (its own port, below). Tomcat's send path is roughly half this service's CPU,
+    # so both ship in the same image and the comparison is a config flip rather than a deploy.
+    transport: ${APP_PARTY_V2_TRANSPORT:tomcat}
+    port: ${APP_PARTY_V2_PORT:8081}
     # How long a room with nothing urgent pending may hold its live updates. The aggregation window
     # (aggregate-ms, 300) still governs anything a sender marked urgent — a vital that moved down — so
     # combat is unaffected and the banking/travelling that fills most of a session costs one round a

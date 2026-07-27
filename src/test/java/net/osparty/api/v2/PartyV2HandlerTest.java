@@ -39,7 +39,9 @@ class PartyV2HandlerTest {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		bus = new LocalPartyV2Bus();
 		manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node, bus, new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS);
-		handler = new PartyV2Handler(manager, mapper);
+		// Driven through the servlet transport, which is the one that ships by default; the protocol itself
+		// lives in the frame handler and is the same on either.
+		handler = new PartyV2Handler(new PartyV2FrameHandler(manager, mapper));
 		hostOut = new ArrayList<>();
 		memberOut = new ArrayList<>();
 		host = session("host", hostOut);
@@ -308,7 +310,7 @@ class PartyV2HandlerTest {
 			}
 		};
 		PartyV2Manager manager = new PartyV2Manager(mapper, flaky, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS);
-		PartyV2Handler fenced = new PartyV2Handler(manager, mapper);
+		PartyV2Handler fenced = new PartyV2Handler(new PartyV2FrameHandler(manager, mapper));
 		fenced.afterConnectionEstablished(host);
 		fenced.afterConnectionEstablished(member);
 		fenced.handleTextMessage(host, new TextMessage(
@@ -372,8 +374,8 @@ class PartyV2HandlerTest {
 				return java.util.Set.of();
 			}
 		};
-		PartyV2Handler redirecting = new PartyV2Handler(
-			new PartyV2Manager(mapper, foreign, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS), mapper);
+		PartyV2Handler redirecting = new PartyV2Handler(new PartyV2FrameHandler(
+			new PartyV2Manager(mapper, foreign, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS), mapper));
 		List<String> out = new ArrayList<>();
 		WebSocketSession joiner = session("joiner", out);
 		redirecting.afterConnectionEstablished(joiner);
@@ -402,7 +404,7 @@ class PartyV2HandlerTest {
 		PartyV2Manager loaded = new PartyV2Manager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyV2Bus(), load,
 			MEMBER_TIMEOUT_MS);
-		PartyV2Handler placing = new PartyV2Handler(loaded, mapper);
+		PartyV2Handler placing = new PartyV2Handler(new PartyV2FrameHandler(loaded, mapper));
 		List<String> out = new ArrayList<>();
 		WebSocketSession newHost = session("newHost", out);
 		placing.afterConnectionEstablished(newHost);
@@ -479,7 +481,7 @@ class PartyV2HandlerTest {
 			// -1 rather than 0: with a zero timeout a member stamped in the same millisecond as the sweep is
 			// not yet stale, which makes the assertion depend on the clock. Negative means "everything is".
 			new NodeIdentity("node-a", true), new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), -1L);
-		PartyV2Handler sweeping = new PartyV2Handler(impatient, mapper);
+		PartyV2Handler sweeping = new PartyV2Handler(new PartyV2FrameHandler(impatient, mapper));
 		sweeping.afterConnectionEstablished(host);
 		sweeping.afterConnectionEstablished(member);
 		sweeping.handleTextMessage(host, new TextMessage(

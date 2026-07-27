@@ -1,6 +1,6 @@
 package net.osparty.api.v2;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
@@ -20,7 +20,11 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
  */
 @Configuration
 @EnableWebSocket
-@ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
+// Two conditions, so an expression rather than two annotations: V2 must be on, and this transport must be
+// the one selected. With `netty` the endpoint is not registered here at all and the live socket is served
+// by NettyPartyV2Server on its own port.
+@ConditionalOnExpression(
+	"${app.party-v2.enabled:false} and '${app.party-v2.transport:tomcat}' == 'tomcat'")
 public class PartyV2WebSocketConfig implements WebSocketConfigurer {
 	public static final String WS_PATH = "/api/v2/ws/party";
 	/** Node-hint form (§3.2): the gateway routes the {@code {nodeId}} segment to the owning pod. */

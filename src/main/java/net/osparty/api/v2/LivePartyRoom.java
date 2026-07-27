@@ -10,8 +10,6 @@ import java.util.Map;
 import net.osparty.api.v2.protocol.Outbound;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketSession;
 
 /**
  * One party's live state, held entirely in RAM on the owner node. Identity and roster are
@@ -35,10 +33,10 @@ final class LivePartyRoom {
 	private final Object lock = new Object();
 
 	private final Map<Long, MemberState> members = new LinkedHashMap<>();
-	private final Map<Long, WebSocketSession> sessions = new LinkedHashMap<>();
+	private final Map<Long, PartySession> sessions = new LinkedHashMap<>();
 	/**
 	 * When each member was last heard from. Liveness cannot be read off the socket: a half-open connection
-	 * — client gone, proxy never tearing the backend leg down — leaves {@link WebSocketSession#isOpen()}
+	 * — client gone, proxy never tearing the backend leg down — leaves {@link PartySession#isOpen()}
 	 * true indefinitely, so a room of the departed never empties and is never discarded. Traffic is the only
 	 * honest signal, and a live party always has some: a member with nothing to report still heartbeats every
 	 * few seconds, which is exactly what that frame is for. (It used to be the plugin's periodic full resync
@@ -74,7 +72,7 @@ final class LivePartyRoom {
 	}
 
 	/** Seat the host (the member that created the room). Sends them a welcome + the initial roster. */
-	void seatHost(long memberId, WebSocketSession session, String name, long accountHash,
+	void seatHost(long memberId, PartySession session, String name, long accountHash,
 		int capacity, boolean locked, String role, boolean learner, boolean teacher) {
 		synchronized (lock) {
 			this.hostMemberId = memberId;
@@ -99,7 +97,7 @@ final class LivePartyRoom {
 	 * Seat an applicant. Invited joiners are auto-admitted when there's room; everyone else joins PENDING
 	 * until the host admits them. Sends them a welcome + snapshot, and re-broadcasts the roster.
 	 */
-	void seatApplicant(long memberId, WebSocketSession session, String name, long accountHash,
+	void seatApplicant(long memberId, PartySession session, String name, long accountHash,
 		String role, boolean learner, boolean teacher, boolean invited) {
 		synchronized (lock) {
 			MemberState.Status status = (invited && canAdmit())
@@ -173,7 +171,7 @@ final class LivePartyRoom {
 			if (members.remove(targetMemberId) == null) {
 				return;
 			}
-			WebSocketSession session = sessions.remove(targetMemberId);
+			PartySession session = sessions.remove(targetMemberId);
 			lastSeen.remove(targetMemberId);
 			if (session != null) {
 				send(session, Outbound.kicked());
@@ -262,7 +260,7 @@ final class LivePartyRoom {
 			pending = new ArrayList<>();
 		}
 		synchronized (lock) {
-			for (Map.Entry<Long, WebSocketSession> entry : recipients()) {
+			for (Map.Entry<Long, PartySession> entry : recipients()) {
 				List<Outbound.MemberUpdate> theirs = new ArrayList<>(window.size());
 				for (Outbound.MemberUpdate update : window) {
 					if (update.memberId() != entry.getKey()) {
@@ -320,7 +318,7 @@ final class LivePartyRoom {
 			if (actorMemberId != hostMemberId) {
 				return;
 			}
-			WebSocketSession target = sessions.get(targetMemberId);
+			PartySession target = sessions.get(targetMemberId);
 			if (target != null) {
 				send(target, Outbound.fcRequest(actorMemberId, hostName, kind, friendsChat));
 			}
@@ -345,7 +343,7 @@ final class LivePartyRoom {
 			if (target == null) {
 				return;
 			}
-			WebSocketSession session = sessions.get(targetMemberId);
+			PartySession session = sessions.get(targetMemberId);
 			if (session != null) {
 				send(session, Outbound.transferHost(actorMemberId, kind, newHostKey, newHostName, hostStays));
 			}
@@ -466,7 +464,7 @@ final class LivePartyRoom {
 		List<Long> gone = new ArrayList<>();
 		synchronized (lock) {
 			long now = System.currentTimeMillis();
-			for (Map.Entry<Long, WebSocketSession> entry : sessions.entrySet()) {
+			for (Map.Entry<Long, PartySession> entry : sessions.entrySet()) {
 				Long seen = lastSeen.get(entry.getKey());
 				boolean silent = seen != null && now - seen > silentAfterMs;
 				if (!entry.getValue().isOpen() || silent) {
@@ -554,7 +552,7 @@ final class LivePartyRoom {
 	 * this node owns. Peers' live state is not here — the owner does not hold any — and arrives instead from
 	 * the {@link #broadcastResync} the peers answer on their next tick.
 	 */
-	private void sendSnapshotTo(WebSocketSession session) {
+	private void sendSnapshotTo(PartySession session) {
 		send(session, Outbound.roster(hostName, capacity, locked, false, discordUrl, roster()));
 		if (meta != null) {
 			send(session, Outbound.meta(meta));
@@ -588,24 +586,23 @@ final class LivePartyRoom {
 		if (json == null) {
 			return;
 		}
-		TextMessage message = new TextMessage(json);
 		if (exceptMemberId == null) {
 			// The common case, and the one the flush takes: no key comparison, no entry objects.
-			for (WebSocketSession session : openSessions()) {
-				sendRaw(session, message);
+			for (PartySession session : openSessions()) {
+				sendRaw(session, json);
 			}
 			return;
 		}
-		for (Map.Entry<Long, WebSocketSession> entry : recipients()) {
+		for (Map.Entry<Long, PartySession> entry : recipients()) {
 			if (entry.getKey().equals(exceptMemberId)) {
 				continue;
 			}
-			sendRaw(entry.getValue(), message);
+			sendRaw(entry.getValue(), json);
 		}
 	}
 
 	/** As {@link #recipients()}, for the sends that go to everyone — same snapshot rule, no entry boxing. */
-	private List<WebSocketSession> openSessions() {
+	private List<PartySession> openSessions() {
 		return new ArrayList<>(sessions.values());
 	}
 
@@ -619,28 +616,28 @@ final class LivePartyRoom {
 	 * that propagates out of the frame handler and takes down the <em>sender's</em> session too — one dead
 	 * peer knocking out a healthy one, and under load that cascades.
 	 */
-	private List<Map.Entry<Long, WebSocketSession>> recipients() {
-		List<Map.Entry<Long, WebSocketSession>> out = new ArrayList<>(sessions.size());
+	private List<Map.Entry<Long, PartySession>> recipients() {
+		List<Map.Entry<Long, PartySession>> out = new ArrayList<>(sessions.size());
 		sessions.forEach((memberId, session) -> out.add(Map.entry(memberId, session)));
 		return out;
 	}
 
-	private void send(WebSocketSession session, Outbound frame) {
+	private void send(PartySession session, Outbound frame) {
 		String json = serialize(frame);
 		if (json != null) {
-			sendRaw(session, new TextMessage(json));
+			sendRaw(session, json);
 		}
 	}
 
-	private void sendRaw(WebSocketSession session, TextMessage message) {
+	private void sendRaw(PartySession session, String json) {
 		if (!session.isOpen()) {
 			return;
 		}
 		try {
-			session.sendMessage(message);
+			session.send(json);
 		}
 		catch (Exception e) {
-			log.debug("Party V2 room {}: dropping send to {}: {}", id, session.getId(), e.toString());
+			log.debug("Party V2 room {}: dropping send to {}: {}", id, session.id(), e.toString());
 		}
 	}
 

@@ -49,6 +49,11 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            # The Party V2 live socket when Netty serves it. Declared whichever transport is selected: a
+            # container port nothing listens on is inert, and keeping it here means the Services and the
+            # ingress paths below do not have to move when the transport does.
+            - name: live
+              containerPort: 8081
             - name: management
               containerPort: 9090
           env:
@@ -73,6 +78,12 @@ spec:
               value: ""
             - name: APP_PARTY_V2_ENABLED
               value: "true"
+            # Which server carries the live socket. Tomcat's send path measured as roughly half this
+            # service's CPU, so dev runs Netty and prod stays on the default until the comparison here says
+            # otherwise. Flipping this back to "tomcat" also needs the two /api/v2/ws/party ingress paths in
+            # kustomization.yaml pointed back at the `http` port — the transport moves the port with it.
+            - name: APP_PARTY_V2_TRANSPORT
+              value: "netty"
             - name: APP_PARTY_V2_NODE_ID
               valueFrom:
                 fieldRef:

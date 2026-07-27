@@ -31,7 +31,7 @@ class PartyV2HeartbeatTest {
 		PartyV2Manager manager = new PartyV2Manager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyV2Bus(),
 			new LocalNodeLoadRegistry(), -1L);
-		PartyV2Handler handler = new PartyV2Handler(manager, mapper);
+		PartyV2Handler handler = new PartyV2Handler(new PartyV2FrameHandler(manager, mapper));
 
 		List<String> out = new ArrayList<>();
 		WebSocketSession host = session("host", out);
@@ -52,7 +52,7 @@ class PartyV2HeartbeatTest {
 		PartyV2Manager manager = new PartyV2Manager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyV2Bus(),
 			new LocalNodeLoadRegistry(), 90_000L);
-		PartyV2Handler handler = new PartyV2Handler(manager, mapper);
+		PartyV2Handler handler = new PartyV2Handler(new PartyV2FrameHandler(manager, mapper));
 
 		List<String> out = new ArrayList<>();
 		WebSocketSession host = session("host", out);

@@ -44,8 +44,28 @@ patches:
       metadata:
         name: osparty-api
       $patch: delete
+  # The round-robin Service needs the live port too, for the non-hinted form of the V2 socket. Patched here
+  # rather than in the base so prod's rendered output does not move while only dev runs Netty.
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: osparty-api
+      spec:
+        ports:
+          - name: http
+            port: 8080
+            targetPort: http
+          - name: live
+            port: 8081
+            targetPort: live
   # Node-hint routing: /n/{podName}/... goes to that exact pod, everything else round-robins as usual.
   # Ingress gives the longest matching prefix priority, so the /n/ paths win over /.
+  #
+  # The V2 live socket is served by Netty here, on its own port, so its two paths are listed ahead of the
+  # rest and target `live` instead of `http`. They are longer than both the /n/{pod} prefixes and /, so
+  # they win outright. Putting the transport back on Tomcat means pointing these two at `http` again — the
+  # port moves with the transport, which is why both edits live next to each other in this overlay.
   - patch: |-
       apiVersion: networking.k8s.io/v1
       kind: Ingress
@@ -60,6 +80,27 @@ patches:
           - host: testing.osparty.net
             http:
               paths:
+                - path: /n/osparty-api-0/api/v2/ws/party
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api-n0
+                      port:
+                        name: live
+                - path: /n/osparty-api-1/api/v2/ws/party
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api-n1
+                      port:
+                        name: live
+                - path: /api/v2/ws/party
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api
+                      port:
+                        name: live
                 - path: /n/osparty-api-0
                   pathType: Prefix
                   backend:

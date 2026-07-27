@@ -17,3 +17,7 @@ application-local.yaml
 *.jfr
 profile-run.log
 profile-run.err
+
+# async-profiler, extracted locally for profiling runs
+.async-profiler/
+prof*.txt

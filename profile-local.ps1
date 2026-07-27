@@ -75,7 +75,19 @@ $env:APP_PARTY_V2_AGGREGATE_MS = "$AggregateMs"
 # One node, so it always owns every room it is asked to host: no redirects to chase locally.
 $env:APP_PARTY_V2_NODE_ID = "local"
 
-& java $jfr -jar $jar.FullName
+# Run it as a child and stop it once the recording is written. JFR's duration ends the *recording*, not
+# the JVM — left alone the process keeps the port, and the next run fails on "port 8080 already in use".
+$proc = Start-Process java -ArgumentList $jfr, "-jar", $jar.FullName -PassThru -NoNewWindow
+$deadline = (Get-Date).AddSeconds($DurationSeconds + 15)
+while (-not $proc.HasExited -and (Get-Date) -lt $deadline) {
+	Start-Sleep -Seconds 2
+}
+if (-not $proc.HasExited) {
+	Write-Host "Recording finished; stopping the API." -ForegroundColor Cyan
+	Stop-Process -Id $proc.Id -Force
+	# The dump is written asynchronously as the recording closes.
+	Start-Sleep -Seconds 2
+}
 
 Write-Host ""
 if (Test-Path $Recording) {

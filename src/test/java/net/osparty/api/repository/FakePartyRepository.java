@@ -31,6 +31,11 @@ public class FakePartyRepository implements PartyRepository {
 	}
 
 	@Override
+	public int partyCount() {
+		return parties.size();
+	}
+	
+	@Override
 	public Optional<Party> findById(String id) {
 		return id == null ? Optional.empty() : Optional.ofNullable(parties.get(id));
 	}
@@ -102,6 +107,7 @@ public class FakePartyRepository implements PartyRepository {
 			return Optional.empty();
 		}
 		party.setHost(newHost);
+		party.setHostAccountHash(PartyFactory.accountHashOf(party, newHost));
 		hostKeys.put(id, newKey);
 		return Optional.of(party);
 	}

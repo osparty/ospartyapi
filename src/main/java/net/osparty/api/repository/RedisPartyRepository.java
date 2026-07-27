@@ -79,6 +79,12 @@ public class RedisPartyRepository implements PartyRepository {
 	}
 
 	@Override
+	public int partyCount() {
+		Long size = redis.opsForSet().size(INDEX_KEY);
+		return size == null ? 0 : size.intValue();
+	}
+
+	@Override
 	public Optional<Party> findById(String id) {
 		return id == null ? Optional.empty() : Optional.ofNullable(read(PARTY_KEY + id));
 	}
@@ -190,6 +196,10 @@ public class RedisPartyRepository implements PartyRepository {
 		String oldHostIndex = HOST_KEY + PartyFactory.normalizeHost(party.getHost());
 		String newHostIndex = HOST_KEY + PartyFactory.normalizeHost(newHost);
 		party.setHost(newHost);
+		// Re-point the host account hash at whoever is taking over, falling back to 0 when the new
+		// host is not an admitted member with a known hash. Leaving the old host's hash in place
+		// would attribute the ad -- and any ban on it -- to someone who no longer runs it.
+		party.setHostAccountHash(PartyFactory.accountHashOf(party, newHost));
 		String json = write(party);
 		redis.executePipelined(new SessionCallback<Object>() {
 			@Override

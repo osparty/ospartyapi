@@ -12,6 +12,22 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: osparty
+      POSTGRES_USER: osparty
+      POSTGRES_PASSWORD: osparty
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U osparty -d osparty"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
   api:
     image: ghcr.io/osparty/osparty-api:${IMAGE_TAG:-latest}
     build:
@@ -20,9 +36,14 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
+      POSTGRES_URL: jdbc:postgresql://postgres:5432/osparty
+      POSTGRES_USER: osparty
+      POSTGRES_PASSWORD: osparty
       APP_PARTY_V2_ENABLED: "true"
       DISCORD_SERVICE_URL: "${DISCORD_SERVICE_URL:-}"
       DISCORD_INTERNAL_TOKEN: "${DISCORD_INTERNAL_TOKEN:-}"
@@ -71,5 +92,6 @@ services:
     restart: unless-stopped
 volumes:
   redis-data:
+  postgres-data:
   prometheus-data:
   grafana-data:

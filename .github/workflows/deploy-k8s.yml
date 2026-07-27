@@ -27,6 +27,21 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tags: ${{ steps.version.outputs.tags }}
+    # The suite runs without Redis — the Redis-backed tests skip themselves when nothing is
+    # listening, which is what keeps `./gradlew test` self-contained on a developer machine. That
+    # would silently mean zero coverage of the report rate limiter and the Discord link import in
+    # CI, so provide one here and let them actually run. Postgres is not listed: the schema test
+    # brings up its own container through Testcontainers.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
     steps:
       - name: Check out
         uses: actions/checkout@v4

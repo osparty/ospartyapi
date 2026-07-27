@@ -1,5 +1,4 @@
-# Stage 1: Build
-FROM eclipse-temurin:25-jdk AS builder
+FROM eclipse-temurin:25-jre
 
 RUN groupadd -r app && useradd -r -g app app
 

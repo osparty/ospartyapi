@@ -1,5 +1,7 @@
 package net.osparty.api.service;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import net.osparty.api.model.Party;
 import net.osparty.api.repository.PartyRepository;
 import org.slf4j.Logger;
@@ -19,11 +21,15 @@ public class StalePartyPurge {
 
 	private final PartyRepository store;
 	private final long maxAgeMs;
-
+	private final Counter stalePartiesPurged;
 	public StalePartyPurge(PartyRepository store,
-		@Value("${app.ads.stale-purge-age-ms:7200000}") long maxAgeMs) {
+		@Value("${app.ads.stale-purge-age-ms:7200000}") long maxAgeMs,
+		MeterRegistry meterRegistry) {
 		this.store = store;
 		this.maxAgeMs = maxAgeMs;
+		this.stalePartiesPurged = Counter.builder("stale.parties.purged")
+				.description("Number of stale parties purged")
+				.register(meterRegistry);
 	}
 
 	@Scheduled(cron = "${app.ads.stale-purge-cron:0 */5 * * * *}")
@@ -36,6 +42,7 @@ public class StalePartyPurge {
 				log.info("Purged stale party {} ({}, host {}) after {} minutes",
 					party.getId(), party.getActivity(), party.getHost(),
 					(now - party.getCreatedAt()) / 60_000);
+				stalePartiesPurged.increment();
 			}
 		}
 	}

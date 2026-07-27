@@ -1,0 +1,79 @@
+databaseChangeLog:
+  # A shadowban on an ad-board advertiser.
+  #
+  # Subject is name OR account hash, never both-required: `host_name` is present on 100% of ads,
+  # while `account_hash` is absent (0) on older clients. Requiring both would leave those clients
+  # unbannable; accepting either means evading a name ban costs the offender their account.
+  #
+  # Revocation is a soft delete. "Who unbanned this, and why" is exactly as auditable a question
+  # as "who banned it"; a ban -> unban -> ban pattern is the most useful signal a moderator has;
+  # and the Discord embed has to render "Unbanned by @admin" after the fact. The two partial
+  # unique indexes make a double active ban impossible in the database rather than in application
+  # code, which is what makes the ban endpoint idempotent when two moderators click at once.
+  - changeSet:
+      id: 002-1-create-ad-ban
+      author: osparty
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE ad_ban (
+                id                      BIGSERIAL PRIMARY KEY,
+                host_name               VARCHAR(64) NOT NULL,
+                host_name_raw           VARCHAR(64),
+                account_hash            BIGINT,
+
+                reason                  VARCHAR(500),
+                created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+                created_by_discord_id   VARCHAR(32) NOT NULL,
+                created_by_discord_name VARCHAR(64),
+                source_report_id        BIGINT REFERENCES ad_report(id),
+
+                revoked_at              TIMESTAMPTZ,
+                revoked_by_discord_id   VARCHAR(32),
+                revoked_by_discord_name VARCHAR(64),
+                revoke_reason           VARCHAR(500),
+
+                CONSTRAINT ad_ban_subject_present
+                  CHECK (host_name <> '' OR account_hash IS NOT NULL)
+              )
+      rollback:
+        - sql:
+            sql: DROP TABLE ad_ban
+
+  - changeSet:
+      id: 002-2-index-ad-ban
+      author: osparty
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE UNIQUE INDEX ad_ban_active_name_uq ON ad_ban (host_name)
+                WHERE revoked_at IS NULL AND host_name <> '';
+              CREATE UNIQUE INDEX ad_ban_active_hash_uq ON ad_ban (account_hash)
+                WHERE revoked_at IS NULL AND account_hash IS NOT NULL;
+              CREATE INDEX ad_ban_created_idx ON ad_ban (created_at DESC);
+      rollback:
+        - sql:
+            splitStatements: false
+            sql: |
+              DROP INDEX ad_ban_active_name_uq;
+              DROP INDEX ad_ban_active_hash_uq;
+              DROP INDEX ad_ban_created_idx;
+
+  - changeSet:
+      id: 002-3-index-ad-report-ban
+      author: osparty
+      comment: >-
+        Back-reference from report to the ban it produced. Deliberately not a foreign key: ad_ban
+        already references ad_report, and a second FK the other way would make the two changesets
+        circular and the pair undroppable without a dance.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE INDEX ad_report_ban_idx ON ad_report (resulting_ban_id)
+                WHERE resulting_ban_id IS NOT NULL;
+      rollback:
+        - sql:
+            sql: DROP INDEX ad_report_ban_idx

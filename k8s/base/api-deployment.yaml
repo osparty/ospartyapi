@@ -47,11 +47,9 @@ spec:
               value: redis
             - name: SPRING_DATA_REDIS_PORT
               value: "6379"
-            # Pinned, not left to ergonomics: the JVM only picks G1 when it sees enough memory and CPUs, so
-            # the collector would otherwise change with the container's resource block. Dev proved what the
-            # fallback costs -- serial full compactions turned a 67 ms p99 relay into a 5.1 s outlier.
-            # 65% of the limit leaves room for metaspace, the code cache and Tomcat's thread stacks, which
-            # together account for most of the gap between heap size and RSS.
+            # Credentials come from the osparty-api-env secret via envFrom below.
+            - name: POSTGRES_URL
+              value: jdbc:postgresql://postgres:5432/osparty
             - name: JAVA_TOOL_OPTIONS
               value: "-XX:+UseG1GC -XX:MaxRAMPercentage=65.0"
             - name: DISCORD_SERVICE_URL

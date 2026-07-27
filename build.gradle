@@ -9,8 +9,11 @@ version = findProperty('appVersion') ?: '1.0.0'
 description = 'Advertising/bulletin-board API for the OSParty RuneLite plugin'
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    // Toolchain rather than source/targetCompatibility so the compiler, tests and the runtime the
+    // image ships are pinned to one version instead of whatever JDK happens to launch Gradle.
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
 }
 
 repositories {
@@ -22,6 +25,12 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-websocket'
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
+    // Durable state (ad bans, ad reports, Discord links) lives in Postgres. Plain JDBC on purpose:
+    // this codebase has no ORM anywhere and the query set is small and hand-written.
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    implementation 'org.liquibase:liquibase-core'
+    runtimeOnly 'org.postgresql:postgresql'
+
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'io.micrometer:micrometer-registry-prometheus'
 
@@ -29,10 +38,23 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // Only the SQL-backed tests spin a container; the rest of the suite runs against @Profile("test")
+    // in-memory fakes and never needs Docker.
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
 }
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Docker Desktop 4.7x+ answers docker-java's default API version (v1.32) with HTTP 400, which
+    // Testcontainers reports as "could not find a valid Docker environment". Forward the standard
+    // override so developers hitting that can export DOCKER_API_VERSION and get the SQL tests back.
+    if (System.getenv('DOCKER_API_VERSION')) {
+        environment 'DOCKER_API_VERSION', System.getenv('DOCKER_API_VERSION')
+    }
+    if (System.getenv('CI')) {
+        environment 'CI', System.getenv('CI')
+    }
 }
 
 tasks.named('bootJar') {

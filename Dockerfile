@@ -1,4 +1,4 @@
-FROM eclipse-temurin:17-jre
+FROM eclipse-temurin:25-jre
 
 RUN groupadd -r app && useradd -r -g app app
 WORKDIR /app

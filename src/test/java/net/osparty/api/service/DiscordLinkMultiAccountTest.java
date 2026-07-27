@@ -11,33 +11,32 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import net.osparty.api.model.Member;
 import net.osparty.api.model.Party;
+import net.osparty.api.repository.InMemoryDiscordLinkRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 /**
  * A single Discord account may be linked to several OSRS accounts (multi-account users). Verifies the
  * badge/role state fans out to every linked account, and that unlinking one account leaves the others
- * intact. The suite runs Redis-free (the {@code test} profile swaps in in-memory beans), so this backs
- * {@link DiscordLinkService}/{@link DiscordBadgeService} with an in-memory fake of the handful of
- * {@code StringRedisTemplate} operations they use.
+ * intact.
+ *
+ * <p>Links live in Postgres now, so the reverse lookup is backed by
+ * {@link InMemoryDiscordLinkRepository}; Redis remains only as the read mirror the broadcast path
+ * uses, faked here with the handful of string operations it actually calls.
  */
 class DiscordLinkMultiAccountTest {
 	private static final long ACCOUNT_A = 900001L;
 	private static final long ACCOUNT_B = 900002L;
 	private static final String DISCORD_ID = "discord-9001";
 
-	/** In-memory stand-ins for Redis string keys and set keys. */
+	/** In-memory stand-in for the Redis mirror. */
 	private final Map<String, String> values = new HashMap<>();
-	private final Map<String, Set<String>> sets = new HashMap<>();
 
 	private DiscordLinkService links;
 	private DiscordBadgeService badges;
@@ -47,9 +46,7 @@ class DiscordLinkMultiAccountTest {
 	void setUp() {
 		StringRedisTemplate redis = mock(StringRedisTemplate.class);
 		ValueOperations<String, String> valueOps = mock(ValueOperations.class);
-		SetOperations<String, String> setOps = mock(SetOperations.class);
 		when(redis.opsForValue()).thenReturn(valueOps);
-		when(redis.opsForSet()).thenReturn(setOps);
 
 		doAnswer(inv -> {
 			values.put(inv.getArgument(0), inv.getArgument(1));
@@ -66,31 +63,10 @@ class DiscordLinkMultiAccountTest {
 		});
 		when(redis.delete(anyString())).thenAnswer(inv -> values.remove(inv.getArgument(0)) != null);
 
-		when(setOps.add(anyString(), anyString())).thenAnswer(inv -> {
-			String key = inv.getArgument(0);
-			String value = inv.getArgument(1);
-			return sets.computeIfAbsent(key, k -> new HashSet<>()).add(value) ? 1L : 0L;
-		});
-		when(setOps.remove(anyString(), anyString())).thenAnswer(inv -> {
-			String key = inv.getArgument(0);
-			Set<String> set = sets.get(key);
-			if (set == null) {
-				return 0L;
-			}
-			boolean removed = set.remove(inv.<String>getArgument(1));
-			if (set.isEmpty()) {
-				sets.remove(key);
-			}
-			return removed ? 1L : 0L;
-		});
-		when(setOps.members(anyString())).thenAnswer(inv -> {
-			Set<String> set = sets.get(inv.getArgument(0));
-			return set == null ? null : new HashSet<>(set);
-		});
-
 		ObjectMapper mapper = new ObjectMapper();
-		links = new DiscordLinkService(redis, mapper, "", "");
-		badges = new DiscordBadgeService(redis, mapper, links);
+		InMemoryDiscordLinkRepository repository = new InMemoryDiscordLinkRepository();
+		links = new DiscordLinkService(redis, mapper, repository, "", "");
+		badges = new DiscordBadgeService(redis, mapper, links, repository);
 	}
 
 	@Test
@@ -123,13 +99,33 @@ class DiscordLinkMultiAccountTest {
 	}
 
 	@Test
-	void relinkingAnAccountToAnotherDiscordMovesItOutOfTheOldSet() {
+	void relinkingAnAccountToAnotherDiscordMovesItOffTheOldOne() {
 		String otherDiscord = DISCORD_ID + "-other";
 		links.link(ACCOUNT_A, DISCORD_ID, "user#1");
 		links.link(ACCOUNT_A, otherDiscord, "user#2");
 
 		assertThat(links.accountHashesForDiscordId(DISCORD_ID)).doesNotContain(ACCOUNT_A);
 		assertThat(links.accountHashesForDiscordId(otherDiscord)).containsExactly(ACCOUNT_A);
+		assertThat(links.getByAccountHash(ACCOUNT_A))
+			.get()
+			.extracting(DiscordLinkService.Link::discordId)
+			.isEqualTo(otherDiscord);
+	}
+
+	/** Badge visibility is a deliberate privacy choice, so it must survive on the durable side. */
+	@Test
+	void hiddenBadgesAreStrippedFromBroadcasts() {
+		links.link(ACCOUNT_A, DISCORD_ID, "user#1");
+		links.link(ACCOUNT_B, DISCORD_ID, "user#1");
+		badges.setBadges(DISCORD_ID, List.of("developer"));
+		badges.setBadgesHidden(ACCOUNT_A, true);
+
+		assertThat(badges.isBadgesHidden(ACCOUNT_A)).isTrue();
+		assertThat(badges.isBadgesHidden(ACCOUNT_B)).isFalse();
+
+		Party enriched = badges.enrichParties(List.of(partyWith(ACCOUNT_A, ACCOUNT_B))).get(0);
+		assertThat(badgeOf(enriched, ACCOUNT_A)).isNull();
+		assertThat(badgeOf(enriched, ACCOUNT_B)).containsExactly("developer");
 	}
 
 	private static Party partyWith(long... accountHashes) {

@@ -1,0 +1,50 @@
+databaseChangeLog:
+  # OSRS account <-> Discord account bindings, moved off Redis.
+  #
+  # These are records, not cache: each one was won through an OAuth round-trip, and losing them
+  # (Redis flush, AOF corruption, node rebuild) forces every user to re-link. That is why they
+  # never carried a TTL in Redis, and why Postgres is now the source of truth. Redis stays in
+  # front of this table as a read-through mirror, because DiscordBadgeService resolves a link for
+  # every party member on every reconcile tick and that must not become a SQL round trip.
+  #
+  # `discord_link_discord_idx` replaces the old `discordlink:accounts:{discordId}` Redis SET
+  # outright -- that set was a hand-maintained reverse index with no reader in src/main.
+  - changeSet:
+      id: 003-1-create-discord-link
+      author: osparty
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE discord_link (
+                account_hash BIGINT PRIMARY KEY,
+                discord_id   VARCHAR(32) NOT NULL,
+                discord_name VARCHAR(64),
+                linked_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+              );
+              CREATE INDEX discord_link_discord_idx ON discord_link (discord_id);
+      rollback:
+        - sql:
+            sql: DROP TABLE discord_link
+
+  - changeSet:
+      id: 003-2-create-account-preference
+      author: osparty
+      comment: >-
+        Badge visibility is a separate table rather than a discord_link column because
+        handleSetBadgeVisibility accepts any accountHash, linked or not, so the preference can
+        legitimately exist with no corresponding link row. Losing it silently re-exposes badges a
+        user deliberately hid, which is a privacy regression rather than a cache miss.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE account_preference (
+                account_hash  BIGINT PRIMARY KEY,
+                badges_hidden BOOLEAN NOT NULL DEFAULT FALSE,
+                updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+              )
+      rollback:
+        - sql:
+            sql: DROP TABLE account_preference

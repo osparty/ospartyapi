@@ -30,24 +30,52 @@ public class DiscordBadgeService {
 	private final StringRedisTemplate redis;
 	private final ObjectMapper mapper;
 	private final DiscordLinkService links;
+	private final net.osparty.api.repository.DiscordLinkRepository repository;
 
-	public DiscordBadgeService(StringRedisTemplate redis, ObjectMapper mapper, DiscordLinkService links) {
+	public DiscordBadgeService(StringRedisTemplate redis, ObjectMapper mapper, DiscordLinkService links,
+		net.osparty.api.repository.DiscordLinkRepository repository) {
 		this.redis = redis;
 		this.mapper = mapper;
 		this.links = links;
+		this.repository = repository;
 	}
 
+	/**
+	 * Records whether an account hides its role badges.
+	 *
+	 * <p>Postgres-authoritative with a Redis mirror, like the links themselves: this is a privacy
+	 * preference a user set deliberately, so losing it silently re-exposes badges they chose to
+	 * hide. That is a privacy regression, not a cache miss.
+	 */
 	public void setBadgesHidden(long accountHash, boolean hidden) {
-		if (hidden) {
-			redis.opsForValue().set(HIDDEN_KEY + accountHash, "1");
+		repository.setBadgesHidden(accountHash, hidden);
+		try {
+			if (hidden) {
+				redis.opsForValue().set(HIDDEN_KEY + accountHash, "1");
+			}
+			else {
+				redis.delete(HIDDEN_KEY + accountHash);
+			}
 		}
-		else {
-			redis.delete(HIDDEN_KEY + accountHash);
+		catch (Exception e) {
+			log.debug("Failed to mirror badge visibility for {}: {}", accountHash, e.toString());
 		}
 	}
 
 	public boolean isBadgesHidden(long accountHash) {
-		return redis.opsForValue().get(HIDDEN_KEY + accountHash) != null;
+		return repository.isBadgesHidden(accountHash);
+	}
+
+	/** Bulk mirror write, used to warm Redis from Postgres at startup. */
+	public void mirrorHidden(List<Long> accountHashes) {
+		for (Long accountHash : accountHashes) {
+			try {
+				redis.opsForValue().set(HIDDEN_KEY + accountHash, "1");
+			}
+			catch (Exception e) {
+				log.debug("Failed to mirror badge visibility for {}: {}", accountHash, e.toString());
+			}
+		}
 	}
 
 	public void setBadges(String discordId, List<String> badges) {
@@ -64,10 +92,23 @@ public class DiscordBadgeService {
 		}
 	}
 
+	/**
+	 * Replaces the complete badge projection: anyone absent from the map is cleared.
+	 *
+	 * <p>Badges intentionally stay in Redis and are never persisted. They are a projection of
+	 * Discord role state, Discord is the source of truth, and the bot rebuilds them wholesale on
+	 * every restart — a second durable copy would buy no durability and turn this sweep into a
+	 * transaction over an unbounded table.
+	 *
+	 * <p>Enumerates with SCAN rather than KEYS: KEYS blocks the single-threaded Redis server for the
+	 * length of a full keyspace walk, and this keyspace also holds every live party.
+	 */
 	public void replaceAll(Map<String, List<String>> badgesByDiscordId) {
-		Set<String> existing = redis.keys(BADGE_KEY + "*");
-		if (existing != null) {
-			for (String key : existing) {
+		try (org.springframework.data.redis.core.Cursor<String> cursor = redis.scan(
+			org.springframework.data.redis.core.ScanOptions.scanOptions()
+				.match(BADGE_KEY + "*").count(500).build())) {
+			while (cursor.hasNext()) {
+				String key = cursor.next();
 				String discordId = key.substring(BADGE_KEY.length());
 				if (!badgesByDiscordId.containsKey(discordId)) {
 					redis.delete(key);

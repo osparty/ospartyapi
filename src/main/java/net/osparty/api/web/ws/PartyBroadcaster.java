@@ -11,7 +11,10 @@ import net.osparty.api.model.PartyDelta;
 import net.osparty.api.model.PartyRequest;
 import net.osparty.api.model.PartyUpdate;
 import net.osparty.api.service.DiscordLinkService;
+import net.osparty.api.service.PartyFactory;
+import net.osparty.api.service.ReportRateLimiter;
 import net.osparty.api.service.VoiceChannelService;
+import net.osparty.api.web.config.ClientAddressHandshakeInterceptor;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +48,18 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private final net.osparty.api.service.DiscordBadgeService badges;
 	private final PresenceRegistry presence;
 	private final InviteBus inviteBus;
+	private final net.osparty.api.service.BanService bans;
+	/** Kill switches: both lookups are reachable by the banned host's own client. */
+	private final boolean filterByHost;
+	private final boolean filterByCode;
+	private final net.osparty.api.repository.AdReportRepository reports;
+	private final net.osparty.api.service.AdReportService adReports;
+	private final net.osparty.api.service.ReportRateLimiter rateLimiter;
+	private final MeterRegistry meterRegistry;
+	private final boolean reportsEnabled;
+	private final int reportsPerSession;
+	private final io.micrometer.core.instrument.Counter reportsReceived;
+	private final io.micrometer.core.instrument.Counter reportsNotified;
 	private final Map<String, Subscriber> subscribers = new ConcurrentHashMap<>();
 	private final Map<String, String> hostedBy = new ConcurrentHashMap<>();
 	private final Map<String, String> ownerSession = new ConcurrentHashMap<>();
@@ -60,6 +75,18 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		net.osparty.api.service.DiscordBadgeService badges,
 		PresenceRegistry presence,
 		InviteBus inviteBus,
+		net.osparty.api.service.BanService bans,
+		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-host:true}")
+		boolean filterByHost,
+		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-code:true}")
+		boolean filterByCode,
+		net.osparty.api.repository.AdReportRepository reports,
+		net.osparty.api.service.AdReportService adReports,
+		net.osparty.api.service.ReportRateLimiter rateLimiter,
+		@org.springframework.beans.factory.annotation.Value("${app.reports.enabled:true}")
+		boolean reportsEnabled,
+		@org.springframework.beans.factory.annotation.Value("${app.reports.per-session-max:5}")
+		int reportsPerSession,
 		MeterRegistry meterRegistry) {
 		this.store = store;
 		this.mapper = mapper;
@@ -68,6 +95,23 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		this.badges = badges;
 		this.presence = presence;
 		this.inviteBus = inviteBus;
+		this.bans = bans;
+		this.filterByHost = filterByHost;
+		this.filterByCode = filterByCode;
+		this.reports = reports;
+		this.adReports = adReports;
+		this.rateLimiter = rateLimiter;
+		this.meterRegistry = meterRegistry;
+		this.reportsEnabled = reportsEnabled;
+		this.reportsPerSession = reportsPerSession;
+		this.reportsReceived = io.micrometer.core.instrument.Counter
+			.builder("osparty.reports.received")
+			.description("Advertisement reports accepted from clients")
+			.register(meterRegistry);
+		this.reportsNotified = io.micrometer.core.instrument.Counter
+			.builder("osparty.reports.notified")
+			.description("Advertisement reports that produced a Discord review message")
+			.register(meterRegistry);
 		// Cross-node invite delivery calls back here to reach a target connected to this instance.
 		inviteBus.setLocalDelivery(this::deliverInviteLocally);
 		Gauge.builder("parties.active", store, PartyRepository::partyCount)
@@ -161,6 +205,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			case "invite":
 				handleInvite(sub, in);
 				break;
+			case "report":
+				handleReport(sub, in);
+				break;
 			default:
 				break;
 		}
@@ -181,13 +228,24 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private void handleGetByCode(Subscriber sub, Inbound in) {
 		String code = in.code();
 		Party party = code == null ? null : store.findByInviteCode(code).orElse(null);
+		if (filterByCode && hiddenFromViewer(sub, party)) {
+			party = null;
+		}
 		send(sub, Outbound.byCode(version.get(), code, enriched(party)));
 	}
 
 	private void handleGetByHost(Subscriber sub, Inbound in) {
 		String host = in.host();
 		Party party = host == null ? null : store.findByHost(host).orElse(null);
+		if (filterByHost && hiddenFromViewer(sub, party)) {
+			party = null;
+		}
 		send(sub, Outbound.byHost(version.get(), host, enriched(party)));
+	}
+
+	/** Shadowbanned, and not this viewer's own advertisement. See {@link #isOwnParty}. */
+	private boolean hiddenFromViewer(Subscriber sub, Party party) {
+		return party != null && bans.isHidden(party) && !isOwnParty(sub, party);
 	}
 
 	private void handleHost(Subscriber sub, Inbound in) {
@@ -474,6 +532,15 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			send(sub, Outbound.inviteAck(version.get(), in.target(), false));
 			return;
 		}
+		// Hiding a banned ad from the board is pointless if its host can still push it to arbitrary
+		// players by name. Keyed on the party's host rather than the sender, so a banned host
+		// cannot route around it by asking a party-mate to send the invites for them. The ack
+		// claims delivery, because an invite that visibly fails is a ban notification.
+		if (bans.isHidden(party)) {
+			log.info("WS invite suppressed (host banned): party={} target={}", id, target);
+			send(sub, Outbound.inviteAck(version.get(), in.target(), true));
+			return;
+		}
 		String from = (in.name() == null || in.name().isBlank()) ? party.getHost() : in.name();
 		String frame;
 		try {
@@ -489,6 +556,133 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				sub.session.getId(), id, target, delivered);
 			send(sub, Outbound.inviteAck(version.get(), in.target(), delivered != null && delivered));
 		});
+	}
+
+	/**
+	 * Records a player's report of an advertisement and, subject to rate limiting, forwards it to
+	 * Discord for review.
+	 *
+	 * <p>Deliberately silent in both directions. The client gets no acknowledgement of any kind:
+	 * an ack that distinguished "recorded" from "rate-limited" would tell an abuser exactly which
+	 * of their reports landed, and telling a reporter their report was throttled invites them to
+	 * retry. The plugin shows success unconditionally and treats this as fire-and-forget.
+	 */
+	private void handleReport(Subscriber sub, Inbound in) {
+		if (!reportsEnabled) {
+			return;
+		}
+		String id = in.id();
+		if (id == null) {
+			return;
+		}
+		// One report per advertisement per session. Trivially bypassed by reconnecting, which is
+		// exactly why it is the weakest of the layers and not the one being relied on.
+		//
+		// Note the ordering: the id is only remembered once it has been checked against a real
+		// party, and the cap is enforced before that. Recording ids up front would let a client
+		// grow this set without bound by reporting made-up ids, turning a rate limit into a memory
+		// leak.
+		if (sub.reportedPartyIds.contains(id)) {
+			reportSuppressed("duplicate-session");
+			return;
+		}
+		if (sub.reportedPartyIds.size() >= reportsPerSession) {
+			reportSuppressed("session-cap");
+			return;
+		}
+		Party party = store.findById(id).orElse(null);
+		if (party == null) {
+			reportSuppressed("unknown-party");
+			return;
+		}
+		if (isOwnParty(sub, party)) {
+			reportSuppressed("self-report");
+			return;
+		}
+		if (bans.isHidden(party)) {
+			// Already handled; re-reporting a banned host would just re-notify moderators.
+			reportSuppressed("already-banned");
+			return;
+		}
+		String clientIp = (String) sub.session.getAttributes()
+			.get(ClientAddressHandshakeInterceptor.CLIENT_IP_ATTRIBUTE);
+		if (!rateLimiter.withinIpBudget(clientIp)) {
+			reportSuppressed("ip-cap");
+			return;
+		}
+		sub.reportedPartyIds.add(id);
+		reportsReceived.increment();
+
+		String normalizedHost = normalizeName(party.getHost());
+		String fingerprint = sub.accountHash != null ? "a:" + sub.accountHash
+			: (sub.name != null ? "n:" + sub.name : "s:" + sub.session.getId());
+		ReportRateLimiter.Decision decision =
+			rateLimiter.evaluate(id, normalizedHost == null ? "" : normalizedHost, fingerprint);
+
+		long reportId;
+		try {
+			reportId = reports.insert(buildReport(sub, party, normalizedHost, rateLimiter.hash(clientIp)));
+		}
+		catch (Exception e) {
+			log.warn("Failed to record report for party {}: {}", id, e.toString());
+			return;
+		}
+		log.info("WS report: session={} party={} host={} distinctReporters={} notify={} reason={}",
+			sub.session.getId(), id, party.getHost(), decision.distinctReporters(),
+			decision.shouldNotify(), decision.reason());
+
+		if (!decision.shouldNotify()) {
+			reportSuppressed(decision.reason());
+			return;
+		}
+		adReports.publish(new net.osparty.api.service.AdReportService.ReviewRequest(
+				reportId, party.getHost(), party.getHostAccountHash(), party.getActivity(),
+				party.getDescription(), party.getWorld(), party.getCapacity(), party.getSize(),
+				party.getInviteCode(), sub.name, decision.distinctReporters()))
+			.ifPresent(posted -> {
+				reports.markNotified(reportId, posted.channelId(), posted.messageId());
+				reportsNotified.increment();
+			});
+	}
+
+	private net.osparty.api.model.AdReport buildReport(Subscriber sub, Party party,
+		String normalizedHost, String ipHash) {
+		net.osparty.api.model.AdReport report = new net.osparty.api.model.AdReport();
+		report.setPartyId(party.getId());
+		report.setHostName(normalizedHost == null ? "" : normalizedHost);
+		report.setHostNameRaw(party.getHost());
+		report.setHostAccountHash(party.getHostAccountHash() == 0 ? null : party.getHostAccountHash());
+		report.setActivity(party.getActivity());
+		report.setDescription(party.getDescription());
+		report.setWorld(party.getWorld());
+		report.setCapacity(party.getCapacity());
+		report.setPartySize(party.getSize());
+		report.setInviteCode(party.getInviteCode());
+		report.setAdSnapshot(snapshotJson(party));
+		report.setReporterName(sub.name);
+		report.setReporterAccountHash(sub.accountHash);
+		report.setReporterSessionId(sub.session.getId());
+		report.setReporterIpHash(ipHash);
+		return report;
+	}
+
+	/** The advertisement verbatim: the only surviving evidence once the 90s ad TTL elapses. */
+	private String snapshotJson(Party party) {
+		try {
+			return mapper.writeValueAsString(party);
+		}
+		catch (Exception e) {
+			log.warn("Failed to serialise ad snapshot for party {}: {}", party.getId(), e.toString());
+			return "{}";
+		}
+	}
+
+	private void reportSuppressed(String reason) {
+		io.micrometer.core.instrument.Counter.builder("osparty.reports.suppressed")
+			.description("Advertisement reports recorded or dropped without notifying Discord")
+			.tag("reason", reason == null ? "unknown" : reason)
+			.register(meterRegistry)
+			.increment();
 	}
 
 	/** Deliver a pre-serialised {@code invited} frame to {@code normalizedName} if connected to this node. */
@@ -529,12 +723,18 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			.findFirst().orElse(null);
 	}
 
-	/** Normalise an OSRS name for identity matching: strip the nbsp Jagex uses for spaces, trim, lowercase. */
+	/**
+	 * Normalise an OSRS name for identity matching, returning null rather than an empty string when
+	 * there is no usable name. Delegates to {@link PartyFactory#normalizeHost} so that socket
+	 * identity, the Redis {@code partyhost:} index and the ban tables all key on one identity space
+	 * -- two subtly different normalisers here would mean a ban that matches the board but not a
+	 * lookup, or vice versa.
+	 */
 	private static String normalizeName(String name) {
 		if (name == null) {
 			return null;
 		}
-		String normalized = name.replace('\u00A0', ' ').trim().toLowerCase();
+		String normalized = PartyFactory.normalizeHost(name);
 		return normalized.isEmpty() ? null : normalized;
 	}
 
@@ -660,30 +860,91 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 	}
 
+	/**
+	 * Sends the current board. Shadowbanned ads are stripped, except the subscriber's own: a host
+	 * who cannot see their own advertisement in their own Search tab would notice immediately, and
+	 * the ban would stop being silent.
+	 */
 	private void sendSnapshot(Subscriber sub) {
-		List<Party> list = badges.enrichParties(store.list(sub.activity));
-		log.debug("WS snapshot -> {} ({} parties)", sub.session.getId(), list.size());
+		List<Party> all = badges.enrichParties(store.list(sub.activity));
+		List<Party> list = new java.util.ArrayList<>(all.size());
+		for (Party party : all) {
+			if (!bans.isHidden(party) || isOwnParty(sub, party)) {
+				list.add(party);
+			}
+		}
+		log.debug("WS snapshot -> {} ({} of {} parties)", sub.session.getId(), list.size(), all.size());
 		send(sub, Outbound.snapshot(version.get(), list));
+	}
+
+	/**
+	 * Whether this advertisement belongs to this subscriber.
+	 *
+	 * <p>Checked three ways because no single one is reliable at every moment of a session:
+	 * {@code hostedBy} is only bound once the client has sent {@code host} or {@code resume}, and
+	 * {@code identify} is optional and may arrive after {@code subscribe}. The plugin looks its own
+	 * ad up before either is guaranteed -- on the rejoin-after-restart path, and on every heartbeat
+	 * from the Party tab, where a null answer makes it disband the party and tell the user so. A
+	 * missed self-check there would turn a silent ban into a very loud one.
+	 */
+	private boolean isOwnParty(Subscriber sub, Party party) {
+		if (party == null) {
+			return false;
+		}
+		if (party.getId().equals(hostedBy.get(sub.session.getId()))) {
+			return true;
+		}
+		if (sub.accountHash != null && party.getHostAccountHash() != 0
+			&& sub.accountHash == party.getHostAccountHash()) {
+			return true;
+		}
+		return sub.name != null && sub.name.equals(normalizeName(party.getHost()));
 	}
 
 	private void sendError(Subscriber sub, String id, String detail) {
 		send(sub, Outbound.error(version.get(), id, detail));
 	}
 
+	/**
+	 * Fans a reconciler delta out to every subscriber, serialising each distinct view once.
+	 *
+	 * <p>The memoisation key carries a second component beyond the activity filter: the id of a
+	 * party whose removal must be withheld from this particular subscriber. That happens only when
+	 * a party has just been hidden by a ban and the subscriber is the host who owns it -- the whole
+	 * point of a shadowban is that its subject sees nothing change. On every other tick the
+	 * component is empty for everybody, so the cache collapses back to one entry per activity and
+	 * costs nothing.
+	 */
 	void broadcastBatch(List<Party> created, List<PartyDelta> updated, List<RemovedRef> removed) {
 		if (created.isEmpty() && updated.isEmpty() && removed.isEmpty()) {
 			return;
 		}
 		long v = version.incrementAndGet();
-		Map<String, TextMessage> perActivity = new java.util.HashMap<>();
+		// Computed once per tick, and empty on virtually every tick.
+		java.util.Set<String> hiddenIds = null;
+		for (RemovedRef ref : removed) {
+			if (ref.hidden()) {
+				if (hiddenIds == null) {
+					hiddenIds = new java.util.HashSet<>(2);
+				}
+				hiddenIds.add(ref.id());
+			}
+		}
+		Map<BatchKey, TextMessage> perKey = new java.util.HashMap<>();
 		for (Subscriber sub : subscribers.values()) {
 			if (!sub.subscribed || !sub.session.isOpen()) {
 				continue;
 			}
-			if (!perActivity.containsKey(sub.activity)) {
-				perActivity.put(sub.activity, buildBatch(v, sub.activity, created, updated, removed));
+			String suppress = null;
+			if (hiddenIds != null) {
+				String own = hostedBy.get(sub.session.getId());
+				if (own != null && hiddenIds.contains(own)) {
+					suppress = own;
+				}
 			}
-			TextMessage frame = perActivity.get(sub.activity);
+			BatchKey key = new BatchKey(sub.activity, suppress);
+			TextMessage frame = perKey.computeIfAbsent(key,
+				k -> buildBatch(v, k.activity(), created, updated, removed, k.suppress()));
 			if (frame != null) {
 				sendRaw(sub, frame);
 			}
@@ -691,11 +952,14 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	}
 
 	private TextMessage buildBatch(long v, String activity, List<Party> created, List<PartyDelta> updated,
-		List<RemovedRef> removed) {
+		List<RemovedRef> removed, String suppress) {
 		List<Party> c = filterCreated(created, activity);
 		List<PartyDelta> u = filterUpdated(updated, activity);
 		List<String> r = new java.util.ArrayList<>();
 		for (RemovedRef ref : removed) {
+			if (ref.id().equals(suppress)) {
+				continue;
+			}
 			if (activity == null || activity.equals(ref.activity())) {
 				r.add(ref.id());
 			}
@@ -757,7 +1021,18 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 	}
 
-	record RemovedRef(String id, String activity) {
+	/**
+	 * A party leaving the public board.
+	 *
+	 * @param hidden true when the record still exists and was merely shadowbanned out of view,
+	 *     false when it genuinely went away. Only the latter may tear down a voice channel, and
+	 *     only the former is withheld from the host it concerns.
+	 */
+	record RemovedRef(String id, String activity, boolean hidden) {
+	}
+
+	/** Identifies one distinct serialisation of a batch frame. See {@link #broadcastBatch}. */
+	private record BatchKey(String activity, String suppress) {
 	}
 
 	private void send(Subscriber sub, Outbound msg) {
@@ -794,6 +1069,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		// Self-reported identity, mirrored into sessionByAccount/sessionByName for invite routing.
 		volatile Long accountHash;
 		volatile String name;
+		/** Advertisements reported on this connection, so each is only reported once per session. */
+		final java.util.Set<String> reportedPartyIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
 		Subscriber(WebSocketSession session) {
 			this.session = session;

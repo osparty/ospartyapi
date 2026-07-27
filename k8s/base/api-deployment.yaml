@@ -47,6 +47,9 @@ spec:
               value: redis
             - name: SPRING_DATA_REDIS_PORT
               value: "6379"
+            # Credentials come from the osparty-api-env secret via envFrom below.
+            - name: POSTGRES_URL
+              value: jdbc:postgresql://postgres:5432/osparty
             - name: JAVA_TOOL_OPTIONS
               value: "-XX:MaxRAMPercentage=50.0"
             - name: DISCORD_SERVICE_URL

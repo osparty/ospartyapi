@@ -920,7 +920,12 @@ class PartyV2HandlerTest {
 		when(session.isOpen()).thenReturn(true);
 		try {
 			doAnswer(inv -> {
-				out.add(((TextMessage) inv.getArgument(0)).getPayload());
+				// Frames go out as binary (UTF-8 JSON), so they are read back the same way.
+				java.nio.ByteBuffer payload = ((org.springframework.web.socket.BinaryMessage)
+					inv.getArgument(0)).getPayload();
+				byte[] bytes = new byte[payload.remaining()];
+				payload.get(bytes);
+				out.add(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
 				return null;
 			}).when(session).sendMessage(any());
 		}

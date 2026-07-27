@@ -50,6 +50,12 @@ final class LivePartyRoom {
 	/** Shortest gap between resync rounds; see {@link #broadcastResync}. */
 	private static final long RESYNC_MIN_INTERVAL_MS = 3_000;
 
+	/** The two ends of a {@code memberUpdates} frame, between which pre-encoded updates are pasted. */
+	private static final byte[] UPDATES_PREFIX =
+		"{\"type\":\"memberUpdates\",\"updates\":[".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+	private static final byte[] UPDATES_SUFFIX =
+		"]}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
 	/** This window's updates, in arrival order. Drained by {@link #flush}. */
 	private List<Outbound.MemberUpdate> pending = new ArrayList<>();
 	/** Whether anything in {@link #pending} was sent as urgent, which overrides the idle window. */
@@ -259,19 +265,63 @@ final class LivePartyRoom {
 			window = pending;
 			pending = new ArrayList<>();
 		}
+		// Serialise each update once for the whole window, not once per recipient: in a five-man that is five
+		// encodes instead of twenty, and the bytes are identical either way — only which of them a given
+		// member gets differs. Sharing one whole frame was tried instead and measured worse (see above); this
+		// keeps the tailored frame and drops only the repeated work behind it.
+		byte[][] encoded = new byte[window.size()][];
+		for (int i = 0; i < window.size(); i++) {
+			encoded[i] = serializeBytes(window.get(i));
+		}
 		synchronized (lock) {
 			for (Map.Entry<Long, PartySession> entry : recipients()) {
-				List<Outbound.MemberUpdate> theirs = new ArrayList<>(window.size());
-				for (Outbound.MemberUpdate update : window) {
-					if (update.memberId() != entry.getKey()) {
-						theirs.add(update);
-					}
-				}
-				if (!theirs.isEmpty()) {
-					send(entry.getValue(), Outbound.memberUpdates(theirs));
+				byte[] frame = updatesFrame(window, encoded, entry.getKey());
+				if (frame != null) {
+					sendRaw(entry.getValue(), frame);
 				}
 			}
 		}
+	}
+
+	/**
+	 * Build one recipient's {@code memberUpdates} frame by pasting the pre-encoded updates together, leaving
+	 * out its own. Null when nothing is left for them.
+	 *
+	 * <p>Hand-assembled rather than handed back to Jackson because the parts are already bytes; the result is
+	 * byte-for-byte what serialising {@link Outbound#memberUpdates} would produce, which is why the fields
+	 * are in the order the record declares them.
+	 */
+	private byte[] updatesFrame(List<Outbound.MemberUpdate> window, byte[][] encoded, long recipient) {
+		int length = UPDATES_PREFIX.length + UPDATES_SUFFIX.length;
+		int count = 0;
+		for (int i = 0; i < encoded.length; i++) {
+			if (encoded[i] == null || window.get(i).memberId() == recipient) {
+				continue;
+			}
+			length += encoded[i].length + (count == 0 ? 0 : 1);
+			count++;
+		}
+		if (count == 0) {
+			return null;
+		}
+		byte[] frame = new byte[length];
+		int at = 0;
+		System.arraycopy(UPDATES_PREFIX, 0, frame, at, UPDATES_PREFIX.length);
+		at += UPDATES_PREFIX.length;
+		boolean first = true;
+		for (int i = 0; i < encoded.length; i++) {
+			if (encoded[i] == null || window.get(i).memberId() == recipient) {
+				continue;
+			}
+			if (!first) {
+				frame[at++] = ',';
+			}
+			first = false;
+			System.arraycopy(encoded[i], 0, frame, at, encoded[i].length);
+			at += encoded[i].length;
+		}
+		System.arraycopy(UPDATES_SUFFIX, 0, frame, at, UPDATES_SUFFIX.length);
+		return frame;
 	}
 
 	void ping(long memberId, int x, int y, int plane, int color, String name) {
@@ -582,12 +632,12 @@ final class LivePartyRoom {
 	}
 
 	private void broadcast(Outbound frame, Long exceptMemberId) {
-		String json = serialize(frame);
+		byte[] json = serialize(frame);
 		if (json == null) {
 			return;
 		}
 		if (exceptMemberId == null) {
-			// The common case, and the one the flush takes: no key comparison, no entry objects.
+			// The common case: no key comparison, no entry objects.
 			for (PartySession session : openSessions()) {
 				sendRaw(session, json);
 			}
@@ -623,13 +673,13 @@ final class LivePartyRoom {
 	}
 
 	private void send(PartySession session, Outbound frame) {
-		String json = serialize(frame);
+		byte[] json = serialize(frame);
 		if (json != null) {
 			sendRaw(session, json);
 		}
 	}
 
-	private void sendRaw(PartySession session, String json) {
+	private void sendRaw(PartySession session, byte[] json) {
 		if (!session.isOpen()) {
 			return;
 		}
@@ -641,12 +691,23 @@ final class LivePartyRoom {
 		}
 	}
 
-	private String serialize(Outbound frame) {
+	private byte[] serialize(Outbound frame) {
 		try {
-			return mapper.writeValueAsString(frame);
+			return mapper.writeValueAsBytes(frame);
 		}
 		catch (Exception e) {
 			log.warn("Party V2 room {}: failed to serialise {} frame", id, frame.type(), e);
+			return null;
+		}
+	}
+
+	/** As {@link #serialize}, for one update inside an aggregated frame. Null if it cannot be written. */
+	private byte[] serializeBytes(Outbound.MemberUpdate update) {
+		try {
+			return mapper.writeValueAsBytes(update);
+		}
+		catch (Exception e) {
+			log.warn("Party V2 room {}: failed to serialise an update from {}", id, update.memberId(), e);
 			return null;
 		}
 	}

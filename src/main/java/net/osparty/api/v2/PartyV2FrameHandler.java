@@ -54,7 +54,11 @@ public class PartyV2FrameHandler {
 		log.info("Party V2 WS closed: session={} status={}", sessionId, status);
 	}
 
-	public void onMessage(String sessionId, String payload) {
+	/**
+	 * One inbound frame, as the UTF-8 bytes the client sent. Bytes rather than a decoded string because
+	 * Jackson reads them directly — decoding to a String first would add a pass over every frame for nothing.
+	 */
+	public void onMessage(String sessionId, byte[] payload) {
 		Ctx ctx = contexts.get(sessionId);
 		if (ctx == null) {
 			return;
@@ -388,7 +392,7 @@ public class PartyV2FrameHandler {
 			return;
 		}
 		try {
-			ctx.session.send(mapper.writeValueAsString(frame));
+			ctx.session.send(mapper.writeValueAsBytes(frame));
 		}
 		catch (Exception e) {
 			log.debug("Party V2: send to {} failed: {}", ctx.session.id(), e.toString());

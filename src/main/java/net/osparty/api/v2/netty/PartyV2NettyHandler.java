@@ -1,8 +1,10 @@
 package net.osparty.api.v2.netty;
 
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
@@ -48,11 +50,15 @@ final class PartyV2NettyHandler extends SimpleChannelInboundHandler<WebSocketFra
 	@Override
 	protected void channelRead0(ChannelHandlerContext ctx, WebSocketFrame frame) {
 		PartySession session = ctx.channel().attr(SESSION).get();
-		if (session == null || !(frame instanceof TextWebSocketFrame text)) {
-			// Ping, pong and close are answered by WebSocketServerProtocolHandler; binary is not spoken yet.
+		// Ping, pong and close are answered by WebSocketServerProtocolHandler. Clients send binary; text is
+		// still read so an older one is not silently ignored.
+		if (session == null || !(frame instanceof BinaryWebSocketFrame || frame instanceof TextWebSocketFrame)) {
 			return;
 		}
-		frames.onMessage(session.id(), text.text());
+		ByteBuf content = frame.content();
+		byte[] payload = new byte[content.readableBytes()];
+		content.getBytes(content.readerIndex(), payload);
+		frames.onMessage(session.id(), payload);
 	}
 
 	@Override

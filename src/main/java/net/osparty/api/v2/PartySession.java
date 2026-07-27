@@ -16,11 +16,17 @@ public interface PartySession {
 	boolean isOpen();
 
 	/**
-	 * Write one frame. Implementations must not throw for an ordinary send failure — a peer whose connection
-	 * broke is dropped by the close callback and the ghost sweep, not by an exception unwinding through
-	 * another member's fan-out.
+	 * Write one frame: UTF-8 JSON, sent as a binary WebSocket message.
+	 *
+	 * <p>Binary rather than text because a text frame is encoded per recipient — {@code sendPartialString}
+	 * was 22% of this service's CPU doing nothing but UTF-8 — while bytes that Jackson already produced can
+	 * be handed to the socket as they are. The payload is the same JSON either way; only the opcode differs.
+	 *
+	 * <p>Implementations must not throw for an ordinary send failure — a peer whose connection broke is
+	 * dropped by the close callback and the ghost sweep, not by an exception unwinding through another
+	 * member's fan-out.
 	 */
-	void send(String json);
+	void send(byte[] frame);
 
 	void close();
 

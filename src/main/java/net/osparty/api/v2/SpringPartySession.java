@@ -1,6 +1,6 @@
 package net.osparty.api.v2;
 
-import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 /**
@@ -33,9 +33,9 @@ final class SpringPartySession implements PartySession {
 	}
 
 	@Override
-	public void send(String json) {
+	public void send(byte[] frame) {
 		try {
-			session.sendMessage(new TextMessage(json));
+			session.sendMessage(new BinaryMessage(frame));
 		}
 		catch (Exception e) {
 			// Swallowed on purpose: a broken peer must not unwind through the fan-out that is visiting it.

@@ -1,12 +1,14 @@
 package net.osparty.api.v2;
 
+import java.nio.ByteBuffer;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 /**
  * The servlet-container transport for Party V2: it carries bytes and does nothing else. All protocol
@@ -18,7 +20,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
  */
 @Component
 @ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
-public class PartyV2Handler extends TextWebSocketHandler {
+public class PartyV2Handler extends AbstractWebSocketHandler {
 	private static final int SEND_TIME_LIMIT_MS = 10_000;
 	private static final int SEND_BUFFER_LIMIT = 512 * 1024;
 
@@ -36,9 +38,18 @@ public class PartyV2Handler extends TextWebSocketHandler {
 			session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT)));
 	}
 
+	/** Clients send binary now; text is still read so an older one is not silently ignored. */
 	@Override
 	protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-		frames.onMessage(session.getId(), message.getPayload());
+		frames.onMessage(session.getId(), message.asBytes());
+	}
+
+	@Override
+	protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
+		ByteBuffer payload = message.getPayload();
+		byte[] bytes = new byte[payload.remaining()];
+		payload.get(bytes);
+		frames.onMessage(session.getId(), bytes);
 	}
 
 	@Override

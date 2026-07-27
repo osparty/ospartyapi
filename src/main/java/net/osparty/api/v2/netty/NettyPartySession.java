@@ -1,7 +1,8 @@
 package net.osparty.api.v2.netty;
 
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
-import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import java.util.concurrent.atomic.LongAdder;
 import net.osparty.api.v2.PartySession;
 
@@ -46,7 +47,7 @@ final class NettyPartySession implements PartySession {
 	 * session); here the ghost sweep is what eventually removes a client that never recovers.
 	 */
 	@Override
-	public void send(String json) {
+	public void send(byte[] frame) {
 		if (!channel.isActive()) {
 			return;
 		}
@@ -54,7 +55,8 @@ final class NettyPartySession implements PartySession {
 			dropped.increment();
 			return;
 		}
-		channel.writeAndFlush(new TextWebSocketFrame(json));
+		// wrappedBuffer, not copiedBuffer: the array came straight from Jackson and nothing else holds it.
+		channel.writeAndFlush(new BinaryWebSocketFrame(Unpooled.wrappedBuffer(frame)));
 	}
 
 	@Override

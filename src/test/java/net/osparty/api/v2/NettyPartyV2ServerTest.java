@@ -12,11 +12,12 @@ import net.osparty.api.v2.netty.NettyPartyV2Server;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
+import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 
 /**
  * The Netty transport over real sockets: a real handshake, real frames, and the close callback that removes
@@ -131,13 +132,17 @@ class NettyPartyV2ServerTest {
 	}
 
 	/** Collects inbound frames so a test can wait for the one it cares about. */
-	private final class Collector extends TextWebSocketHandler {
+	private final class Collector extends AbstractWebSocketHandler {
 		private final List<String> received = new ArrayList<>();
 
+		/** The server sends binary (UTF-8 JSON), which is the point of the transport. */
 		@Override
-		protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+		protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
+			java.nio.ByteBuffer payload = message.getPayload();
+			byte[] bytes = new byte[payload.remaining()];
+			payload.get(bytes);
 			synchronized (received) {
-				received.add(message.getPayload());
+				received.add(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
 			}
 		}
 

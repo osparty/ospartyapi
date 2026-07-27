@@ -12,7 +12,9 @@ import net.osparty.api.model.PartyRequest;
 import net.osparty.api.model.PartyUpdate;
 import net.osparty.api.service.DiscordLinkService;
 import net.osparty.api.service.PartyFactory;
+import net.osparty.api.service.ReportRateLimiter;
 import net.osparty.api.service.VoiceChannelService;
+import net.osparty.api.web.config.ClientAddressHandshakeInterceptor;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +52,14 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	/** Kill switches: both lookups are reachable by the banned host's own client. */
 	private final boolean filterByHost;
 	private final boolean filterByCode;
+	private final net.osparty.api.repository.AdReportRepository reports;
+	private final net.osparty.api.service.AdReportService adReports;
+	private final net.osparty.api.service.ReportRateLimiter rateLimiter;
+	private final MeterRegistry meterRegistry;
+	private final boolean reportsEnabled;
+	private final int reportsPerSession;
+	private final io.micrometer.core.instrument.Counter reportsReceived;
+	private final io.micrometer.core.instrument.Counter reportsNotified;
 	private final Map<String, Subscriber> subscribers = new ConcurrentHashMap<>();
 	private final Map<String, String> hostedBy = new ConcurrentHashMap<>();
 	private final Map<String, String> ownerSession = new ConcurrentHashMap<>();
@@ -70,6 +80,13 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		boolean filterByHost,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-code:true}")
 		boolean filterByCode,
+		net.osparty.api.repository.AdReportRepository reports,
+		net.osparty.api.service.AdReportService adReports,
+		net.osparty.api.service.ReportRateLimiter rateLimiter,
+		@org.springframework.beans.factory.annotation.Value("${app.reports.enabled:true}")
+		boolean reportsEnabled,
+		@org.springframework.beans.factory.annotation.Value("${app.reports.per-session-max:5}")
+		int reportsPerSession,
 		MeterRegistry meterRegistry) {
 		this.store = store;
 		this.mapper = mapper;
@@ -81,6 +98,20 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		this.bans = bans;
 		this.filterByHost = filterByHost;
 		this.filterByCode = filterByCode;
+		this.reports = reports;
+		this.adReports = adReports;
+		this.rateLimiter = rateLimiter;
+		this.meterRegistry = meterRegistry;
+		this.reportsEnabled = reportsEnabled;
+		this.reportsPerSession = reportsPerSession;
+		this.reportsReceived = io.micrometer.core.instrument.Counter
+			.builder("osparty.reports.received")
+			.description("Advertisement reports accepted from clients")
+			.register(meterRegistry);
+		this.reportsNotified = io.micrometer.core.instrument.Counter
+			.builder("osparty.reports.notified")
+			.description("Advertisement reports that produced a Discord review message")
+			.register(meterRegistry);
 		// Cross-node invite delivery calls back here to reach a target connected to this instance.
 		inviteBus.setLocalDelivery(this::deliverInviteLocally);
 		Gauge.builder("parties.active", store, PartyRepository::partyCount)
@@ -173,6 +204,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				break;
 			case "invite":
 				handleInvite(sub, in);
+				break;
+			case "report":
+				handleReport(sub, in);
 				break;
 			default:
 				break;
@@ -522,6 +556,127 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				sub.session.getId(), id, target, delivered);
 			send(sub, Outbound.inviteAck(version.get(), in.target(), delivered != null && delivered));
 		});
+	}
+
+	/**
+	 * Records a player's report of an advertisement and, subject to rate limiting, forwards it to
+	 * Discord for review.
+	 *
+	 * <p>Deliberately silent in both directions. The client gets no acknowledgement of any kind:
+	 * an ack that distinguished "recorded" from "rate-limited" would tell an abuser exactly which
+	 * of their reports landed, and telling a reporter their report was throttled invites them to
+	 * retry. The plugin shows success unconditionally and treats this as fire-and-forget.
+	 */
+	private void handleReport(Subscriber sub, Inbound in) {
+		if (!reportsEnabled) {
+			return;
+		}
+		String id = in.id();
+		if (id == null) {
+			return;
+		}
+		// One report per advertisement per session. Trivially bypassed by reconnecting, which is
+		// exactly why it is the weakest of the layers and not the one being relied on.
+		if (!sub.reportedPartyIds.add(id)) {
+			reportSuppressed("duplicate-session");
+			return;
+		}
+		if (sub.reportedPartyIds.size() > reportsPerSession) {
+			reportSuppressed("session-cap");
+			return;
+		}
+		Party party = store.findById(id).orElse(null);
+		if (party == null) {
+			reportSuppressed("unknown-party");
+			return;
+		}
+		if (isOwnParty(sub, party)) {
+			reportSuppressed("self-report");
+			return;
+		}
+		if (bans.isHidden(party)) {
+			// Already handled; re-reporting a banned host would just re-notify moderators.
+			reportSuppressed("already-banned");
+			return;
+		}
+		String clientIp = (String) sub.session.getAttributes()
+			.get(ClientAddressHandshakeInterceptor.CLIENT_IP_ATTRIBUTE);
+		if (!rateLimiter.withinIpBudget(clientIp)) {
+			reportSuppressed("ip-cap");
+			return;
+		}
+		reportsReceived.increment();
+
+		String normalizedHost = normalizeName(party.getHost());
+		String fingerprint = sub.accountHash != null ? "a:" + sub.accountHash
+			: (sub.name != null ? "n:" + sub.name : "s:" + sub.session.getId());
+		ReportRateLimiter.Decision decision =
+			rateLimiter.evaluate(id, normalizedHost == null ? "" : normalizedHost, fingerprint);
+
+		long reportId;
+		try {
+			reportId = reports.insert(buildReport(sub, party, normalizedHost, rateLimiter.hash(clientIp)));
+		}
+		catch (Exception e) {
+			log.warn("Failed to record report for party {}: {}", id, e.toString());
+			return;
+		}
+		log.info("WS report: session={} party={} host={} distinctReporters={} notify={} reason={}",
+			sub.session.getId(), id, party.getHost(), decision.distinctReporters(),
+			decision.shouldNotify(), decision.reason());
+
+		if (!decision.shouldNotify()) {
+			reportSuppressed(decision.reason());
+			return;
+		}
+		adReports.publish(new net.osparty.api.service.AdReportService.ReviewRequest(
+				reportId, party.getHost(), party.getHostAccountHash(), party.getActivity(),
+				party.getDescription(), party.getWorld(), party.getCapacity(), party.getSize(),
+				party.getInviteCode(), sub.name, decision.distinctReporters()))
+			.ifPresent(posted -> {
+				reports.markNotified(reportId, posted.channelId(), posted.messageId());
+				reportsNotified.increment();
+			});
+	}
+
+	private net.osparty.api.model.AdReport buildReport(Subscriber sub, Party party,
+		String normalizedHost, String ipHash) {
+		net.osparty.api.model.AdReport report = new net.osparty.api.model.AdReport();
+		report.setPartyId(party.getId());
+		report.setHostName(normalizedHost == null ? "" : normalizedHost);
+		report.setHostNameRaw(party.getHost());
+		report.setHostAccountHash(party.getHostAccountHash() == 0 ? null : party.getHostAccountHash());
+		report.setActivity(party.getActivity());
+		report.setDescription(party.getDescription());
+		report.setWorld(party.getWorld());
+		report.setCapacity(party.getCapacity());
+		report.setPartySize(party.getSize());
+		report.setInviteCode(party.getInviteCode());
+		report.setAdSnapshot(snapshotJson(party));
+		report.setReporterName(sub.name);
+		report.setReporterAccountHash(sub.accountHash);
+		report.setReporterSessionId(sub.session.getId());
+		report.setReporterIpHash(ipHash);
+		return report;
+	}
+
+	/** The advertisement verbatim: the only surviving evidence once the 90s ad TTL elapses. */
+	private String snapshotJson(Party party) {
+		try {
+			return mapper.writeValueAsString(party);
+		}
+		catch (Exception e) {
+			log.warn("Failed to serialise ad snapshot for party {}: {}", party.getId(), e.toString());
+			return "{}";
+		}
+	}
+
+	private void reportSuppressed(String reason) {
+		io.micrometer.core.instrument.Counter.builder("osparty.reports.suppressed")
+			.description("Advertisement reports recorded or dropped without notifying Discord")
+			.tag("reason", reason == null ? "unknown" : reason)
+			.register(meterRegistry)
+			.increment();
 	}
 
 	/** Deliver a pre-serialised {@code invited} frame to {@code normalizedName} if connected to this node. */
@@ -908,6 +1063,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		// Self-reported identity, mirrored into sessionByAccount/sessionByName for invite routing.
 		volatile Long accountHash;
 		volatile String name;
+		/** Advertisements reported on this connection, so each is only reported once per session. */
+		final java.util.Set<String> reportedPartyIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
 		Subscriber(WebSocketSession session) {
 			this.session = session;

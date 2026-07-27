@@ -21,6 +21,8 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
 	@Override
 	public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-		registry.addHandler(broadcaster, WS_PATH).setAllowedOrigins("*");
+		registry.addHandler(broadcaster, WS_PATH)
+			.addInterceptors(new ClientAddressHandshakeInterceptor())
+			.setAllowedOrigins("*");
 	}
 }

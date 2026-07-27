@@ -58,6 +58,10 @@ app:
     per-party-cooldown-ms: 1800000
     # Circuit breaker: above this, reports are still recorded but not forwarded to Discord.
     global-per-minute: 20
+    # Unreviewed reports are dropped after this long. Reviewed ones are kept: the Discord Unban
+    # button resolves its subject through the report row.
+    retention-days: 90
+    purge-cron: "0 30 4 * * *"
     # Salt for the stored reporter IP hash. Raw IPs are never persisted.
     ip-hash-pepper: ${REPORT_IP_PEPPER:}
   discord:

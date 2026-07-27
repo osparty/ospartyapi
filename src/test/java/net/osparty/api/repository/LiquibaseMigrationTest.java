@@ -75,9 +75,71 @@ class LiquibaseMigrationTest {
 	@Autowired
 	private AdReportRepository reports;
 
+	@Autowired
+	private DiscordLinkRepository discordLinks;
+
 	@BeforeEach
 	void reset() {
-		db.sql("TRUNCATE ad_ban, ad_report RESTART IDENTITY CASCADE").update();
+		db.sql("TRUNCATE ad_ban, ad_report, discord_link, account_preference, data_migration "
+			+ "RESTART IDENTITY CASCADE").update();
+	}
+
+	@Test
+	void discordLinkUpsertsAndResolvesBothDirections() {
+		discordLinks.link(1L, "discord-1", "user one");
+		discordLinks.link(2L, "discord-1", "user one");
+
+		// One Discord account, many OSRS accounts — the index that replaced the old Redis set.
+		assertThat(discordLinks.accountHashesFor("discord-1")).containsExactlyInAnyOrder(1L, 2L);
+		assertThat(discordLinks.findByAccountHash(1L))
+			.get().extracting(DiscordLinkRepository.Link::discordName).isEqualTo("user one");
+
+		// Re-linking moves the account rather than duplicating it.
+		discordLinks.link(1L, "discord-2", "user two");
+		assertThat(discordLinks.accountHashesFor("discord-1")).containsExactly(2L);
+		assertThat(discordLinks.accountHashesFor("discord-2")).containsExactly(1L);
+		assertThat(discordLinks.countLinks()).isEqualTo(2);
+
+		discordLinks.unlink(2L);
+		assertThat(discordLinks.findByAccountHash(2L)).isEmpty();
+	}
+
+	@Test
+	void badgeVisibilityPersistsIndependentlyOfAnyLink() {
+		// handleSetBadgeVisibility accepts any account hash, linked or not, which is why this is a
+		// table of its own rather than a column on discord_link.
+		discordLinks.setBadgesHidden(55L, true);
+		assertThat(discordLinks.isBadgesHidden(55L)).isTrue();
+		assertThat(discordLinks.findByAccountHash(55L)).isEmpty();
+		assertThat(discordLinks.findBadgesHidden()).containsExactly(55L);
+
+		discordLinks.setBadgesHidden(55L, false);
+		assertThat(discordLinks.isBadgesHidden(55L)).isFalse();
+		assertThat(discordLinks.findBadgesHidden()).isEmpty();
+		// Never set at all reads as "not hidden", not as an error.
+		assertThat(discordLinks.isBadgesHidden(999L)).isFalse();
+	}
+
+	@Test
+	void importNeverOverwritesWhatPostgresAlreadyHas() {
+		discordLinks.link(7L, "current", "current name");
+
+		assertThat(discordLinks.importIfAbsent(7L, "stale", "stale name")).isFalse();
+		assertThat(discordLinks.importIfAbsent(8L, "fresh", "fresh name")).isTrue();
+
+		assertThat(discordLinks.findByAccountHash(7L))
+			.get().extracting(DiscordLinkRepository.Link::discordId).isEqualTo("current");
+		assertThat(discordLinks.findByAccountHash(8L)).isPresent();
+	}
+
+	@Test
+	void dataMigrationMarkerIsRecordedOnceAndReadBack() {
+		assertThat(discordLinks.migrationCompleted("some-migration")).isFalse();
+		discordLinks.markMigrationCompleted("some-migration", "links=3");
+		assertThat(discordLinks.migrationCompleted("some-migration")).isTrue();
+		// Two replicas finishing the same idempotent work must not collide.
+		discordLinks.markMigrationCompleted("some-migration", "links=3");
+		assertThat(db.sql("SELECT count(*) FROM data_migration").query(Integer.class).single()).isEqualTo(1);
 	}
 
 	@Test
@@ -88,7 +150,8 @@ class LiquibaseMigrationTest {
 		assertThat(ids).containsExactly(
 			"001-1-create-ad-report", "001-2-index-ad-report",
 			"002-1-create-ad-ban", "002-2-index-ad-ban", "002-3-index-ad-report-ban",
-			"003-1-create-discord-link", "003-2-create-account-preference");
+			"003-1-create-discord-link", "003-2-create-account-preference",
+			"004-1-create-data-migration");
 		// A second startup must be a no-op; Liquibase records checksums, so a changed file would
 		// have failed the context refresh above rather than reaching this assertion.
 		assertThat(db.sql("SELECT count(*) FROM databasechangeloglock").query(Integer.class).single())

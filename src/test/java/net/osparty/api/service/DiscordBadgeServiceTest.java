@@ -13,7 +13,10 @@ class DiscordBadgeServiceTest {
 	private DiscordBadgeService service() {
 		StringRedisTemplate redis = new StringRedisTemplate();
 		ObjectMapper mapper = new ObjectMapper();
-		return new DiscordBadgeService(redis, mapper, new DiscordLinkService(redis, mapper, "", ""));
+		net.osparty.api.repository.InMemoryDiscordLinkRepository repository =
+			new net.osparty.api.repository.InMemoryDiscordLinkRepository();
+		return new DiscordBadgeService(redis, mapper,
+			new DiscordLinkService(redis, mapper, repository, "", ""), repository);
 	}
 
 	@Test

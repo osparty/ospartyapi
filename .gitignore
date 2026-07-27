@@ -12,3 +12,8 @@ application-local.yml
 application-local.yaml
 # Server deploy secrets: the real .env with the bot token (.env.example is committed).
 .env
+
+# Local profiling output (profile-local.ps1)
+*.jfr
+profile-run.log
+profile-run.err

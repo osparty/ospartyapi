@@ -1,0 +1,9 @@
+# The `test` profile runs against in-memory @Profile("test") repositories, not a database. Excluding
+# the datasource and Liquibase autoconfiguration keeps every existing @SpringBootTest booting without
+# Docker or a running Postgres. The SQL-backed tests opt back in via the `pgtest` profile, which does
+# not load this file.
+spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.liquibase.LiquibaseAutoConfiguration

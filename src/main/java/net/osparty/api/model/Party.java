@@ -8,6 +8,13 @@ public class Party {
 	private String id;
 	private String activity;
 	private String host;
+	/**
+	 * The current host's account hash, or 0 when the client never reported one. Kept as a field of
+	 * its own rather than read back from {@code members.get(0)}: a host transfer rewrites
+	 * {@code host} without touching the member list, so member zero goes stale the moment a party
+	 * changes hands.
+	 */
+	private long hostAccountHash;
 	private String description;
 	private int size;
 	private int capacity;
@@ -40,6 +47,7 @@ public class Party {
 		c.id = src.id;
 		c.activity = src.activity;
 		c.host = src.host;
+		c.hostAccountHash = src.hostAccountHash;
 		c.description = src.description;
 		c.size = src.size;
 		c.capacity = src.capacity;

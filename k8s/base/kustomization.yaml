@@ -4,6 +4,7 @@ resources:
   - api-deployment.yaml
   - api-service.yaml
   - redis.yaml
+  - postgres.yaml
   - ingress.yaml
   - servicemonitors.yaml
 configMapGenerator:

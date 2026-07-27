@@ -107,6 +107,7 @@ public class FakePartyRepository implements PartyRepository {
 			return Optional.empty();
 		}
 		party.setHost(newHost);
+		party.setHostAccountHash(PartyFactory.accountHashOf(party, newHost));
 		hostKeys.put(id, newKey);
 		return Optional.of(party);
 	}

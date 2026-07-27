@@ -23,6 +23,7 @@ public final class PartyFactory {
 		party.setId(id);
 		party.setActivity(request.activity());
 		party.setHost(request.host());
+		party.setHostAccountHash(request.hostAccountHash());
 		party.setDescription(request.description());
 		party.setCapacity(request.capacity());
 		party.setWorld(request.world());
@@ -196,6 +197,19 @@ public final class PartyFactory {
 		return out;
 	}
 
+	/**
+	 * The account hash the party knows for {@code host}, or 0 when no admitted member matches by
+	 * name or that member never reported one. Used on host transfer to keep
+	 * {@code Party.hostAccountHash} pointing at whoever actually runs the ad.
+	 */
+	public static long accountHashOf(Party party, String host) {
+		if (party.getMembers() == null || host == null) {
+			return 0;
+		}
+		Member member = findByName(party.getMembers(), host);
+		return member == null ? 0 : member.getAccountHash();
+	}
+
 	private static Member findByName(List<Member> members, String name) {
 		for (Member member : members) {
 			if (member != null && member.getName() != null
@@ -239,6 +253,12 @@ public final class PartyFactory {
 		return a != null && b != null && normalizeHost(a).equals(normalizeHost(b));
 	}
 
+	/**
+	 * The canonical identity form for an OSRS name: Jagex renders spaces as a non-breaking space,
+	 * so fold that to a plain space before trimming and lowercasing. Everything that keys on a
+	 * player -- the Redis {@code partyhost:} index, socket identity, ad bans -- goes through here,
+	 * or the same player ends up with two identities.
+	 */
 	public static String normalizeHost(String host) {
 		return host.replace(' ', ' ').trim().toLowerCase();
 	}

@@ -16,6 +16,19 @@ spring:
     redis:
       host: localhost
       port: 6379
+  datasource:
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/osparty}
+    username: ${POSTGRES_USER:osparty}
+    password: ${POSTGRES_PASSWORD:osparty}
+    hikari:
+      pool-name: osparty-pg
+      # 5 per replica x 3 replicas is well under Postgres' default max_connections of 100.
+      maximum-pool-size: ${POSTGRES_POOL_MAX:5}
+      minimum-idle: 1
+      connection-timeout: 3000
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+    enabled: ${LIQUIBASE_ENABLED:true}
 
 app:
   ads:
@@ -27,6 +40,26 @@ app:
     enabled: true
     reconcile-interval-ms: 5000
     touch-interval-ms: 5000
+  bans:
+    # Each node refreshes its own ban snapshot on this interval, so a ban propagates cluster-wide
+    # within one refresh plus one reconcile tick. No inter-node messaging required.
+    refresh-ms: 5000
+    # Kill switches. Hiding the ad from these two lookups closes the last discovery routes, but
+    # both are reachable by the banned host's own client, so they can be turned off without a
+    # redeploy if they ever surface the ban to its subject.
+    filter-get-by-host: true
+    filter-get-by-code: true
+  reports:
+    enabled: true
+    # Distinct reporters required before a review message is posted to Discord.
+    notify-threshold: 1
+    per-session-max: 5
+    # One review message per host per this window, however many ads they re-post.
+    per-party-cooldown-ms: 1800000
+    # Circuit breaker: above this, reports are still recorded but not forwarded to Discord.
+    global-per-minute: 20
+    # Salt for the stored reporter IP hash. Raw IPs are never persisted.
+    ip-hash-pepper: ${REPORT_IP_PEPPER:}
   discord:
     service-url: ${DISCORD_SERVICE_URL:}
     internal-token: ${DISCORD_INTERNAL_TOKEN:}
@@ -46,6 +79,14 @@ management:
     health:
       probes:
         enabled: true
+      # Pinned explicitly: the probes must stay tied to the application availability state so that
+      # adding a datasource (and its `db` health indicator) can never start failing readiness and
+      # roll pods out of the load balancer during a Postgres blip.
+      group:
+        readiness:
+          include: readinessState
+        liveness:
+          include: livenessState
 
 logging:
   level:

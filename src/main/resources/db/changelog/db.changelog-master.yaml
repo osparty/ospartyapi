@@ -1,0 +1,9 @@
+databaseChangeLog:
+  # Explicit includes rather than includeAll: the apply order of a schema you will one day read in
+  # a postmortem should be stated, not inferred from filesystem ordering.
+  - include:
+      file: db/changelog/changes/001-ad-report.yaml
+  - include:
+      file: db/changelog/changes/002-ad-ban.yaml
+  - include:
+      file: db/changelog/changes/003-discord-link.yaml

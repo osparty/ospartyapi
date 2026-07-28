@@ -269,7 +269,7 @@ public class PartyV2FrameHandler {
 						ctx.session.id(), in.room(), owner.nodeId());
 					send(ctx, Outbound.redirect(owner.nodeId()));
 				},
-				() -> sendUnowned(ctx, in.room()));
+				() -> sendUnowned(ctx, in.room(), Boolean.TRUE.equals(in.invited())));
 			return;
 		}
 		ensureMemberId(ctx);
@@ -287,9 +287,16 @@ public class PartyV2FrameHandler {
 	 * host is reconnecting and re-claiming it right now — so the joiner is told to retry rather than that
 	 * the party is gone. Members reconnect at the same instant as their host but have less to do before
 	 * they arrive, so without this they lose the race by default and drop out of the party (§16 R4).
+	 *
+	 * <p>An invited joiner gets the same answer even for a room that has never existed, because someone
+	 * told it to come: the host is on its way and has more to do than the guest before it arrives. That
+	 * race is ordinary — it widens whenever the host is placed on another node and has to reconnect there —
+	 * and losing it should cost a second, not the party. A joiner arriving on a code nobody gave it still
+	 * gets the error straight away, which is the right answer to a typo. The client bounds the retries
+	 * either way, so a host that never comes ends the same way it used to, just later.
 	 */
-	private void sendUnowned(Ctx ctx, String room) {
-		if (manager.handoverPending(room)) {
+	private void sendUnowned(Ctx ctx, String room, boolean invited) {
+		if (manager.handoverPending(room) || invited) {
 			deferUntilHostReturns(ctx, room);
 			return;
 		}

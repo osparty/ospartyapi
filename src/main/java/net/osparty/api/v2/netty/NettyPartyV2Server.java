@@ -1,5 +1,6 @@
 package net.osparty.api.v2.netty;
 
+import net.osparty.api.transport.PartySession;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;

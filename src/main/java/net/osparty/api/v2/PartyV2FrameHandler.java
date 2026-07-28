@@ -1,5 +1,7 @@
 package net.osparty.api.v2;
 
+import net.osparty.api.transport.PartySession;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;

@@ -1,6 +1,7 @@
-package net.osparty.api.v2;
+package net.osparty.api.transport;
 
 import org.springframework.web.socket.BinaryMessage;
+import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 /**
@@ -10,13 +11,13 @@ import org.springframework.web.socket.WebSocketSession;
  * {@link PartyV2Handler} — because frames come from the aggregator thread as well as from the thread that
  * handled an inbound message.
  */
-final class SpringPartySession implements PartySession {
+public final class SpringPartySession implements PartySession {
 	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SpringPartySession.class);
 
 	private final WebSocketSession session;
 	private final boolean nodeHinted;
 
-	SpringPartySession(WebSocketSession session) {
+	public SpringPartySession(WebSocketSession session) {
 		this.session = session;
 		this.nodeHinted = session.getUri() != null && session.getUri().getPath() != null
 			&& session.getUri().getPath().startsWith("/n/");
@@ -40,6 +41,16 @@ final class SpringPartySession implements PartySession {
 		catch (Exception e) {
 			// Swallowed on purpose: a broken peer must not unwind through the fan-out that is visiting it.
 			// The close callback and the ghost sweep are what remove it.
+			log.debug("Party V2: dropping send to {}: {}", session.getId(), e.toString());
+		}
+	}
+
+	@Override
+	public void sendText(String json) {
+		try {
+			session.sendMessage(new TextMessage(json));
+		}
+		catch (Exception e) {
 			log.debug("Party V2: dropping send to {}: {}", session.getId(), e.toString());
 		}
 	}

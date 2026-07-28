@@ -1,4 +1,4 @@
-package net.osparty.api.v2;
+package net.osparty.api.transport;
 
 /**
  * One client's live-party connection, as much of it as the room layer needs to know.
@@ -7,7 +7,8 @@ package net.osparty.api.v2;
  * of doing that is the send itself — Tomcat's send path is roughly half of this service's CPU
  * (PARTY_V2_OPTIMIZATION.md §6.5.3). That makes the transport a thing worth replacing, and replacing it is
  * only safe if the rooms, the ownership and the placement logic never knew which transport they were on.
- * Hence this: {@link LivePartyRoom} and {@link PartyV2FrameHandler} speak to sessions, not to servlets.
+ * Hence this: the room layer and the frame handlers speak to sessions, not to servlets — and once the
+ * ad board speaks it too, both protocols can share one transport and, in time, one connection.
  */
 public interface PartySession {
 	/** Stable per-connection id; the frame handler keys its per-connection context on it. */
@@ -27,6 +28,12 @@ public interface PartySession {
 	 * member's fan-out.
 	 */
 	void send(byte[] frame);
+
+	/**
+	 * Write one frame as text. The live party has no use for this — it speaks binary in both directions —
+	 * but the ad board answers clients that predate compression, and those expect text frames.
+	 */
+	void sendText(String json);
 
 	void close();
 

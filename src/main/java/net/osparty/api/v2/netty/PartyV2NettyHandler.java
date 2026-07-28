@@ -10,7 +10,7 @@ import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import io.netty.util.AttributeKey;
 import java.util.concurrent.atomic.LongAdder;
-import net.osparty.api.v2.PartySession;
+import net.osparty.api.transport.PartySession;
 import net.osparty.api.v2.PartyV2FrameHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

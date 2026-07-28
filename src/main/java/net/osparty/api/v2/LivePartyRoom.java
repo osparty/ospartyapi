@@ -1,5 +1,6 @@
 package net.osparty.api.v2;
 
+import net.osparty.api.transport.PartySession;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.util.TokenBuffer;

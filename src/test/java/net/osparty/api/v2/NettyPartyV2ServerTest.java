@@ -1,5 +1,6 @@
 package net.osparty.api.v2;
 
+import net.osparty.api.transport.PartySession;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

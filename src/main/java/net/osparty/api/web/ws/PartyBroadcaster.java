@@ -134,7 +134,10 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	public void afterConnectionEstablished(WebSocketSession session) {
 		WebSocketSession guarded = new ConcurrentWebSocketSessionDecorator(
 			session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT);
-		Subscriber sub = new Subscriber(guarded);
+		// Behind the seam from here on: the ad board no longer knows what carries its bytes, which is what
+		// lets it move onto the Netty transport and, eventually, share one connection with the live party.
+		Subscriber sub = new Subscriber(new net.osparty.api.transport.SpringPartySession(guarded),
+			(String) session.getAttributes().get(ClientAddressHandshakeInterceptor.CLIENT_IP_ATTRIBUTE));
 		subscribers.put(session.getId(), sub);
 		log.info("WS connected: session={} (subscribers={})",
 			session.getId(), subscribers.size());
@@ -226,7 +229,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		// that says nothing keeps getting text, which is what every version before this one expects.
 		sub.compressed = Boolean.TRUE.equals(in.compress());
 		sub.subscribed = true;
-		log.info("WS subscribe: session={} activity={}", sub.session.getId(),
+		log.info("WS subscribe: session={} activity={}", sub.session.id(),
 			sub.activity == null ? "<all>" : sub.activity);
 		sendSnapshot(sub, in.since());
 	}
@@ -264,8 +267,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			return;
 		}
 		Party party = store.create(in.request(), in.key());
-		bind(sub.session.getId(), party.getId());
-		log.info("WS host: session={} party={} host={}", sub.session.getId(), party.getId(), party.getHost());
+		bind(sub.session.id(), party.getId());
+		log.info("WS host: session={} party={} host={}", sub.session.id(), party.getId(), party.getHost());
 		send(sub, Outbound.hosted(version.get(), enriched(party)));
 		// After the host's own ack, always: the announcement puts the ad on everyone's board, and a host
 		// should learn its advertisement exists before the rest of the world does.
@@ -288,7 +291,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		Optional<Party> updated = store.update(id, in.patch() == null ? TTL_TOUCH : in.patch());
 		if (updated.isEmpty()) {
 			sendError(sub, id, "gone");
-			unbind(sub.session.getId());
+			unbind(sub.session.id());
 			return;
 		}
 		// Only a real edit is announced. A bare heartbeat changes nothing anyone can see, and at one per
@@ -322,8 +325,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			send(sub, Outbound.gone(version.get(), id));
 			return;
 		}
-		bind(sub.session.getId(), id);
-		log.info("WS resume: session={} party={}", sub.session.getId(), id);
+		bind(sub.session.id(), id);
+		log.info("WS resume: session={} party={}", sub.session.id(), id);
 		send(sub, Outbound.hosted(version.get(), enriched(party.get())));
 	}
 
@@ -340,8 +343,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		if (deleted != null && deleted.getDiscordChannelId() != null) {
 			voice.delete(deleted.getDiscordChannelId());
 		}
-		unbind(sub.session.getId());
-		log.info("WS unhost: session={} party={}", sub.session.getId(), id);
+		unbind(sub.session.id());
+		log.info("WS unhost: session={} party={}", sub.session.id(), id);
 		// A removal has no advertisement left to stamp, so it takes the next revision from the same
 		// sequence — which is what lets every node order it against everything else.
 		changes.publish(id, store.nextRevision());
@@ -367,15 +370,15 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		Optional<Party> party = store.transferHost(id, in.host(), in.newKey());
 		if (party.isEmpty()) {
 			sendError(sub, id, "gone");
-			unbind(sub.session.getId());
+			unbind(sub.session.id());
 			return;
 		}
-		unbind(sub.session.getId());
+		unbind(sub.session.id());
 		// The Discord channel name embeds the host, so rename it to match the new host (best-effort).
 		if (party.get().getDiscordChannelId() != null) {
 			voice.rename(party.get().getDiscordChannelId(), party.get());
 		}
-		log.info("WS transferHost: session={} party={} newHost={}", sub.session.getId(), id, in.host());
+		log.info("WS transferHost: session={} party={} newHost={}", sub.session.id(), id, in.host());
 		send(sub, Outbound.transferred(version.get(), id));
 		changes.publish(id, party.get().getSeq());
 	}
@@ -392,7 +395,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		Party party = store.findById(id).orElse(null);
 		if (party == null) {
 			sendError(sub, id, "gone");
-			unbind(sub.session.getId());
+			unbind(sub.session.id());
 			return;
 		}
 		if (party.getDiscordInviteUrl() != null) {
@@ -406,7 +409,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			return;
 		}
 		store.attachVoiceChannel(id, channel.get().channelId(), channel.get().inviteUrl());
-		log.info("WS voice channel: session={} party={} channel={}", sub.session.getId(), id,
+		log.info("WS voice channel: session={} party={} channel={}", sub.session.id(), id,
 			channel.get().channelId());
 		send(sub, Outbound.voiceChannel(version.get(), id, channel.get().inviteUrl()));
 		changes.publish(id, store.findById(id).map(Party::getSeq).orElse(0L));
@@ -512,7 +515,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	 * self-asserted (consistent with the rest of the socket) and re-sent by the client on every reconnect.
 	 */
 	private void handleIdentify(Subscriber sub, Inbound in) {
-		String sessionId = sub.session.getId();
+		String sessionId = sub.session.id();
 		if (in.accountHash() != null && in.accountHash() != 0) {
 			if (sub.accountHash != null && !sub.accountHash.equals(in.accountHash())) {
 				sessionByAccount.remove(sub.accountHash, sessionId);
@@ -582,7 +585,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		// The target may be connected to any replica; the bus finds and delivers it cluster-wide.
 		inviteBus.dispatch(target, frame).whenComplete((delivered, error) -> {
 			log.info("WS invite: session={} party={} target={} delivered={}",
-				sub.session.getId(), id, target, delivered);
+				sub.session.id(), id, target, delivered);
 			send(sub, Outbound.inviteAck(version.get(), in.target(), delivered != null && delivered));
 		});
 	}
@@ -633,8 +636,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			reportSuppressed("already-banned");
 			return;
 		}
-		String clientIp = (String) sub.session.getAttributes()
-			.get(ClientAddressHandshakeInterceptor.CLIENT_IP_ATTRIBUTE);
+		String clientIp = sub.clientIp;
+		if (false) {
+		}
 		if (!rateLimiter.withinIpBudget(clientIp)) {
 			reportSuppressed("ip-cap");
 			return;
@@ -644,7 +648,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 
 		String normalizedHost = normalizeName(party.getHost());
 		String fingerprint = sub.accountHash != null ? "a:" + sub.accountHash
-			: (sub.name != null ? "n:" + sub.name : "s:" + sub.session.getId());
+			: (sub.name != null ? "n:" + sub.name : "s:" + sub.session.id());
 		ReportRateLimiter.Decision decision =
 			rateLimiter.evaluate(id, normalizedHost == null ? "" : normalizedHost, fingerprint);
 
@@ -657,7 +661,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			return;
 		}
 		log.info("WS report: session={} party={} host={} distinctReporters={} notify={} reason={}",
-			sub.session.getId(), id, party.getHost(), decision.distinctReporters(),
+			sub.session.id(), id, party.getHost(), decision.distinctReporters(),
 			decision.shouldNotify(), decision.reason());
 
 		if (!decision.shouldNotify()) {
@@ -690,7 +694,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		report.setAdSnapshot(snapshotJson(party));
 		report.setReporterName(sub.name);
 		report.setReporterAccountHash(sub.accountHash);
-		report.setReporterSessionId(sub.session.getId());
+		report.setReporterSessionId(sub.session.id());
 		report.setReporterIpHash(ipHash);
 		return report;
 	}
@@ -721,7 +725,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		if (sub == null || !sub.session.isOpen()) {
 			return false;
 		}
-		sendRaw(sub, new TextMessage(frameJson));
+		sendRaw(sub, new Frame(frameJson));
 		return true;
 	}
 
@@ -772,10 +776,10 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			return;
 		}
 		if (sub.accountHash != null) {
-			sessionByAccount.remove(sub.accountHash, sub.session.getId());
+			sessionByAccount.remove(sub.accountHash, sub.session.id());
 		}
 		if (sub.name != null) {
-			sessionByName.remove(sub.name, sub.session.getId());
+			sessionByName.remove(sub.name, sub.session.id());
 		}
 	}
 
@@ -809,7 +813,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	}
 
 	private boolean authorizeWrite(Subscriber sub, String id, String key) {
-		if (id.equals(hostedBy.get(sub.session.getId()))) {
+		if (id.equals(hostedBy.get(sub.session.id()))) {
 			return true;
 		}
 		Authorization auth = store.authorize(id, key);
@@ -821,7 +825,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			sendError(sub, id, "forbidden");
 			return false;
 		}
-		bind(sub.session.getId(), id);
+		bind(sub.session.id(), id);
 		return true;
 	}
 
@@ -930,7 +934,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		Board current = board;
 		// A client that still holds a board only needs what it missed. That is what makes a reconnect
 		// cheap — and a rolling deploy, which today re-sends the entire board to every client at once.
-		if (since != null && current != null && !hostedBy.containsKey(sub.session.getId())
+		if (since != null && current != null && !hostedBy.containsKey(sub.session.id())
 			&& !current.showsOwnHidden(sub, this)) {
 			Frame resume = current.resume(sub.activity, since, this);
 			if (resume != null) {
@@ -938,7 +942,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				return;
 			}
 		}
-		if (current != null && !hostedBy.containsKey(sub.session.getId())
+		if (current != null && !hostedBy.containsKey(sub.session.id())
 			&& !current.showsOwnHidden(sub, this)) {
 			Frame frame = current.frame(sub.activity, this);
 			if (frame != null) {
@@ -953,7 +957,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				list.add(party);
 			}
 		}
-		log.debug("WS snapshot -> {} ({} of {} parties)", sub.session.getId(), list.size(), all.size());
+		log.debug("WS snapshot -> {} ({} of {} parties)", sub.session.id(), list.size(), all.size());
 		send(sub, Outbound.snapshot(version.get(), list, headSeq(list)));
 	}
 
@@ -1027,7 +1031,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			Batch batch = new Batch("batch", version, created.isEmpty() ? null : created, null,
 				removed.isEmpty() ? null : removed, headSeq());
 			try {
-				return new Frame(new TextMessage(owner.mapper.writeValueAsString(batch)));
+				return new Frame(owner.mapper.writeValueAsString(batch));
 			}
 			catch (Exception e) {
 				log.warn("Failed to serialise a resume frame", e);
@@ -1064,8 +1068,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 					}
 				}
 				try {
-					return new Frame(new TextMessage(owner.mapper.writeValueAsString(
-						Outbound.snapshot(version, list, headSeq()))));
+					return new Frame(owner.mapper.writeValueAsString(
+						Outbound.snapshot(version, list, headSeq())));
 				}
 				catch (Exception e) {
 					log.warn("Failed to serialise the shared snapshot frame", e);
@@ -1089,7 +1093,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		if (party == null) {
 			return false;
 		}
-		if (party.getId().equals(hostedBy.get(sub.session.getId()))) {
+		if (party.getId().equals(hostedBy.get(sub.session.id()))) {
 			return true;
 		}
 		if (sub.accountHash != null && party.getHostAccountHash() != 0
@@ -1135,7 +1139,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			}
 			String suppress = null;
 			if (hiddenIds != null) {
-				String own = hostedBy.get(sub.session.getId());
+				String own = hostedBy.get(sub.session.id());
 				if (own != null && hiddenIds.contains(own)) {
 					suppress = own;
 				}
@@ -1176,7 +1180,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		Batch batch = new Batch("batch", v, c.isEmpty() ? null : c, u.isEmpty() ? null : u,
 			r.isEmpty() ? null : r, head > 0 ? head : null);
 		try {
-			return new Frame(new TextMessage(mapper.writeValueAsString(batch)));
+			return new Frame(mapper.writeValueAsString(batch));
 		}
 		catch (Exception e) {
 			log.warn("Failed to serialise batch frame", e);
@@ -1212,25 +1216,23 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 
 	/** Send a shared frame in whichever form this subscriber asked for. */
 	private void sendRaw(Subscriber sub, Frame frame) {
-		org.springframework.web.socket.WebSocketMessage<?> message = sub.compressed ? frame.compressed() : null;
-		sendRaw(sub, message != null ? message : frame.text());
-	}
-
-	private void sendRaw(Subscriber sub, org.springframework.web.socket.WebSocketMessage<?> frame) {
 		if (!sub.session.isOpen()) {
 			return;
 		}
 		try {
-			sub.session.sendMessage(frame);
+			byte[] compressed = sub.compressed ? frame.compressedBytes() : null;
+			if (compressed != null) {
+				sub.session.send(compressed);
+			}
+			else {
+				sub.session.sendText(frame.text());
+			}
 		}
 		catch (Exception e) {
-			log.debug("Dropping subscriber {} after send failure: {}", sub.session.getId(), e.toString());
-			subscribers.remove(sub.session.getId());
-			try {
-				sub.session.close(CloseStatus.SERVER_ERROR);
-			}
-			catch (IOException ignored) {
-			}
+			log.debug("Dropping subscriber {} after send failure: {}", sub.session.id(), e.toString());
+			subscribers.remove(sub.session.id());
+			// The seam swallows a failed close; there is nothing useful to do about one anyway.
+			sub.session.close();
 		}
 	}
 
@@ -1258,28 +1260,28 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	 * <p>Built lazily: a board with no compression-capable subscribers never pays for it.
 	 */
 	private static final class Frame {
-		private final TextMessage text;
-		private volatile BinaryMessage compressed;
+		private final String text;
+		private volatile byte[] compressed;
 
-		Frame(TextMessage text) {
+		Frame(String text) {
 			this.text = text;
 		}
 
-		TextMessage text() {
+		String text() {
 			return text;
 		}
 
-		BinaryMessage compressed() {
-			BinaryMessage local = compressed;
+		byte[] compressedBytes() {
+			byte[] local = compressed;
 			if (local != null) {
 				return local;
 			}
 			// Racing threads may both compress; both results are equivalent and the loser is garbage.
 			try (java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
 				try (java.util.zip.GZIPOutputStream gzip = new java.util.zip.GZIPOutputStream(out)) {
-					gzip.write(text.asBytes());
+					gzip.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
 				}
-				local = new BinaryMessage(out.toByteArray());
+				local = out.toByteArray();
 			}
 			catch (Exception e) {
 				log.warn("Failed to compress a shared frame; falling back to text", e);
@@ -1306,23 +1308,22 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			log.warn("Failed to serialise {} frame", msg.type(), e);
 			return;
 		}
-		log.debug("WS -> {} {}", sub.session.getId(), json);
+		log.debug("WS -> {} {}", sub.session.id(), json);
 		try {
-			sub.session.sendMessage(new TextMessage(json));
+			sub.session.sendText(json);
 		}
 		catch (Exception e) {
-			log.debug("Dropping subscriber {} after send failure: {}", sub.session.getId(), e.toString());
-			subscribers.remove(sub.session.getId());
-			try {
-				sub.session.close(CloseStatus.SERVER_ERROR);
-			}
-			catch (IOException ignored) {
-			}
+			log.debug("Dropping subscriber {} after send failure: {}", sub.session.id(), e.toString());
+			subscribers.remove(sub.session.id());
+			// The seam swallows a failed close; there is nothing useful to do about one anyway.
+			sub.session.close();
 		}
 	}
 
 	private static final class Subscriber {
-		final WebSocketSession session;
+		final net.osparty.api.transport.PartySession session;
+		/** Captured at the handshake: the seam carries frames, not the servlet's attribute bag. */
+		final String clientIp;
 		volatile boolean subscribed;
 		/** Whether this client asked for gzipped binary frames rather than JSON text. */
 		volatile boolean compressed;
@@ -1333,7 +1334,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		/** Advertisements reported on this connection, so each is only reported once per session. */
 		final java.util.Set<String> reportedPartyIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-		Subscriber(WebSocketSession session) {
+		Subscriber(net.osparty.api.transport.PartySession session, String clientIp) {
+			this.clientIp = clientIp;
 			this.session = session;
 		}
 	}

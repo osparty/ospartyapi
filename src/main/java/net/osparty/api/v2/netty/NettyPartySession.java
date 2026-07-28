@@ -4,7 +4,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import java.util.concurrent.atomic.LongAdder;
-import net.osparty.api.v2.PartySession;
+import net.osparty.api.transport.PartySession;
 
 /**
  * A {@link PartySession} backed by a Netty channel.
@@ -57,6 +57,12 @@ final class NettyPartySession implements PartySession {
 		}
 		// wrappedBuffer, not copiedBuffer: the array came straight from Jackson and nothing else holds it.
 		channel.writeAndFlush(new BinaryWebSocketFrame(Unpooled.wrappedBuffer(frame)));
+	}
+
+	/** The live party never sends text; present because the ad board will once it shares this transport. */
+	@Override
+	public void sendText(String json) {
+		send(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
 	}
 
 	@Override

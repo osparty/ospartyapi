@@ -1,5 +1,8 @@
 package net.osparty.api.v2;
 
+import net.osparty.api.transport.PartySession;
+import net.osparty.api.transport.SpringPartySession;
+
 import java.nio.ByteBuffer;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;

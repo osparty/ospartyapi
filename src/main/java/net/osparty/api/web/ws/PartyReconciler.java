@@ -56,6 +56,8 @@ public class PartyReconciler {
 	 */
 	private final Map<String, Tombstone> tombstones = new java.util.LinkedHashMap<>();
 	private long prunedThroughSeq;
+	/** Whether {@link #startHistory()} has run; see it for why a fresh node refuses to resume.*/
+	private boolean historyStarted;
 
 	/** How long a removal is remembered. Generous next to a reconnect, cheap at an id and two longs. */
 	private static final long TOMBSTONE_RETENTION_MS = 10 * 60 * 1000L;
@@ -79,6 +81,7 @@ public class PartyReconciler {
 
 	@Scheduled(fixedDelayString = "${app.ws.reconcile-interval-ms:5000}")
 	public synchronized void reconcile() {
+		startHistory();
 		List<Party> current = badges.enrichParties(store.list(null));
 		Map<String, Known> currentById = new HashMap<>();
 		for (Party party : current) {
@@ -305,6 +308,25 @@ public class PartyReconciler {
 		}
 		tombstones.put(id, new Tombstone(seq, activity, System.currentTimeMillis()));
 		prune();
+	}
+
+	/**
+	 * Mark where this node's knowledge of removals begins.
+	 *
+	 * <p>A node that has just started has no tombstones, and cannot get them: an advertisement deleted
+	 * while it was down left nothing behind anywhere. Resuming a client from before that point would leave
+	 * it showing an ad that no longer exists, with nothing to ever correct it — so those clients are sent
+	 * the board instead, which is what they got before any of this existed.
+	 *
+	 * <p>The cost is that a rolling deploy still re-sends the board once per client. What resume buys is
+	 * every <em>other</em> reconnect: a network blip, a party redirect, an owner failover, or anything at
+	 * all reaching a node that has been up a while.
+	 */
+	private void startHistory() {
+		if (!historyStarted) {
+			historyStarted = true;
+			prunedThroughSeq = Math.max(prunedThroughSeq, store.nextRevision());
+		}
 	}
 
 	/** Drop removals older than the retention window, remembering how far that got. */

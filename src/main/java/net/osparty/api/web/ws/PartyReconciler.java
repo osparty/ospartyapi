@@ -113,6 +113,17 @@ public class PartyReconciler {
 		}
 		broadcaster.broadcastBatch(created, updated, removed);
 
+		// Hand the board over so joiners are served from it instead of re-reading every ad from Redis,
+		// re-enriching it and re-serialising it per connect. Published after the batch so its version is
+		// the one the batch just moved to, which keeps a joiner's snapshot and the delta stream describing
+		// the same instant.
+		List<Party> visible = new ArrayList<>(current.size());
+		List<Party> hidden = new ArrayList<>();
+		for (Party party : current) {
+			(currentById.get(party.getId()).visible() ? visible : hidden).add(party);
+		}
+		broadcaster.publishBoard(visible, hidden);
+
 		lastKnown = currentById;
 	}
 

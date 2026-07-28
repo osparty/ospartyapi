@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -68,6 +69,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private final Map<String, String> sessionByName = new ConcurrentHashMap<>();
 	private final AtomicLong version = new AtomicLong();
 	private volatile int lastPresence = -1;
+	/** The board as of the last reconcile, shared by every subscriber that joins before the next one. */
+	private volatile Board board;
 
 	public PartyBroadcaster(PartyRepository store, ObjectMapper mapper,
 		net.osparty.api.service.VoiceChannelService voice,
@@ -215,6 +218,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 
 	private void handleSubscribe(Subscriber sub, Inbound in) {
 		sub.activity = (in.activity() == null || in.activity().isBlank()) ? null : in.activity();
+		// Opt-in, and read before the snapshot goes out so the first frame is already compressed. A client
+		// that says nothing keeps getting text, which is what every version before this one expects.
+		sub.compressed = Boolean.TRUE.equals(in.compress());
 		sub.subscribed = true;
 		log.info("WS subscribe: session={} activity={}", sub.session.getId(),
 			sub.activity == null ? "<all>" : sub.activity);
@@ -861,11 +867,50 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	}
 
 	/**
+	 * Publish the board the reconciler just built, so subscribers that connect before the next tick are
+	 * served from it rather than each re-reading and re-serialising the whole thing.
+	 *
+	 * <p>Also makes the snapshot and the delta stream consistent by construction: both now describe the same
+	 * instant, where before a joiner could be sent a board newer than the one the next batch was diffed
+	 * against.
+	 *
+	 * @param visible what everyone may see.
+	 * @param hidden shadowbanned ads — almost always empty, and only their own hosts are shown them.
+	 */
+	void publishBoard(List<Party> visible, List<Party> hidden) {
+		board = new Board(version.get(), List.copyOf(visible), List.copyOf(hidden));
+	}
+
+	/**
 	 * Sends the current board. Shadowbanned ads are stripped, except the subscriber's own: a host
 	 * who cannot see their own advertisement in their own Search tab would notice immediately, and
 	 * the ban would stop being silent.
+	 *
+	 * <p>Served from the shared board wherever possible. Building it per subscriber meant a Redis read of
+	 * every ad, a badge enrichment pass and a fresh serialisation of ~200 KB on <em>every connect</em> —
+	 * which made reconnects the most expensive thing this service does, exactly when it is least able to
+	 * afford them. The frame for a given activity is built once per reconcile and handed to everyone.
+	 *
+	 * <p>The shared board is as of the last reconcile, so it can be up to one tick behind: an ad created
+	 * seconds ago may be missing from it. For a stranger that is invisible — the next batch delivers it as a
+	 * {@code created}, which is the same latency the delta stream has anyway. For a <em>host</em> it is not:
+	 * seeing their own advertisement on the board is how they confirm they are advertised at all, and it is
+	 * their own ad that is most likely to be newer than the last reconcile. So hosts get a board of their
+	 * own, as do the hosts of hidden ads, and everyone else — the large majority — is served from the cache.
+	 *
+	 * <p>The per-subscriber path therefore remains for three cases: before the first reconcile has run, for
+	 * anyone hosting on this session, and for a host whose own ad is shadowbanned.
 	 */
 	private void sendSnapshot(Subscriber sub) {
+		Board current = board;
+		if (current != null && !hostedBy.containsKey(sub.session.getId())
+			&& !current.showsOwnHidden(sub, this)) {
+			Frame frame = current.frame(sub.activity, this);
+			if (frame != null) {
+				sendRaw(sub, frame);
+				return;
+			}
+		}
 		List<Party> all = badges.enrichParties(store.list(sub.activity));
 		List<Party> list = new java.util.ArrayList<>(all.size());
 		for (Party party : all) {
@@ -875,6 +920,60 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		log.debug("WS snapshot -> {} ({} of {} parties)", sub.session.getId(), list.size(), all.size());
 		send(sub, Outbound.snapshot(version.get(), list));
+	}
+
+	/**
+	 * One reconcile's board, plus the frames built from it.
+	 *
+	 * <p>Frames are memoised per activity rather than built up front: subscribers overwhelmingly watch
+	 * everything, so building one per known activity would serialise a dozen boards nobody asked for.
+	 */
+	private static final class Board {
+		private final long version;
+		private final List<Party> visible;
+		private final List<Party> hidden;
+		/** activity ("" for the all-activities firehose) -> the frame to send. */
+		private final Map<String, Frame> frames = new ConcurrentHashMap<>();
+
+		Board(long version, List<Party> visible, List<Party> hidden) {
+			this.version = version;
+			this.visible = visible;
+			this.hidden = hidden;
+		}
+
+		/** Whether this subscriber must be served a board of its own because one of its ads is hidden. */
+		boolean showsOwnHidden(Subscriber sub, PartyBroadcaster owner) {
+			if (hidden.isEmpty()) {
+				return false;
+			}
+			for (Party party : hidden) {
+				if (owner.isOwnParty(sub, party)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		Frame frame(String activity, PartyBroadcaster owner) {
+			return frames.computeIfAbsent(activity == null ? "" : activity, key -> {
+				List<Party> list = visible;
+				if (!key.isEmpty()) {
+					list = new java.util.ArrayList<>();
+					for (Party party : visible) {
+						if (key.equals(party.getActivity())) {
+							list.add(party);
+						}
+					}
+				}
+				try {
+					return new Frame(new TextMessage(owner.mapper.writeValueAsString(Outbound.snapshot(version, list))));
+				}
+				catch (Exception e) {
+					log.warn("Failed to serialise the shared snapshot frame", e);
+					return null;
+				}
+			});
+		}
 	}
 
 	/**
@@ -930,7 +1029,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				hiddenIds.add(ref.id());
 			}
 		}
-		Map<BatchKey, TextMessage> perKey = new java.util.HashMap<>();
+		Map<BatchKey, Frame> perKey = new java.util.HashMap<>();
 		for (Subscriber sub : subscribers.values()) {
 			if (!sub.subscribed || !sub.session.isOpen()) {
 				continue;
@@ -943,7 +1042,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				}
 			}
 			BatchKey key = new BatchKey(sub.activity, suppress);
-			TextMessage frame = perKey.computeIfAbsent(key,
+			Frame frame = perKey.computeIfAbsent(key,
 				k -> buildBatch(v, k.activity(), created, updated, removed, k.suppress()));
 			if (frame != null) {
 				sendRaw(sub, frame);
@@ -951,7 +1050,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 	}
 
-	private TextMessage buildBatch(long v, String activity, List<Party> created, List<PartyDelta> updated,
+	private Frame buildBatch(long v, String activity, List<Party> created, List<PartyDelta> updated,
 		List<RemovedRef> removed, String suppress) {
 		List<Party> c = filterCreated(created, activity);
 		List<PartyDelta> u = filterUpdated(updated, activity);
@@ -969,7 +1068,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		Batch batch = new Batch("batch", v, c.isEmpty() ? null : c, u.isEmpty() ? null : u, r.isEmpty() ? null : r);
 		try {
-			return new TextMessage(mapper.writeValueAsString(batch));
+			return new Frame(new TextMessage(mapper.writeValueAsString(batch)));
 		}
 		catch (Exception e) {
 			log.warn("Failed to serialise batch frame", e);
@@ -1003,7 +1102,13 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		return out;
 	}
 
-	private void sendRaw(Subscriber sub, TextMessage frame) {
+	/** Send a shared frame in whichever form this subscriber asked for. */
+	private void sendRaw(Subscriber sub, Frame frame) {
+		org.springframework.web.socket.WebSocketMessage<?> message = sub.compressed ? frame.compressed() : null;
+		sendRaw(sub, message != null ? message : frame.text());
+	}
+
+	private void sendRaw(Subscriber sub, org.springframework.web.socket.WebSocketMessage<?> frame) {
 		if (!sub.session.isOpen()) {
 			return;
 		}
@@ -1029,6 +1134,52 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	 *     only the former is withheld from the host it concerns.
 	 */
 	record RemovedRef(String id, String activity, boolean hidden) {
+	}
+
+	/**
+	 * A shared frame, in both the forms a client may want it: the JSON text every version understands, and
+	 * the gzipped bytes newer ones ask for.
+	 *
+	 * <p>Compression pays here in a way it did not for the live party. Ad-board frames are few and enormous
+	 * — a snapshot is the whole board, a batch carries hundreds of deltas — and they are repetitive JSON,
+	 * which deflates several-fold. They are also <em>already shared</em>: one frame serves every subscriber
+	 * with the same filter, so the compression is done once and sent many times, rather than once per
+	 * connection as a negotiated WebSocket extension would do it. That is the difference between paying for
+	 * it once a tick and paying for it once a tick per subscriber.
+	 *
+	 * <p>Built lazily: a board with no compression-capable subscribers never pays for it.
+	 */
+	private static final class Frame {
+		private final TextMessage text;
+		private volatile BinaryMessage compressed;
+
+		Frame(TextMessage text) {
+			this.text = text;
+		}
+
+		TextMessage text() {
+			return text;
+		}
+
+		BinaryMessage compressed() {
+			BinaryMessage local = compressed;
+			if (local != null) {
+				return local;
+			}
+			// Racing threads may both compress; both results are equivalent and the loser is garbage.
+			try (java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+				try (java.util.zip.GZIPOutputStream gzip = new java.util.zip.GZIPOutputStream(out)) {
+					gzip.write(text.asBytes());
+				}
+				local = new BinaryMessage(out.toByteArray());
+			}
+			catch (Exception e) {
+				log.warn("Failed to compress a shared frame; falling back to text", e);
+				return null;
+			}
+			compressed = local;
+			return local;
+		}
 	}
 
 	/** Identifies one distinct serialisation of a batch frame. See {@link #broadcastBatch}. */
@@ -1065,6 +1216,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private static final class Subscriber {
 		final WebSocketSession session;
 		volatile boolean subscribed;
+		/** Whether this client asked for gzipped binary frames rather than JSON text. */
+		volatile boolean compressed;
 		volatile String activity;
 		// Self-reported identity, mirrored into sessionByAccount/sessionByName for invite routing.
 		volatile Long accountHash;
@@ -1078,7 +1231,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	}
 
 	record Inbound(String type, String activity, PartyRequest request, PartyUpdate patch, String id, String key,
-		String code, String host, Long accountHash, Boolean visible, String newKey, String name, String target) {
+		String code, String host, Long accountHash, Boolean visible, String newKey, String name, String target,
+		/** Sent with {@code subscribe}: this client can read gzipped binary frames. Absent means it cannot. */
+		Boolean compress) {
 	}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)

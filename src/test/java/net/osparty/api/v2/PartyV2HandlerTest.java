@@ -52,22 +52,22 @@ class PartyV2HandlerTest {
 
 	@Test
 	void hostJoinRelayAdmitKick() throws Exception {
-		send(host, "{\"type\":\"hello\",\"accountHash\":111,\"name\":\"Host\"}");
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":2}");
+		send(host, "{\"t\":\"hello\",\"accountHash\":111,\"name\":\"Host\"}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":2}");
 
 		JsonNode welcome = last(hostOut, "welcome");
 		assertThat(welcome).isNotNull();
 		assertThat(welcome.get("status").asText()).isEqualTo("HOST");
 		// Names the node that actually owns the room, which placement may have moved off the one we dialled.
 		assertThat(welcome.get("nodeId").asText()).isEqualTo("node-a");
-		long hostId = welcome.get("memberId").asLong();
+		long hostId = welcome.get("m").asLong();
 		assertThat(last(hostOut, "roster").get("members")).hasSize(1);
 
 		// A joiner lands as PENDING; the host's roster now shows the applicant.
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
 		JsonNode memberWelcome = last(memberOut, "welcome");
 		assertThat(memberWelcome.get("status").asText()).isEqualTo("PENDING");
-		long memberId = memberWelcome.get("memberId").asLong();
+		long memberId = memberWelcome.get("m").asLong();
 		assertThat(memberId).isNotEqualTo(hostId);
 
 		JsonNode hostRoster = last(hostOut, "roster");
@@ -75,20 +75,20 @@ class PartyV2HandlerTest {
 		assertThat(statusOf(hostRoster, memberId)).isEqualTo("PENDING");
 
 		// A live update from the host reaches the member on the next flush.
-		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301,\"currentHp\":50}}");
+		send(host, "{\"t\":\"state\",\"s\":{\"name\":\"Host\",\"world\":301,\"currentHp\":50}}");
 		manager.flushRooms();
-		JsonNode relayed = onlyUpdate(last(memberOut, "memberUpdates"));
+		JsonNode relayed = onlyUpdate(last(memberOut, "mu"));
 		assertThat(relayed).isNotNull();
-		assertThat(relayed.get("memberId").asLong()).isEqualTo(hostId);
-		assertThat(relayed.get("state").get("world").asInt()).isEqualTo(301);
+		assertThat(relayed.get("m").asLong()).isEqualTo(hostId);
+		assertThat(relayed.get("s").get("world").asInt()).isEqualTo(301);
 
 		// Host admits the applicant -> server-authoritative status flips to MEMBER for everyone.
-		send(host, "{\"type\":\"command\",\"action\":\"ADMIT\",\"target\":" + memberId + "}");
+		send(host, "{\"t\":\"command\",\"action\":\"ADMIT\",\"target\":" + memberId + "}");
 		assertThat(statusOf(last(hostOut, "roster"), memberId)).isEqualTo("MEMBER");
 		assertThat(statusOf(last(memberOut, "roster"), memberId)).isEqualTo("MEMBER");
 
 		// Host kicks the member -> the target is told, and the roster drops back to the host alone.
-		send(host, "{\"type\":\"command\",\"action\":\"KICK\",\"target\":" + memberId + "}");
+		send(host, "{\"t\":\"command\",\"action\":\"KICK\",\"target\":" + memberId + "}");
 		assertThat(last(memberOut, "kicked")).isNotNull();
 		assertThat(last(hostOut, "roster").get("members")).hasSize(1);
 	}
@@ -99,11 +99,11 @@ class PartyV2HandlerTest {
 	 */
 	@Test
 	void seatingAJoinerAsksThePeersToResendTheirState() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		// Nobody to ask while the host is alone.
 		assertThat(countOf(hostOut, "resync")).isZero();
 
-		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
 		assertThat(countOf(hostOut, "resync")).isEqualTo(1);
 		assertThat(countOf(memberOut, "resync")).isZero();
 	}
@@ -111,17 +111,17 @@ class PartyV2HandlerTest {
 	/** State sent before a joiner arrived is gone — the room never stored it. Only the resync brings it back. */
 	@Test
 	void aJoinerIsNotReplayedStateSentBeforeItArrived() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
-		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301}}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(host, "{\"t\":\"state\",\"s\":{\"name\":\"Host\",\"world\":301}}");
 		manager.flushRooms();
 
-		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
-		assertThat(countOf(memberOut, "memberUpdates")).isZero();
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
+		assertThat(countOf(memberOut, "mu")).isZero();
 
 		// The host answers the resync and the joiner is caught up.
-		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301}}");
+		send(host, "{\"t\":\"state\",\"s\":{\"name\":\"Host\",\"world\":301}}");
 		manager.flushRooms();
-		assertThat(onlyUpdate(last(memberOut, "memberUpdates")).get("state").get("world").asInt()).isEqualTo(301);
+		assertThat(onlyUpdate(last(memberOut, "mu")).get("s").get("world").asInt()).isEqualTo(301);
 	}
 
 	/**
@@ -138,34 +138,34 @@ class PartyV2HandlerTest {
 		WebSocketSession third = session("third", thirdOut);
 		handler.afterConnectionEstablished(third);
 
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":5}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
-		send(third, "{\"type\":\"join\",\"room\":\"r\"}");
-		int hostBefore = countOf(hostOut, "memberUpdates");
-		int memberBefore = countOf(memberOut, "memberUpdates");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":5}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
+		send(third, "{\"t\":\"join\",\"room\":\"r\"}");
+		int hostBefore = countOf(hostOut, "mu");
+		int memberBefore = countOf(memberOut, "mu");
 
-		send(host, "{\"type\":\"update\",\"state\":{\"currentHp\":10}}");
-		send(member, "{\"type\":\"update\",\"state\":{\"currentHp\":20}}");
-		send(third, "{\"type\":\"update\",\"state\":{\"currentHp\":30}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"currentHp\":10}}");
+		send(member, "{\"t\":\"update\",\"s\":{\"currentHp\":20}}");
+		send(third, "{\"t\":\"update\",\"s\":{\"currentHp\":30}}");
 		manager.flushRooms();
 
 		// One frame each, not one per peer.
-		assertThat(countOf(hostOut, "memberUpdates")).isEqualTo(hostBefore + 1);
-		assertThat(countOf(memberOut, "memberUpdates")).isEqualTo(memberBefore + 1);
+		assertThat(countOf(hostOut, "mu")).isEqualTo(hostBefore + 1);
+		assertThat(countOf(memberOut, "mu")).isEqualTo(memberBefore + 1);
 		// And each carries the other two, never its own.
-		JsonNode hostFrame = last(hostOut, "memberUpdates").get("updates");
+		JsonNode hostFrame = last(hostOut, "mu").get("u");
 		assertThat(hostFrame).hasSize(2);
-		long hostId = last(hostOut, "welcome").get("memberId").asLong();
+		long hostId = last(hostOut, "welcome").get("m").asLong();
 		for (JsonNode update : hostFrame) {
-			assertThat(update.get("memberId").asLong()).isNotEqualTo(hostId);
+			assertThat(update.get("m").asLong()).isNotEqualTo(hostId);
 		}
 	}
 
 	/** Nothing queued means nothing sent — the flush must not wake a quiet room. */
 	@Test
 	void flushingAQuietRoomSendsNothing() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
 		int before = memberOut.size();
 
 		manager.flushRooms();
@@ -181,9 +181,9 @@ class PartyV2HandlerTest {
 		WebSocketSession third = session("third", thirdOut);
 		handler.afterConnectionEstablished(third);
 
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":5}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
-		send(third, "{\"type\":\"join\",\"room\":\"r\"}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":5}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
+		send(third, "{\"t\":\"join\",\"room\":\"r\"}");
 
 		assertThat(countOf(hostOut, "resync")).isEqualTo(1);
 	}
@@ -194,15 +194,15 @@ class PartyV2HandlerTest {
 	 */
 	@Test
 	void heartbeatReachesPeersAsAliveAndIsNotEchoed() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
-		long memberId = last(memberOut, "welcome").get("memberId").asLong();
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
+		long memberId = last(memberOut, "welcome").get("m").asLong();
 
-		send(member, "{\"type\":\"heartbeat\"}");
+		send(member, "{\"t\":\"heartbeat\"}");
 
 		JsonNode alive = last(hostOut, "alive");
 		assertThat(alive).isNotNull();
-		assertThat(alive.get("memberId").asLong()).isEqualTo(memberId);
+		assertThat(alive.get("m").asLong()).isEqualTo(memberId);
 		assertThat(countOf(memberOut, "alive")).isZero();
 	}
 
@@ -213,52 +213,52 @@ class PartyV2HandlerTest {
 	 */
 	@Test
 	void aCoalescedUpdateIsRelayedWholeAndNotEchoed() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
-		long hostId = last(hostOut, "welcome").get("memberId").asLong();
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
+		long hostId = last(hostOut, "welcome").get("m").asLong();
 
-		int echoed = countOf(hostOut, "memberUpdates");
+		int echoed = countOf(hostOut, "mu");
 
-		send(host, "{\"type\":\"update\",\"state\":{\"currentHp\":31,\"inventory\":[995]}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"currentHp\":31,\"inventory\":[995]}}");
 		manager.flushRooms();
 
-		JsonNode relayed = onlyUpdate(last(memberOut, "memberUpdates"));
-		assertThat(relayed.get("memberId").asLong()).isEqualTo(hostId);
-		assertThat(relayed.get("state").get("currentHp").asInt()).isEqualTo(31);
-		assertThat(relayed.get("state").get("inventory")).hasSize(1);
+		JsonNode relayed = onlyUpdate(last(memberOut, "mu"));
+		assertThat(relayed.get("m").asLong()).isEqualTo(hostId);
+		assertThat(relayed.get("s").get("currentHp").asInt()).isEqualTo(31);
+		assertThat(relayed.get("s").get("inventory")).hasSize(1);
 		// A sender is never handed back its own update.
-		assertThat(countOf(hostOut, "memberUpdates")).isEqualTo(echoed);
+		assertThat(countOf(hostOut, "mu")).isEqualTo(echoed);
 	}
 
 	@Test
 	void splitUpdatesAreStillAcceptedAndArriveTogether() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
-		long hostId = last(hostOut, "welcome").get("memberId").asLong();
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
+		long hostId = last(hostOut, "welcome").get("m").asLong();
 
-		send(host, "{\"type\":\"vitals\",\"state\":{\"currentHp\":31}}");
-		send(host, "{\"type\":\"items\",\"state\":{\"inventory\":[995]}}");
-		send(host, "{\"type\":\"profile\",\"state\":{\"name\":\"Host\",\"world\":301}}");
+		send(host, "{\"t\":\"vitals\",\"s\":{\"currentHp\":31}}");
+		send(host, "{\"t\":\"items\",\"s\":{\"inventory\":[995]}}");
+		send(host, "{\"t\":\"profile\",\"s\":{\"name\":\"Host\",\"world\":301}}");
 		manager.flushRooms();
 
 		// All three land in one frame, in order, rather than three sends.
-		JsonNode updates = last(memberOut, "memberUpdates").get("updates");
+		JsonNode updates = last(memberOut, "mu").get("u");
 		assertThat(updates).hasSize(3);
-		assertThat(updates.get(0).get("state").get("currentHp").asInt()).isEqualTo(31);
-		assertThat(updates.get(1).get("state").get("inventory")).hasSize(1);
-		assertThat(updates.get(2).get("state").get("world").asInt()).isEqualTo(301);
-		assertThat(updates.get(0).get("memberId").asLong()).isEqualTo(hostId);
+		assertThat(updates.get(0).get("s").get("currentHp").asInt()).isEqualTo(31);
+		assertThat(updates.get(1).get("s").get("inventory")).hasSize(1);
+		assertThat(updates.get(2).get("s").get("world").asInt()).isEqualTo(301);
+		assertThat(updates.get(0).get("m").asLong()).isEqualTo(hostId);
 	}
 
 	@Test
 	void aLaterHelloFillsInAnAlreadySeatedMembersIdentity() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		// A joiner doesn't know its own name yet when the UI sends the join frame.
-		send(member, "{\"type\":\"join\",\"room\":\"r\"}");
-		long memberId = last(memberOut, "welcome").get("memberId").asLong();
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
+		long memberId = last(memberOut, "welcome").get("m").asLong();
 		assertThat(nameOf(last(hostOut, "roster"), memberId)).isNull();
 
-		send(member, "{\"type\":\"hello\",\"name\":\"Mem\",\"accountHash\":222}");
+		send(member, "{\"t\":\"hello\",\"name\":\"Mem\",\"accountHash\":222}");
 
 		JsonNode roster = last(hostOut, "roster");
 		assertThat(nameOf(roster, memberId)).isEqualTo("Mem");
@@ -267,8 +267,8 @@ class PartyV2HandlerTest {
 
 	@Test
 	void aLaterHelloFromTheHostRenamesTheRoom() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"capacity\":3}");
-		send(host, "{\"type\":\"hello\",\"name\":\"Host\",\"accountHash\":111}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"capacity\":3}");
+		send(host, "{\"t\":\"hello\",\"name\":\"Host\",\"accountHash\":111}");
 
 		assertThat(last(hostOut, "roster").get("host").asText()).isEqualTo("Host");
 	}
@@ -314,14 +314,14 @@ class PartyV2HandlerTest {
 		fenced.afterConnectionEstablished(host);
 		fenced.afterConnectionEstablished(member);
 		fenced.handleTextMessage(host, new TextMessage(
-			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 		fenced.handleTextMessage(member, new TextMessage(
-			"{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}"));
-		long memberId = last(memberOut, "welcome").get("memberId").asLong();
+			"{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}"));
+		long memberId = last(memberOut, "welcome").get("m").asLong();
 
 		owned.set(false);
 		fenced.handleTextMessage(host, new TextMessage(
-			"{\"type\":\"command\",\"action\":\"KICK\",\"target\":" + memberId + "}"));
+			"{\"t\":\"command\",\"action\":\"KICK\",\"target\":" + memberId + "}"));
 
 		// The kick is refused, and everyone is told to reconnect elsewhere.
 		assertThat(last(memberOut, "kicked")).isNull();
@@ -333,7 +333,7 @@ class PartyV2HandlerTest {
 
 	@Test
 	void joiningUnknownRoomErrors() throws Exception {
-		send(member, "{\"type\":\"join\",\"room\":\"nope\"}");
+		send(member, "{\"t\":\"join\",\"room\":\"nope\"}");
 		assertThat(last(memberOut, "error").get("detail").asText()).isEqualTo("no room");
 		// Terminal, not retriable: the retry path must not swallow a room that never existed.
 		assertThat(last(memberOut, "ownerPending")).isNull();
@@ -380,7 +380,7 @@ class PartyV2HandlerTest {
 		WebSocketSession joiner = session("joiner", out);
 		redirecting.afterConnectionEstablished(joiner);
 
-		redirecting.handleTextMessage(joiner, new TextMessage("{\"type\":\"join\",\"room\":\"elsewhere\"}"));
+		redirecting.handleTextMessage(joiner, new TextMessage("{\"t\":\"join\",\"room\":\"elsewhere\"}"));
 
 		assertThat(last(out, "redirect").get("nodeId").asText()).isEqualTo("node-b");
 	}
@@ -410,7 +410,7 @@ class PartyV2HandlerTest {
 		placing.afterConnectionEstablished(newHost);
 
 		placing.handleTextMessage(newHost, new TextMessage(
-			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 
 		// Redirected rather than claimed: nothing is hosted here, and the client will re-send host there.
 		assertThat(last(out, "redirect").get("nodeId").asText()).isEqualTo("node-b");
@@ -422,14 +422,14 @@ class PartyV2HandlerTest {
 		// must land back on its own room rather than being bounced to whichever node is lightest today.
 		lighter.set(null);
 		placing.handleTextMessage(newHost, new TextMessage(
-			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 		assertThat(last(out, "welcome").get("status").asText()).isEqualTo("HOST");
 		assertThat(loaded.roomCount()).isEqualTo(1);
 
 		lighter.set("node-b");
 		out.clear();
 		placing.handleTextMessage(newHost, new TextMessage(
-			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 		assertThat(last(out, "redirect")).isNull();
 		assertThat(loaded.rebalanceCount()).isEqualTo(1);
 
@@ -440,7 +440,7 @@ class PartyV2HandlerTest {
 		when(hinted.getUri()).thenReturn(java.net.URI.create("/n/node-a/api/v2/ws/party"));
 		placing.afterConnectionEstablished(hinted);
 		placing.handleTextMessage(hinted, new TextMessage(
-			"{\"type\":\"host\",\"room\":\"r2\",\"hostName\":\"Other\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"r2\",\"hostName\":\"Other\",\"capacity\":3}"));
 
 		assertThat(last(hintedOut, "redirect")).isNull();
 		assertThat(last(hintedOut, "welcome").get("status").asText()).isEqualTo("HOST");
@@ -460,7 +460,7 @@ class PartyV2HandlerTest {
 		assertThat(manager.connectedMembers()).isEqualTo(1);
 		assertThat(manager.prunedCount()).isEqualTo(1);
 		// The host hears about it exactly as it would for a clean leave.
-		assertThat(last(hostOut, "memberLeft").get("memberId").asLong()).isEqualTo(memberId);
+		assertThat(last(hostOut, "memberLeft").get("m").asLong()).isEqualTo(memberId);
 		// The room survives — its host is still connected.
 		assertThat(manager.roomCount()).isEqualTo(1);
 
@@ -485,9 +485,9 @@ class PartyV2HandlerTest {
 		sweeping.afterConnectionEstablished(host);
 		sweeping.afterConnectionEstablished(member);
 		sweeping.handleTextMessage(host, new TextMessage(
-			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 		sweeping.handleTextMessage(member, new TextMessage(
-			"{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}"));
+			"{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}"));
 		assertThat(impatient.connectedMembers()).isEqualTo(2);
 
 		// Both sessions still report open — only silence gives them away.
@@ -514,17 +514,17 @@ class PartyV2HandlerTest {
 	void readyChecksAndSpecDrainsFanOutToPeers() throws Exception {
 		long memberId = hostWithAdmittedMember();
 
-		send(host, "{\"type\":\"readyStart\",\"checkId\":7,\"starter\":\"Host\"}");
+		send(host, "{\"t\":\"readyStart\",\"checkId\":7,\"starter\":\"Host\"}");
 		JsonNode start = last(memberOut, "readyStart");
 		assertThat(start.get("checkId").asLong()).isEqualTo(7);
 		assertThat(start.get("starter").asText()).isEqualTo("Host");
 		// The sender doesn't receive its own broadcast (it applies the check locally).
 		assertThat(last(hostOut, "readyStart")).isNull();
 
-		send(member, "{\"type\":\"ready\",\"checkId\":7}");
-		assertThat(last(hostOut, "ready").get("memberId").asLong()).isEqualTo(memberId);
+		send(member, "{\"t\":\"ready\",\"checkId\":7}");
+		assertThat(last(hostOut, "ready").get("m").asLong()).isEqualTo(memberId);
 
-		send(member, "{\"type\":\"specDrain\",\"npcIndex\":42,\"weapon\":\"DRAGON_WARHAMMER\",\"hit\":25,"
+		send(member, "{\"t\":\"specDrain\",\"npcIndex\":42,\"weapon\":\"DRAGON_WARHAMMER\",\"hit\":25,"
 			+ "\"world\":301}");
 		JsonNode drain = last(hostOut, "specDrain");
 		assertThat(drain.get("npcIndex").asInt()).isEqualTo(42);
@@ -534,11 +534,11 @@ class PartyV2HandlerTest {
 
 	@Test
 	void pendingApplicantCannotFanOutReadyOrSpec() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":2}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\"}"); // stays PENDING
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":2}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\"}"); // stays PENDING
 
-		send(member, "{\"type\":\"readyStart\",\"checkId\":1,\"starter\":\"Mem\"}");
-		send(member, "{\"type\":\"specDrain\",\"npcIndex\":1,\"weapon\":\"BANDOS_GODSWORD\",\"hit\":10}");
+		send(member, "{\"t\":\"readyStart\",\"checkId\":1,\"starter\":\"Mem\"}");
+		send(member, "{\"t\":\"specDrain\",\"npcIndex\":1,\"weapon\":\"BANDOS_GODSWORD\",\"hit\":10}");
 
 		assertThat(last(hostOut, "readyStart")).isNull();
 		assertThat(last(hostOut, "specDrain")).isNull();
@@ -548,14 +548,14 @@ class PartyV2HandlerTest {
 	void fcRequestReachesOnlyTheTargetAndOnlyFromTheHost() throws Exception {
 		long memberId = hostWithAdmittedMember();
 
-		send(host, "{\"type\":\"fcRequest\",\"target\":" + memberId + ",\"kind\":\"FC\",\"friendsChat\":\"Zuk\"}");
+		send(host, "{\"t\":\"fcRequest\",\"target\":" + memberId + ",\"kind\":\"FC\",\"friendsChat\":\"Zuk\"}");
 		JsonNode request = last(memberOut, "fcRequest");
 		assertThat(request.get("kind").asText()).isEqualTo("FC");
 		assertThat(request.get("friendsChat").asText()).isEqualTo("Zuk");
 		assertThat(request.get("host").asText()).isEqualTo("Host");
 
 		// A member cannot send prompts back at the host.
-		send(member, "{\"type\":\"fcRequest\",\"target\":1,\"kind\":\"FC\",\"friendsChat\":\"nope\"}");
+		send(member, "{\"t\":\"fcRequest\",\"target\":1,\"kind\":\"FC\",\"friendsChat\":\"nope\"}");
 		assertThat(last(hostOut, "fcRequest")).isNull();
 	}
 
@@ -568,7 +568,7 @@ class PartyV2HandlerTest {
 	void hostAdMetaReachesSeatedMembersAndLaterJoiners() throws Exception {
 		hostWithAdmittedMember();
 
-		send(host, "{\"type\":\"setMeta\",\"meta\":{\"host\":\"Host\",\"world\":\"301\",\"lootRule\":\"FFA\"}}");
+		send(host, "{\"t\":\"setMeta\",\"meta\":{\"host\":\"Host\",\"world\":\"301\",\"lootRule\":\"FFA\"}}");
 		JsonNode meta = last(memberOut, "meta");
 		assertThat(meta.get("meta").get("world").asText()).isEqualTo("301");
 		assertThat(meta.get("meta").get("lootRule").asText()).isEqualTo("FFA");
@@ -576,7 +576,7 @@ class PartyV2HandlerTest {
 		assertThat(last(hostOut, "meta")).isNull();
 
 		// A member cannot rewrite the ad settings under the host.
-		send(member, "{\"type\":\"setMeta\",\"meta\":{\"host\":\"Mem\",\"world\":\"999\"}}");
+		send(member, "{\"t\":\"setMeta\",\"meta\":{\"host\":\"Mem\",\"world\":\"999\"}}");
 		assertThat(last(hostOut, "meta")).isNull();
 		assertThat(last(memberOut, "meta").get("meta").get("world").asText()).isEqualTo("301");
 
@@ -584,24 +584,24 @@ class PartyV2HandlerTest {
 		List<String> lateOut = new ArrayList<>();
 		WebSocketSession late = session("late", lateOut);
 		handler.afterConnectionEstablished(late);
-		send(late, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Late\",\"invited\":true}");
+		send(late, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Late\",\"invited\":true}");
 		assertThat(last(lateOut, "meta").get("meta").get("lootRule").asText()).isEqualTo("FFA");
 	}
 
 	@Test
 	void hostTransferCommitMovesAuthoritativeHostStatus() throws Exception {
 		long memberId = hostWithAdmittedMember();
-		long hostId = last(hostOut, "welcome").get("memberId").asLong();
+		long hostId = last(hostOut, "welcome").get("m").asLong();
 
-		send(host, "{\"type\":\"transferHost\",\"kind\":\"OFFER\",\"target\":" + memberId
+		send(host, "{\"t\":\"transferHost\",\"kind\":\"OFFER\",\"target\":" + memberId
 			+ ",\"newHostKey\":\"k\",\"newHostName\":\"Mem\",\"hostStays\":true}");
 		assertThat(last(memberOut, "transferHost").get("kind").asText()).isEqualTo("OFFER");
 
 		// ACCEPT is the one member-initiated step, addressed back at the host.
-		send(member, "{\"type\":\"transferHost\",\"kind\":\"ACCEPT\",\"target\":" + hostId + "}");
+		send(member, "{\"t\":\"transferHost\",\"kind\":\"ACCEPT\",\"target\":" + hostId + "}");
 		assertThat(last(hostOut, "transferHost").get("kind").asText()).isEqualTo("ACCEPT");
 
-		send(host, "{\"type\":\"transferHost\",\"kind\":\"COMMIT\",\"target\":" + memberId
+		send(host, "{\"t\":\"transferHost\",\"kind\":\"COMMIT\",\"target\":" + memberId
 			+ ",\"newHostKey\":\"k\",\"hostStays\":true}");
 		JsonNode roster = last(memberOut, "roster");
 		assertThat(statusOf(roster, memberId)).isEqualTo("HOST");
@@ -612,9 +612,9 @@ class PartyV2HandlerTest {
 	@Test
 	void hostTransferCommitDropsTheOldHostWhenItDoesNotStay() throws Exception {
 		long memberId = hostWithAdmittedMember();
-		long hostId = last(hostOut, "welcome").get("memberId").asLong();
+		long hostId = last(hostOut, "welcome").get("m").asLong();
 
-		send(host, "{\"type\":\"transferHost\",\"kind\":\"COMMIT\",\"target\":" + memberId
+		send(host, "{\"t\":\"transferHost\",\"kind\":\"COMMIT\",\"target\":" + memberId
 			+ ",\"hostStays\":false}");
 
 		JsonNode roster = last(memberOut, "roster");
@@ -631,16 +631,16 @@ class PartyV2HandlerTest {
 	 */
 	@Test
 	void aSendThatClosesItsOwnSessionDoesNotBreakTheFanOut() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":4}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":4}");
 
 		// Seated between the host and a healthy member, so the fan-out still has someone to visit after the
 		// removal — which is exactly when the iterator noticed and threw.
 		List<String> deadOut = new ArrayList<>();
 		WebSocketSession dead = session("dead", deadOut);
 		handler.afterConnectionEstablished(dead);
-		send(dead, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Dead\",\"invited\":true}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
-		long memberId = last(memberOut, "welcome").get("memberId").asLong();
+		send(dead, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Dead\",\"invited\":true}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		long memberId = last(memberOut, "welcome").get("m").asLong();
 
 		// The peer's connection is gone: writing to it fails, and the container closes it on our thread.
 		doAnswer(inv -> {
@@ -648,11 +648,11 @@ class PartyV2HandlerTest {
 			throw new java.io.IOException("broken pipe");
 		}).when(dead).sendMessage(any());
 
-		send(host, "{\"type\":\"state\",\"state\":{\"name\":\"Host\",\"world\":301}}");
+		send(host, "{\"t\":\"state\",\"s\":{\"name\":\"Host\",\"world\":301}}");
 
 		// The healthy member still got the frame, and the room dropped only the dead peer.
 		manager.flushRooms();
-		assertThat(onlyUpdate(last(memberOut, "memberUpdates")).get("state").get("world").asInt()).isEqualTo(301);
+		assertThat(onlyUpdate(last(memberOut, "mu")).get("s").get("world").asInt()).isEqualTo(301);
 		assertThat(last(memberOut, "roster").get("members")).hasSize(2);
 		assertThat(statusOf(last(memberOut, "roster"), memberId)).isEqualTo("MEMBER");
 	}
@@ -660,7 +660,7 @@ class PartyV2HandlerTest {
 	/** The same hazard on the leave path: onLeave broadcasts, and a dead peer removes itself mid-fan-out. */
 	@Test
 	void aDeadPeerDoesNotBreakTheFanOutOfSomeoneElseLeaving() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":6}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":6}");
 
 		List<String> deadOut = new ArrayList<>();
 		WebSocketSession dead = session("dead", deadOut);
@@ -669,27 +669,27 @@ class PartyV2HandlerTest {
 		handler.afterConnectionEstablished(dead);
 		handler.afterConnectionEstablished(leaver);
 		// Seated so the healthy member comes after the dead one in the fan-out, which is when it mattered.
-		send(dead, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Dead\",\"invited\":true}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
-		send(leaver, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Leaver\",\"invited\":true}");
-		long leaverId = last(leaverOut, "welcome").get("memberId").asLong();
+		send(dead, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Dead\",\"invited\":true}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		send(leaver, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Leaver\",\"invited\":true}");
+		long leaverId = last(leaverOut, "welcome").get("m").asLong();
 
 		doAnswer(inv -> {
 			handler.afterConnectionClosed(dead, org.springframework.web.socket.CloseStatus.SESSION_NOT_RELIABLE);
 			throw new java.io.IOException("broken pipe");
 		}).when(dead).sendMessage(any());
 
-		send(leaver, "{\"type\":\"leave\"}");
+		send(leaver, "{\"t\":\"leave\"}");
 
-		assertThat(last(memberOut, "memberLeft").get("memberId").asLong()).isEqualTo(leaverId);
+		assertThat(last(memberOut, "memberLeft").get("m").asLong()).isEqualTo(leaverId);
 		// Host and the healthy member remain; the leaver and the dead peer are both gone.
 		assertThat(last(memberOut, "roster").get("members")).hasSize(2);
 	}
 
 	@Test
 	void hostLeavingClosesTheRoomForMembers() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		handler.afterConnectionClosed(host, org.springframework.web.socket.CloseStatus.NORMAL);
 
 		JsonNode roster = last(memberOut, "roster");
@@ -707,33 +707,33 @@ class PartyV2HandlerTest {
 		long idleMs = 60_000;
 
 		// The first flush after a quiet spell is always immediate — the gap is measured from the last flush.
-		send(host, "{\"type\":\"update\",\"state\":{\"currentHp\":50}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"currentHp\":50}}");
 		manager.flushRooms(idleMs);
-		assertThat(countOf(memberOut, "memberUpdates")).isEqualTo(1);
+		assertThat(countOf(memberOut, "mu")).isEqualTo(1);
 
 		// Now the room has just sent, so an ordinary update waits.
-		send(host, "{\"type\":\"update\",\"state\":{\"currentHp\":51}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"currentHp\":51}}");
 		manager.flushRooms(idleMs);
-		assertThat(countOf(memberOut, "memberUpdates")).isEqualTo(1);
+		assertThat(countOf(memberOut, "mu")).isEqualTo(1);
 
 		// Damage taken. It goes out at once, and takes the held update with it in arrival order.
-		send(host, "{\"type\":\"update\",\"urgent\":true,\"state\":{\"currentHp\":22}}");
+		send(host, "{\"t\":\"update\",\"g\":true,\"s\":{\"currentHp\":22}}");
 		manager.flushRooms(idleMs);
-		assertThat(countOf(memberOut, "memberUpdates")).isEqualTo(2);
+		assertThat(countOf(memberOut, "mu")).isEqualTo(2);
 
-		JsonNode updates = last(memberOut, "memberUpdates").get("updates");
+		JsonNode updates = last(memberOut, "mu").get("u");
 		assertThat(updates).hasSize(2);
-		assertThat(updates.get(0).get("state").get("currentHp").asInt()).isEqualTo(51);
-		assertThat(updates.get(1).get("state").get("currentHp").asInt()).isEqualTo(22);
+		assertThat(updates.get(0).get("s").get("currentHp").asInt()).isEqualTo(51);
+		assertThat(updates.get(1).get("s").get("currentHp").asInt()).isEqualTo(22);
 	}
 
 	// ---- helpers ------------------------------------------------------------
 
 	/** Host a room and admit one member (an invited joiner is seated straight away); returns its id. */
 	private long hostWithAdmittedMember() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
-		return last(memberOut, "welcome").get("memberId").asLong();
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		return last(memberOut, "welcome").get("m").asLong();
 	}
 
 	/**
@@ -743,8 +743,8 @@ class PartyV2HandlerTest {
 	 */
 	@Test
 	void joinDuringHandoverIsRetriableNotTerminal() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
 
 		// The owning node drains on shutdown: everyone is told, the lock is handed over.
 		manager.drain("r", true);
@@ -752,7 +752,7 @@ class PartyV2HandlerTest {
 
 		// The member reconnects and re-sends its join before the host has re-claimed the room.
 		memberOut.clear();
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
 
 		JsonNode pending = last(memberOut, "ownerPending");
 		assertThat(pending).isNotNull();
@@ -760,9 +760,9 @@ class PartyV2HandlerTest {
 		assertThat(last(memberOut, "error")).isNull();
 
 		// Once the host re-hosts, the retry seats the member for real.
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
 		memberOut.clear();
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222,\"invited\":true}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222,\"invited\":true}");
 		assertThat(last(memberOut, "welcome")).isNotNull();
 		assertThat(last(memberOut, "welcome").get("status").asText()).isEqualTo("MEMBER");
 	}
@@ -773,7 +773,7 @@ class PartyV2HandlerTest {
 	 */
 	@Test
 	void reclaimTakesOverAnExpiredRoomAndWaitsForItsHost() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
 		// The owner goes away without ending the party.
 		manager.drain("r", true);
 		assertThat(manager.roomCount()).isZero();
@@ -787,23 +787,23 @@ class PartyV2HandlerTest {
 		// A joiner reaching the new owner before the host must be deferred, never redirected to this very
 		// node — a self-redirect is a dead end the client would ignore.
 		memberOut.clear();
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\"}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\"}");
 		assertThat(last(memberOut, "ownerPending")).isNotNull();
 		assertThat(last(memberOut, "redirect")).isNull();
 		assertThat(last(memberOut, "error")).isNull();
 
 		// The host returns and rebuilds the room on the node that reclaimed it.
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
 		memberOut.clear();
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		assertThat(last(memberOut, "welcome").get("status").asText()).isEqualTo("MEMBER");
 	}
 
 	/** A claim announced by another node drops this node's copy of the room immediately. */
 	@Test
 	void busOwnerChangedDrainsARoomWeNoLongerOwn() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		assertThat(manager.roomCount()).isEqualTo(1);
 
 		bus.listener().onOwnerChanged("r", "node-b");
@@ -817,7 +817,7 @@ class PartyV2HandlerTest {
 	/** Signals about rooms this node does not serve are other nodes' business. */
 	@Test
 	void busIgnoresSignalsForRoomsWeDoNotServe() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 
 		bus.listener().onOwnerChanged("someone-elses-room", "node-b");
 		bus.listener().onForceReconnect("someone-elses-room");
@@ -829,8 +829,8 @@ class PartyV2HandlerTest {
 	/** Force-reconnect hands the room over: members are sent off and the lock is released for the taking. */
 	@Test
 	void busForceReconnectDrainsAndReleasesTheRoom() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 
 		bus.listener().onForceReconnect("r");
 
@@ -844,11 +844,11 @@ class PartyV2HandlerTest {
 	/** A room that ended (host left, room discarded) is gone, not in transit. */
 	@Test
 	void joinAfterRoomEndedErrors() throws Exception {
-		send(host, "{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\"}");
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\"}");
 		manager.discard("r");
 
 		memberOut.clear();
-		send(member, "{\"type\":\"join\",\"room\":\"r\",\"name\":\"Mem\"}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\"}");
 		assertThat(last(memberOut, "ownerPending")).isNull();
 		assertThat(last(memberOut, "error").get("detail").asText()).isEqualTo("no room");
 	}
@@ -861,7 +861,7 @@ class PartyV2HandlerTest {
 		JsonNode found = null;
 		for (String json : out) {
 			JsonNode node = mapper.readTree(json);
-			if (type.equals(node.path("type").asText())) {
+			if (type.equals(node.path("t").asText())) {
 				found = node;
 			}
 		}
@@ -873,14 +873,14 @@ class PartyV2HandlerTest {
 		if (frame == null) {
 			return null;
 		}
-		JsonNode updates = frame.get("updates");
+		JsonNode updates = frame.get("u");
 		return updates == null || updates.isEmpty() ? null : updates.get(updates.size() - 1);
 	}
 
 	private int countOf(List<String> out, String type) throws Exception {
 		int n = 0;
 		for (String json : out) {
-			if (type.equals(mapper.readTree(json).path("type").asText())) {
+			if (type.equals(mapper.readTree(json).path("t").asText())) {
 				n++;
 			}
 		}
@@ -889,7 +889,7 @@ class PartyV2HandlerTest {
 
 	private static String nameOf(JsonNode roster, long memberId) {
 		for (JsonNode m : roster.get("members")) {
-			if (m.get("memberId").asLong() == memberId) {
+			if (m.get("m").asLong() == memberId) {
 				return m.hasNonNull("name") ? m.get("name").asText() : null;
 			}
 		}
@@ -898,7 +898,7 @@ class PartyV2HandlerTest {
 
 	private static long accountHashOf(JsonNode roster, long memberId) {
 		for (JsonNode m : roster.get("members")) {
-			if (m.get("memberId").asLong() == memberId) {
+			if (m.get("m").asLong() == memberId) {
 				return m.get("accountHash").asLong();
 			}
 		}
@@ -907,7 +907,7 @@ class PartyV2HandlerTest {
 
 	private static String statusOf(JsonNode roster, long memberId) {
 		for (JsonNode m : roster.get("members")) {
-			if (m.get("memberId").asLong() == memberId) {
+			if (m.get("m").asLong() == memberId) {
 				return m.get("status").asText();
 			}
 		}

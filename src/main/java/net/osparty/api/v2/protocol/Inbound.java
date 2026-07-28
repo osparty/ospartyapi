@@ -1,5 +1,7 @@
 package net.osparty.api.v2.protocol;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.util.TokenBuffer;
@@ -15,9 +17,14 @@ import com.fasterxml.jackson.databind.util.TokenBuffer;
  * <p>{@link #urgent} is the one thing the server is told <em>about</em> a live update, and it is a field of
  * the frame rather than of the payload for exactly that reason: the owner still never reads the state, it
  * only learns whether the sender wants it delivered promptly (see {@code LivePartyRoom#flush}).
+ *
+ * <p>The three keys that ride on every live frame are one character each. The payload inside {@code state}
+ * was shortened first and the wrapper then outweighed it — at two updates per aggregated frame the envelope
+ * was over half the bytes. The rest keep their names: they belong to frames sent once per party, where a
+ * readable wire is worth more than the handful of bytes.
  */
 public record Inbound(
-	String type,
+	@JsonProperty("t") String type,
 	String room,
 	Long accountHash,
 	String name,
@@ -29,8 +36,8 @@ public record Inbound(
 	Boolean learner,
 	Boolean teacher,
 	Boolean invited,
-	@JsonDeserialize(using = RawJson.class) TokenBuffer state,
-	Boolean urgent,
+	@JsonProperty("s") @JsonDeserialize(using = RawJson.class) TokenBuffer state,
+	@JsonProperty("g") Boolean urgent,
 	Integer x,
 	Integer y,
 	Integer plane,

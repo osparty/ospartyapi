@@ -69,22 +69,22 @@ class NettyPartyV2ServerTest {
 		Collector hostOut = new Collector();
 		WebSocketSession host = connect("/api/v2/ws/party", hostOut);
 		host.sendMessage(new TextMessage(
-			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 		assertThat(hostOut.await("welcome").get("status").asText()).isEqualTo("HOST");
 
 		Collector memberOut = new Collector();
 		WebSocketSession member = connect("/api/v2/ws/party", memberOut);
-		member.sendMessage(new TextMessage("{\"type\":\"join\",\"room\":\"r\",\"invited\":true}"));
+		member.sendMessage(new TextMessage("{\"t\":\"join\",\"room\":\"r\",\"invited\":true}"));
 		assertThat(memberOut.await("welcome").get("status").asText()).isEqualTo("MEMBER");
 
 		// A live update reaching its peer is the whole job of this transport. The frame has to arrive before
 		// the flush can carry it, so the flush is driven inside the wait rather than once before it.
-		host.sendMessage(new TextMessage("{\"type\":\"update\",\"state\":{\"currentHp\":42}}"));
+		host.sendMessage(new TextMessage("{\"t\":\"update\",\"s\":{\"currentHp\":42}}"));
 		JsonNode relayed = waitFor(() -> {
 			manager.flushRooms();
-			return memberOut.find("memberUpdates");
+			return memberOut.find("mu");
 		});
-		assertThat(relayed.get("updates").get(0).get("state").get("currentHp").asInt()).isEqualTo(42);
+		assertThat(relayed.get("u").get(0).get("s").get("currentHp").asInt()).isEqualTo(42);
 
 		// Closing the socket removes the member: the close callback is wired, not just the read path.
 		member.close(CloseStatus.NORMAL);
@@ -97,7 +97,7 @@ class NettyPartyV2ServerTest {
 		Collector out = new Collector();
 		WebSocketSession host = connect("/n/node-a/api/v2/ws/party", out);
 		host.sendMessage(new TextMessage(
-			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 
 		JsonNode welcome = out.await("welcome");
 		assertThat(welcome.get("status").asText()).isEqualTo("HOST");
@@ -127,9 +127,9 @@ class NettyPartyV2ServerTest {
 
 		// `host` means something in both protocols. Tagged for the board, it must not reach the live party.
 		host.sendMessage(tagged(Mux.BOARD,
-			"{\"type\":\"host\",\"room\":\"board\",\"hostName\":\"Nobody\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"board\",\"hostName\":\"Nobody\",\"capacity\":3}"));
 		host.sendMessage(tagged(Mux.LIVE,
-			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 
 		assertThat(out.await("welcome").get("status").asText()).isEqualTo("HOST");
 		// One room, from the one frame that was addressed to the live party.
@@ -212,7 +212,7 @@ class NettyPartyV2ServerTest {
 			JsonNode found = null;
 			for (String frame : snapshot) {
 				JsonNode node = mapper.readTree(frame);
-				if (type.equals(node.path("type").asText())) {
+				if (type.equals(node.path("t").asText())) {
 					found = node;
 				}
 			}

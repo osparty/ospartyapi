@@ -37,7 +37,7 @@ class PartyV2HeartbeatTest {
 		WebSocketSession host = session("host", out);
 		handler.afterConnectionEstablished(host);
 		handler.handleTextMessage(host, new TextMessage(
-			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 		assertThat(manager.roomCount()).isEqualTo(1);
 
 		new PartyV2Heartbeat(manager).renewOwned();
@@ -58,7 +58,7 @@ class PartyV2HeartbeatTest {
 		WebSocketSession host = session("host", out);
 		handler.afterConnectionEstablished(host);
 		handler.handleTextMessage(host, new TextMessage(
-			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 
 		new PartyV2Heartbeat(manager).renewOwned();
 

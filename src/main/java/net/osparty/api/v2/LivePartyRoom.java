@@ -53,7 +53,8 @@ final class LivePartyRoom {
 
 	/** The two ends of a {@code memberUpdates} frame, between which pre-encoded updates are pasted. */
 	private static final byte[] UPDATES_PREFIX =
-		"{\"type\":\"memberUpdates\",\"updates\":[".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		("{\"t\":\"" + Outbound.MEMBER_UPDATES + "\",\"u\":[")
+			.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 	private static final byte[] UPDATES_SUFFIX =
 		"]}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 

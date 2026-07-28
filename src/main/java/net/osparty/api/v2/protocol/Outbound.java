@@ -1,6 +1,7 @@
 package net.osparty.api.v2.protocol;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.util.TokenBuffer;
 import java.util.List;
@@ -11,11 +12,17 @@ import java.util.List;
  *
  * <p>The shape is deliberately flat (matching the ad board's frames), which makes it wide: use the static
  * factories, or {@link Builder} for a new frame type, rather than the canonical constructor.
+ *
+ * <p>Four keys are one character: the ones on the frame that is fanned out to every member of every party
+ * on every aggregation window. Shortening the payload inside {@code state} left the wrapper as more than
+ * half of that frame's bytes, and {@code memberId}/{@code state} are paid once per update inside it. The
+ * type name {@code memberUpdates} goes with them for the same reason. Everything else keeps its name —
+ * those frames are sent once per party, where a readable wire is worth more than the bytes.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record Outbound(
-	String type,
-	Long memberId,
+	@JsonProperty("t") String type,
+	@JsonProperty("m") Long memberId,
 	String status,
 	String host,
 	Integer capacity,
@@ -23,7 +30,7 @@ public record Outbound(
 	Boolean closed,
 	String discordUrl,
 	List<RosterEntry> members,
-	TokenBuffer state,
+	@JsonProperty("s") TokenBuffer state,
 	Integer x,
 	Integer y,
 	Integer plane,
@@ -43,8 +50,11 @@ public record Outbound(
 	String newHostName,
 	Boolean hostStays,
 	Long retryAfterMs,
-	List<MemberUpdate> updates,
+	@JsonProperty("u") List<MemberUpdate> updates,
 	JsonNode meta) {
+
+	/** The aggregated fan-out frame's type, short because it is the one every member gets every window. */
+	public static final String MEMBER_UPDATES = "mu";
 
 	/**
 	 * Assigned identity + role on (re)join; followed by a {@code roster} and the current member states.
@@ -199,17 +209,17 @@ public record Outbound(
 	 * understanding (PARTY_V2_OPTIMIZATION.md §5.2).
 	 */
 	public static Outbound memberUpdates(List<MemberUpdate> updates) {
-		return new Builder("memberUpdates").updates(updates).build();
+		return new Builder(MEMBER_UPDATES).updates(updates).build();
 	}
 
 	/** One member's live update inside a {@code memberUpdates} frame. */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
-	public record MemberUpdate(long memberId, TokenBuffer state) {
+	public record MemberUpdate(@JsonProperty("m") long memberId, @JsonProperty("s") TokenBuffer state) {
 	}
 
 	/** One member in the roster frame. {@code status} is HOST / MEMBER / PENDING. */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
-	public record RosterEntry(long memberId, String name, long accountHash, String status, String role,
+	public record RosterEntry(@JsonProperty("m") long memberId, String name, long accountHash, String status, String role,
 		boolean learner, boolean teacher) {
 	}
 

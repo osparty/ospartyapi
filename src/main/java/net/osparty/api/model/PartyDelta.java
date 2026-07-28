@@ -27,7 +27,14 @@ public record PartyDelta(
 	List<String> requiredRoles,
 	String hostRole,
 	Boolean learner,
-	Boolean teacher) {
+	Boolean teacher,
+	/**
+	 * The pod the host's live room moved to. Carried on a delta and not only on a whole
+	 * advertisement because a host cannot know where its room landed until the live welcome tells
+	 * it, which is after it advertised — so the stamp always arrives as a change to an ad the
+	 * board already holds.
+	 */
+	String node) {
 
 	public static PartyDelta diff(Party prev, Party cur) {
 		String host = Objects.equals(prev.getHost(), cur.getHost()) ? null : cur.getHost();
@@ -54,15 +61,17 @@ public record PartyDelta(
 		String hostRole = Objects.equals(prev.getHostRole(), cur.getHostRole()) ? null : cur.getHostRole();
 		Boolean learner = prev.isLearner() != cur.isLearner() ? cur.isLearner() : null;
 		Boolean teacher = prev.isTeacher() != cur.isTeacher() ? cur.isTeacher() : null;
+		String node = Objects.equals(prev.getNode(), cur.getNode()) ? null : cur.getNode();
 
 		if (host == null && size == null && members == null && world == null && layout == null && neededRoles == null
 			&& description == null && capacity == null && lootRule == null && ironmanOnly == null && privateParty == null
 			&& minKillCount == null && minHardModeKillCount == null && invocation == null && hardMode == null
-			&& coxScale == null && requiredRoles == null && hostRole == null && learner == null && teacher == null) {
+			&& coxScale == null && requiredRoles == null && hostRole == null && learner == null && teacher == null
+			&& node == null) {
 			return null;
 		}
 		return new PartyDelta(cur.getId(), cur.getActivity(), host, size, members, world, layout, neededRoles, description,
 			capacity, lootRule, ironmanOnly, privateParty, minKillCount, minHardModeKillCount, invocation, hardMode,
-			coxScale, requiredRoles, hostRole, learner, teacher);
+			coxScale, requiredRoles, hostRole, learner, teacher, node);
 	}
 }

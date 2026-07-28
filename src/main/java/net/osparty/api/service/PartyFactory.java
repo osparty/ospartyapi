@@ -94,6 +94,10 @@ public final class PartyFactory {
 				changed = true;
 			}
 		}
+		if (patch.getNode() != null && !patch.getNode().isBlank() && !patch.getNode().equals(party.getNode())) {
+			party.setNode(patch.getNode());
+			changed = true;
+		}
 		if (patch.getWorld() != null && !patch.getWorld().isBlank() && !patch.getWorld().equals(party.getWorld())) {
 			party.setWorld(patch.getWorld());
 			changed = true;

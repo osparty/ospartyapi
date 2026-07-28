@@ -34,6 +34,20 @@ public class Party {
 	 * clocks agreeing; one INCR on a path that is already writing does not.
 	 */
 	private long seq;
+	/**
+	 * The node whose memory holds this party's live room, or null when nobody has said.
+	 *
+	 * <p>A live party is node-affine — its state exists on one pod — but discovery is not, so a joiner
+	 * landed wherever the gateway put it and was redirected from there, at the cost of a reconnect. With two
+	 * pods that was half of all joins. A joiner that already holds the advertisement can instead open its
+	 * connection on the right pod to begin with.
+	 *
+	 * <p>Reported by the host rather than inferred here: a host on an older plugin keeps two sockets, whose
+	 * pods need not agree, so this node is the one thing the server cannot work out for itself. It is a hint
+	 * either way — a room moves when its node drains, and the ad only catches up on the host's next update —
+	 * so the redirect stays as the answer for a stamp that has gone stale.
+	 */
+	private String node;
 	private String passphrase;
 	private int minKillCount;
 	private int minHardModeKillCount;
@@ -67,6 +81,7 @@ public class Party {
 		c.coxScale = src.coxScale;
 		c.createdAt = src.createdAt;
 		c.seq = src.seq;
+		c.node = src.node;
 		c.passphrase = src.passphrase;
 		c.minKillCount = src.minKillCount;
 		c.minHardModeKillCount = src.minHardModeKillCount;

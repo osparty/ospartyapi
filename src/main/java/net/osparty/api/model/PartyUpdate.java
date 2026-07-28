@@ -24,4 +24,6 @@ public class PartyUpdate {
 	private String hostRole;
 	private Boolean learner;
 	private Boolean teacher;
+	/** The pod the host's live room is on, so joiners can reach it without a redirect. */
+	private String node;
 }

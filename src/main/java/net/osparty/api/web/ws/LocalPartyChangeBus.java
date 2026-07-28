@@ -1,6 +1,6 @@
 package net.osparty.api.web.ws;
 
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -11,21 +11,21 @@ import org.springframework.stereotype.Component;
 @Component
 @Profile("test")
 public class LocalPartyChangeBus implements PartyChangeBus {
-	private volatile Consumer<String> listener = id -> { };
+	private volatile BiConsumer<String, Long> listener = (id, seq) -> { };
 
 	@Override
-	public void setListener(Consumer<String> listener) {
+	public void setListener(BiConsumer<String, Long> listener) {
 		this.listener = listener;
 	}
 
 	@Override
-	public void publish(String partyId) {
+	public void publish(String partyId, long seq) {
 		if (partyId != null) {
-			listener.accept(partyId);
+			listener.accept(partyId, seq);
 		}
 	}
 
-	Consumer<String> listener() {
+	BiConsumer<String, Long> listener() {
 		return listener;
 	}
 }

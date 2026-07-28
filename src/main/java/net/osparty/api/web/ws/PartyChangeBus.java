@@ -1,6 +1,6 @@
 package net.osparty.api.web.ws;
 
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
 /**
  * Tells every node which advertisement just changed.
@@ -19,9 +19,16 @@ import java.util.function.Consumer;
  * with the first, forever. A GET per change is cheap; a duplicated schema is not.
  */
 public interface PartyChangeBus {
-	/** Announce that {@code partyId} was created, updated or removed. Never throws. */
-	void publish(String partyId);
+	/**
+	 * Announce that {@code partyId} was created, updated or removed. Never throws.
+	 *
+	 * <p>{@code seq} is the revision the change was written at, so that every node records the same one.
+	 * A removal has no advertisement left to carry it, so the node that noticed allocates it and everyone
+	 * else takes the number rather than inventing their own — otherwise the same disappearance would be
+	 * ordered differently on each node and a resuming client could miss it on one and not another.
+	 */
+	void publish(String partyId, long seq);
 
-	/** Called on every node, including the one that published, with the id that changed. */
-	void setListener(Consumer<String> listener);
+	/** Called on every node, including the one that published, with the id and revision that changed. */
+	void setListener(BiConsumer<String, Long> listener);
 }

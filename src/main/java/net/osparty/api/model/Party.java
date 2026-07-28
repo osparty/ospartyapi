@@ -25,6 +25,15 @@ public class Party {
 	/** Chambers of Xeric team-size scaling as advertised (e.g. "3+4"); null/empty when unset. */
 	private String coxScale;
 	private long createdAt;
+	/**
+	 * Cluster-wide revision, allocated from Redis on every meaningful write and never on a TTL touch.
+	 *
+	 * <p>It is what lets a client that already holds the board resume instead of being sent all of it
+	 * again: it reconnects saying how far it got, and the node it lands on answers with the ads whose
+	 * revision is higher. A timestamp would nearly do, but it would make correctness depend on the nodes'
+	 * clocks agreeing; one INCR on a path that is already writing does not.
+	 */
+	private long seq;
 	private String passphrase;
 	private int minKillCount;
 	private int minHardModeKillCount;
@@ -57,6 +66,7 @@ public class Party {
 		c.invocation = src.invocation;
 		c.coxScale = src.coxScale;
 		c.createdAt = src.createdAt;
+		c.seq = src.seq;
 		c.passphrase = src.passphrase;
 		c.minKillCount = src.minKillCount;
 		c.minHardModeKillCount = src.minHardModeKillCount;

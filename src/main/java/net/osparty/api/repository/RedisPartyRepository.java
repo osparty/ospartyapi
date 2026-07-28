@@ -30,6 +30,11 @@ public class RedisPartyRepository implements PartyRepository {
 	private static final String CODE_KEY = "partycode:";
 	private static final String CREDENTIAL_KEY = "partykey:";
 	private static final String SEQ_KEY = "party:seq";
+	/**
+	 * Allocates {@link Party#getSeq()}. Separate from the id sequence: ids are handed out once per ad,
+	 * revisions on every meaningful edit of one.
+	 */
+	private static final String REV_KEY = "party:rev";
 	private static final String INDEX_KEY = "party:ids";
 
 	private final StringRedisTemplate redis;
@@ -135,6 +140,7 @@ public class RedisPartyRepository implements PartyRepository {
 		String id = String.valueOf(redis.opsForValue().increment(SEQ_KEY));
 		String inviteCode = uniqueInviteCode();
 		Party party = PartyFactory.fromRequest(request, id, inviteCode, now);
+		party.setSeq(nextRevision());
 		String json = write(party);
 
 		redis.executePipelined(new SessionCallback<Object>() {
@@ -173,6 +179,10 @@ public class RedisPartyRepository implements PartyRepository {
 		}
 		boolean changed = PartyFactory.applyUpdate(party, patch);
 		if (changed) {
+			// Deliberately only when something actually moved. A heartbeat that changes nothing must not
+			// advance the revision, or after one interval every ad on the board looks new to a resuming
+			// client and the resume degrades into a full snapshot wearing a different name.
+			party.setSeq(nextRevision());
 			redis.opsForValue().set(key, write(party), ttl);
 		}
 		else {
@@ -200,6 +210,7 @@ public class RedisPartyRepository implements PartyRepository {
 		// host is not an admitted member with a known hash. Leaving the old host's hash in place
 		// would attribute the ad -- and any ban on it -- to someone who no longer runs it.
 		party.setHostAccountHash(PartyFactory.accountHashOf(party, newHost));
+		party.setSeq(nextRevision());
 		String json = write(party);
 		redis.executePipelined(new SessionCallback<Object>() {
 			@Override
@@ -229,6 +240,7 @@ public class RedisPartyRepository implements PartyRepository {
 		}
 		party.setDiscordChannelId(channelId);
 		party.setDiscordInviteUrl(inviteUrl);
+		party.setSeq(nextRevision());
 		Long remaining = redis.getExpire(key, java.util.concurrent.TimeUnit.MILLISECONDS);
 		Duration ttlToUse = (remaining != null && remaining > 0) ? Duration.ofMillis(remaining) : ttl;
 		redis.opsForValue().set(key, write(party), ttlToUse);
@@ -250,6 +262,19 @@ public class RedisPartyRepository implements PartyRepository {
 			redis.delete(CODE_KEY + party.getInviteCode());
 		}
 		return Optional.of(party);
+	}
+
+	/**
+	 * The next cluster-wide revision. One INCR, on a path that is already writing to Redis.
+	 *
+	 * <p>Falls back to the wall clock if Redis declines to answer, which keeps the number monotonic enough
+	 * to be useful without making a write fail over a bookkeeping value. A resuming client that lands on
+	 * the wrong side of such a gap is sent a full board, which is what it would have got anyway.
+	 */
+	@Override
+	public long nextRevision() {
+		Long next = redis.opsForValue().increment(REV_KEY);
+		return next == null ? System.currentTimeMillis() : next;
 	}
 
 	private String uniqueInviteCode() {

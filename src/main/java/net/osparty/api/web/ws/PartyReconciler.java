@@ -46,7 +46,19 @@ public class PartyReconciler {
 	private volatile Map<String, Known> lastKnown = new HashMap<>();
 
 	/** Ids announced since the last flush. A set, so a busy ad costs one read however often it changes. */
-	private final java.util.Set<String> dirty = java.util.concurrent.ConcurrentHashMap.newKeySet();
+	private final Map<String, Long> dirty = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * Advertisements that went away, and the revision they went away at. Kept so a client that reconnects
+	 * can be told what disappeared while it was gone — an ad that is simply absent cannot say so itself.
+	 * Pruned by age; {@link #prunedThroughSeq} remembers how far the pruning got, and a client asking to
+	 * resume from before that is sent the whole board instead.
+	 */
+	private final Map<String, Tombstone> tombstones = new java.util.LinkedHashMap<>();
+	private long prunedThroughSeq;
+
+	/** How long a removal is remembered. Generous next to a reconnect, cheap at an id and two longs. */
+	private static final long TOMBSTONE_RETENTION_MS = 10 * 60 * 1000L;
 
 	public PartyReconciler(PartyRepository store, PartyBroadcaster broadcaster,
 		net.osparty.api.service.VoiceChannelService voice,
@@ -84,6 +96,10 @@ public class PartyReconciler {
 				continue;
 			}
 			Known previous = entry.getValue();
+			// A TTL expiry is the change nobody announces, so the sweep is where its tombstone is minted.
+			if (!tombstones.containsKey(entry.getKey())) {
+				entomb(entry.getKey(), 0, previous.party().getActivity());
+			}
 			if (previous.visible()) {
 				removed.add(new PartyBroadcaster.RemovedRef(
 					entry.getKey(), previous.party().getActivity(), false));
@@ -134,9 +150,9 @@ public class PartyReconciler {
 	 * An advertisement changed somewhere in the cluster. Note it and return: the work happens in
 	 * {@link #flushChanges()}, on the bus listener thread's behalf rather than on it.
 	 */
-	void onChange(String id) {
+	void onChange(String id, Long seq) {
 		if (id != null) {
-			dirty.add(id);
+			dirty.merge(id, seq == null ? 0L : seq, Math::max);
 		}
 	}
 
@@ -159,14 +175,14 @@ public class PartyReconciler {
 		if (dirty.isEmpty()) {
 			return;
 		}
-		List<String> ids = new ArrayList<>(dirty);
-		dirty.removeAll(ids);
+		Map<String, Long> ids = new HashMap<>(dirty);
+		ids.keySet().forEach(dirty::remove);
 
 		List<Party> created = new ArrayList<>();
 		List<PartyDelta> updated = new ArrayList<>();
 		List<PartyBroadcaster.RemovedRef> removed = new ArrayList<>();
-		for (String id : ids) {
-			applyChange(id, created, updated, removed);
+		for (Map.Entry<String, Long> entry : ids.entrySet()) {
+			applyChange(entry.getKey(), entry.getValue(), created, updated, removed);
 		}
 		if (!created.isEmpty() || !updated.isEmpty() || !removed.isEmpty()) {
 			broadcaster.broadcastBatch(created, updated, removed);
@@ -183,7 +199,7 @@ public class PartyReconciler {
 	 * <p>An id nobody here has seen and that no longer exists is not an error — it is a delete announced by
 	 * a node whose creation we never happened to observe, and there is nothing to say about it.
 	 */
-	private void applyChange(String id, List<Party> created, List<PartyDelta> updated,
+	private void applyChange(String id, long seq, List<Party> created, List<PartyDelta> updated,
 		List<PartyBroadcaster.RemovedRef> removed) {
 		Known previous = lastKnown.get(id);
 		Party party = store.findById(id).map(p -> badges.enrichParties(List.of(p)).get(0)).orElse(null);
@@ -192,6 +208,8 @@ public class PartyReconciler {
 				return;
 			}
 			lastKnown.remove(id);
+			entomb(id, seq, previous.party().getActivity());
+			// fall through to the board events below
 			if (previous.visible()) {
 				removed.add(new PartyBroadcaster.RemovedRef(id, previous.party().getActivity(), false));
 			}
@@ -268,10 +286,47 @@ public class PartyReconciler {
 		for (Known known : lastKnown.values()) {
 			(known.visible() ? visible : hidden).add(known.party());
 		}
-		broadcaster.publishBoard(visible, hidden);
+		prune();
+		broadcaster.publishBoard(visible, hidden, Map.copyOf(tombstones), prunedThroughSeq);
+	}
+
+	/**
+	 * Remember that an advertisement went away, at the revision it went away at.
+	 *
+	 * <p>A removal is the one change that leaves nothing behind to describe it, so a client that reconnects
+	 * after missing one would otherwise keep showing an ad that no longer exists until its next full board.
+	 * Call under this object's lock.
+	 */
+	private void entomb(String id, long seq, String activity) {
+		if (seq <= 0) {
+			// Nobody told us a revision — a sweep-discovered TTL expiry. Take the next one so the removal
+			// still has a place in the order.
+			seq = store.nextRevision();
+		}
+		tombstones.put(id, new Tombstone(seq, activity, System.currentTimeMillis()));
+		prune();
+	}
+
+	/** Drop removals older than the retention window, remembering how far that got. */
+	private void prune() {
+		long cutoff = System.currentTimeMillis() - TOMBSTONE_RETENTION_MS;
+		java.util.Iterator<Map.Entry<String, Tombstone>> it = tombstones.entrySet().iterator();
+		while (it.hasNext()) {
+			Map.Entry<String, Tombstone> entry = it.next();
+			if (entry.getValue().removedAtMs() > cutoff) {
+				// Insertion-ordered, and removals only ever arrive later, so the rest are younger still.
+				break;
+			}
+			prunedThroughSeq = Math.max(prunedThroughSeq, entry.getValue().seq());
+			it.remove();
+		}
 	}
 
 	/** A party as this node last saw it, plus whether it was publicly visible at the time. */
 	private record Known(Party party, boolean visible) {
+	}
+
+	/** An advertisement that is gone, the revision it went at, and when we noticed. */
+	record Tombstone(long seq, String activity, long removedAtMs) {
 	}
 }

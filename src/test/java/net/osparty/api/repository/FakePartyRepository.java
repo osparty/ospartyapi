@@ -20,6 +20,7 @@ public class FakePartyRepository implements PartyRepository {
 	private final Map<String, Party> parties = new ConcurrentHashMap<>();
 	private final Map<String, String> hostKeys = new ConcurrentHashMap<>();
 	private final AtomicLong idSequence = new AtomicLong(1000);
+	private final AtomicLong revisions = new AtomicLong();
 
 	@Override
 	public List<Party> list(String activity) {
@@ -62,9 +63,15 @@ public class FakePartyRepository implements PartyRepository {
 	}
 
 	@Override
+	public long nextRevision() {
+		return revisions.incrementAndGet();
+	}
+
+	@Override
 	public Party create(PartyRequest request, String hostKey) {
 		long now = System.currentTimeMillis();
 		Party party = PartyFactory.fromRequest(request, nextId(), uniqueInviteCode(), now);
+		party.setSeq(nextRevision());
 
 		parties.values().removeIf(p -> {
 			if (PartyFactory.sameHost(p.getHost(), request.host())) {
@@ -96,7 +103,10 @@ public class FakePartyRepository implements PartyRepository {
 		if (party == null) {
 			return Optional.empty();
 		}
-		PartyFactory.applyUpdate(party, patch);
+		if (PartyFactory.applyUpdate(party, patch)) {
+			// Only a real edit, matching the Redis repository: a TTL touch must not look like a change.
+			party.setSeq(nextRevision());
+		}
 		return Optional.of(party);
 	}
 
@@ -108,6 +118,7 @@ public class FakePartyRepository implements PartyRepository {
 		}
 		party.setHost(newHost);
 		party.setHostAccountHash(PartyFactory.accountHashOf(party, newHost));
+		party.setSeq(nextRevision());
 		hostKeys.put(id, newKey);
 		return Optional.of(party);
 	}
@@ -120,6 +131,7 @@ public class FakePartyRepository implements PartyRepository {
 		}
 		party.setDiscordChannelId(channelId);
 		party.setDiscordInviteUrl(inviteUrl);
+		party.setSeq(nextRevision());
 		return Optional.of(party);
 	}
 

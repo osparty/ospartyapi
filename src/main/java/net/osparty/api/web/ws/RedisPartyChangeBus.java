@@ -3,7 +3,7 @@ package net.osparty.api.web.ws;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -23,7 +23,7 @@ public class RedisPartyChangeBus implements PartyChangeBus {
 
 	private final StringRedisTemplate redis;
 	private final RedisConnectionFactory connectionFactory;
-	private volatile Consumer<String> listener = id -> { };
+	private volatile BiConsumer<String, Long> listener = (id, seq) -> { };
 	private RedisMessageListenerContainer container;
 
 	public RedisPartyChangeBus(StringRedisTemplate redis, RedisConnectionFactory connectionFactory) {
@@ -50,17 +50,17 @@ public class RedisPartyChangeBus implements PartyChangeBus {
 	}
 
 	@Override
-	public void setListener(Consumer<String> listener) {
+	public void setListener(BiConsumer<String, Long> listener) {
 		this.listener = listener;
 	}
 
 	@Override
-	public void publish(String partyId) {
+	public void publish(String partyId, long seq) {
 		if (partyId == null) {
 			return;
 		}
 		try {
-			redis.convertAndSend(CHANNEL, partyId);
+			redis.convertAndSend(CHANNEL, partyId + ":" + seq);
 		}
 		catch (Exception e) {
 			// The periodic reconcile is the backstop, so a failed announcement costs latency, not
@@ -69,9 +69,21 @@ public class RedisPartyChangeBus implements PartyChangeBus {
 		}
 	}
 
-	private void deliver(String partyId) {
+	private void deliver(String message) {
+		int at = message.lastIndexOf(':');
+		if (at < 0) {
+			return;
+		}
+		String partyId = message.substring(0, at);
+		long seq;
 		try {
-			listener.accept(partyId);
+			seq = Long.parseLong(message.substring(at + 1));
+		}
+		catch (NumberFormatException e) {
+			return;
+		}
+		try {
+			listener.accept(partyId, seq);
 		}
 		catch (Exception e) {
 			log.warn("ad change listener failed for {}", partyId, e);

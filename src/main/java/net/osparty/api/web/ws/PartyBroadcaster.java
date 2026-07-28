@@ -228,7 +228,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		sub.subscribed = true;
 		log.info("WS subscribe: session={} activity={}", sub.session.getId(),
 			sub.activity == null ? "<all>" : sub.activity);
-		sendSnapshot(sub);
+		sendSnapshot(sub, in.since());
 	}
 
 	private void handleUnsubscribe(Subscriber sub) {
@@ -269,7 +269,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		send(sub, Outbound.hosted(version.get(), enriched(party)));
 		// After the host's own ack, always: the announcement puts the ad on everyone's board, and a host
 		// should learn its advertisement exists before the rest of the world does.
-		changes.publish(party.getId());
+		changes.publish(party.getId(), party.getSeq());
 	}
 
 	private Party enriched(Party party) {
@@ -285,7 +285,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		if (!authorizeWrite(sub, id, in.key())) {
 			return;
 		}
-		if (store.update(id, in.patch() == null ? TTL_TOUCH : in.patch()).isEmpty()) {
+		Optional<Party> updated = store.update(id, in.patch() == null ? TTL_TOUCH : in.patch());
+		if (updated.isEmpty()) {
 			sendError(sub, id, "gone");
 			unbind(sub.session.getId());
 			return;
@@ -293,7 +294,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		// Only a real edit is announced. A bare heartbeat changes nothing anyone can see, and at one per
 		// hosted ad per interval it would put more traffic on the bus than the sweep it exists to replace.
 		if (in.patch() != null) {
-			changes.publish(id);
+			changes.publish(id, updated.get().getSeq());
 		}
 		// Only a real edit is announced. A bare heartbeat changes nothing anyone can see, and at one per
 		// hosted ad per interval it would put more traffic on the bus than the sweep it exists to replace.
@@ -341,7 +342,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		unbind(sub.session.getId());
 		log.info("WS unhost: session={} party={}", sub.session.getId(), id);
-		changes.publish(id);
+		// A removal has no advertisement left to stamp, so it takes the next revision from the same
+		// sequence — which is what lets every node order it against everything else.
+		changes.publish(id, store.nextRevision());
 	}
 
 	private void handleTransferHost(Subscriber sub, Inbound in) {
@@ -374,7 +377,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		log.info("WS transferHost: session={} party={} newHost={}", sub.session.getId(), id, in.host());
 		send(sub, Outbound.transferred(version.get(), id));
-		changes.publish(id);
+		changes.publish(id, party.get().getSeq());
 	}
 
 	private void handleCreateVoiceChannel(Subscriber sub, Inbound in) {
@@ -406,7 +409,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		log.info("WS voice channel: session={} party={} channel={}", sub.session.getId(), id,
 			channel.get().channelId());
 		send(sub, Outbound.voiceChannel(version.get(), id, channel.get().inviteUrl()));
-		changes.publish(id);
+		changes.publish(id, store.findById(id).map(Party::getSeq).orElse(0L));
 	}
 
 	private void handleStartDiscordLink(Subscriber sub, Inbound in) {
@@ -897,8 +900,10 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	 * @param visible what everyone may see.
 	 * @param hidden shadowbanned ads — almost always empty, and only their own hosts are shown them.
 	 */
-	void publishBoard(List<Party> visible, List<Party> hidden) {
-		board = new Board(version.get(), List.copyOf(visible), List.copyOf(hidden));
+	void publishBoard(List<Party> visible, List<Party> hidden,
+		Map<String, PartyReconciler.Tombstone> tombstones, long prunedThroughSeq) {
+		board = new Board(version.get(), List.copyOf(visible), List.copyOf(hidden),
+			tombstones, prunedThroughSeq);
 	}
 
 	/**
@@ -921,8 +926,18 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	 * <p>The per-subscriber path therefore remains for three cases: before the first reconcile has run, for
 	 * anyone hosting on this session, and for a host whose own ad is shadowbanned.
 	 */
-	private void sendSnapshot(Subscriber sub) {
+	private void sendSnapshot(Subscriber sub, Long since) {
 		Board current = board;
+		// A client that still holds a board only needs what it missed. That is what makes a reconnect
+		// cheap — and a rolling deploy, which today re-sends the entire board to every client at once.
+		if (since != null && current != null && !hostedBy.containsKey(sub.session.getId())
+			&& !current.showsOwnHidden(sub, this)) {
+			Frame resume = current.resume(sub.activity, since, this);
+			if (resume != null) {
+				sendRaw(sub, resume);
+				return;
+			}
+		}
 		if (current != null && !hostedBy.containsKey(sub.session.getId())
 			&& !current.showsOwnHidden(sub, this)) {
 			Frame frame = current.frame(sub.activity, this);
@@ -939,7 +954,16 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			}
 		}
 		log.debug("WS snapshot -> {} ({} of {} parties)", sub.session.getId(), list.size(), all.size());
-		send(sub, Outbound.snapshot(version.get(), list));
+		send(sub, Outbound.snapshot(version.get(), list, headSeq(list)));
+	}
+
+	/** The highest revision among a list of ads — what a client resumes from after a full board. */
+	private static Long headSeq(List<Party> parties) {
+		long head = 0;
+		for (Party party : parties) {
+			head = Math.max(head, party.getSeq());
+		}
+		return head > 0 ? head : null;
 	}
 
 	/**
@@ -952,13 +976,67 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		private final long version;
 		private final List<Party> visible;
 		private final List<Party> hidden;
+		private final Map<String, PartyReconciler.Tombstone> tombstones;
+		/** Removals older than this are forgotten, so a client asking from before it needs the whole board. */
+		private final long prunedThroughSeq;
 		/** activity ("" for the all-activities firehose) -> the frame to send. */
 		private final Map<String, Frame> frames = new ConcurrentHashMap<>();
 
-		Board(long version, List<Party> visible, List<Party> hidden) {
+		Board(long version, List<Party> visible, List<Party> hidden,
+			Map<String, PartyReconciler.Tombstone> tombstones, long prunedThroughSeq) {
 			this.version = version;
 			this.visible = visible;
 			this.hidden = hidden;
+			this.tombstones = tombstones;
+			this.prunedThroughSeq = prunedThroughSeq;
+		}
+
+		/** The highest revision anything on this board carries — what a client should resume from next. */
+		long headSeq() {
+			long head = prunedThroughSeq;
+			for (Party party : visible) {
+				head = Math.max(head, party.getSeq());
+			}
+			for (PartyReconciler.Tombstone stone : tombstones.values()) {
+				head = Math.max(head, stone.seq());
+			}
+			return head;
+		}
+
+		/**
+		 * What changed since {@code since}, for a client that still holds the rest, or null if it has been
+		 * away too long to be caught up and needs the board itself.
+		 */
+		Frame resume(String activity, long since, PartyBroadcaster owner) {
+			if (since <= 0 || since <= prunedThroughSeq) {
+				return null;
+			}
+			List<Party> created = new java.util.ArrayList<>();
+			for (Party party : visible) {
+				if (party.getSeq() > since && matches(activity, party.getActivity())) {
+					created.add(party);
+				}
+			}
+			List<String> removed = new java.util.ArrayList<>();
+			for (Map.Entry<String, PartyReconciler.Tombstone> entry : tombstones.entrySet()) {
+				if (entry.getValue().seq() > since && matches(activity, entry.getValue().activity())) {
+					removed.add(entry.getKey());
+				}
+			}
+			// An empty resume is still an answer: it tells the client its board is current.
+			Batch batch = new Batch("batch", version, created.isEmpty() ? null : created, null,
+				removed.isEmpty() ? null : removed, headSeq());
+			try {
+				return new Frame(new TextMessage(owner.mapper.writeValueAsString(batch)));
+			}
+			catch (Exception e) {
+				log.warn("Failed to serialise a resume frame", e);
+				return null;
+			}
+		}
+
+		private static boolean matches(String activity, String adActivity) {
+			return activity == null || activity.isEmpty() || activity.equals(adActivity);
 		}
 
 		/** Whether this subscriber must be served a board of its own because one of its ads is hidden. */
@@ -986,7 +1064,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 					}
 				}
 				try {
-					return new Frame(new TextMessage(owner.mapper.writeValueAsString(Outbound.snapshot(version, list))));
+					return new Frame(new TextMessage(owner.mapper.writeValueAsString(
+						Outbound.snapshot(version, list, headSeq()))));
 				}
 				catch (Exception e) {
 					log.warn("Failed to serialise the shared snapshot frame", e);
@@ -1086,7 +1165,16 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		if (c.isEmpty() && u.isEmpty() && r.isEmpty()) {
 			return null;
 		}
-		Batch batch = new Batch("batch", v, c.isEmpty() ? null : c, u.isEmpty() ? null : u, r.isEmpty() ? null : r);
+		long head = 0;
+		for (Party party : c) {
+			head = Math.max(head, party.getSeq());
+		}
+		Board current = board;
+		if (current != null) {
+			head = Math.max(head, current.headSeq());
+		}
+		Batch batch = new Batch("batch", v, c.isEmpty() ? null : c, u.isEmpty() ? null : u,
+			r.isEmpty() ? null : r, head > 0 ? head : null);
 		try {
 			return new Frame(new TextMessage(mapper.writeValueAsString(batch)));
 		}
@@ -1253,74 +1341,87 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	record Inbound(String type, String activity, PartyRequest request, PartyUpdate patch, String id, String key,
 		String code, String host, Long accountHash, Boolean visible, String newKey, String name, String target,
 		/** Sent with {@code subscribe}: this client can read gzipped binary frames. Absent means it cannot. */
-		Boolean compress) {
+		Boolean compress,
+		/**
+		 * Sent with {@code subscribe} by a client that still holds a board: the revision it last applied.
+		 * Answered with the changes since, or with a whole board when it has been away too long.
+		 */
+		Long since) {
 	}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	record Outbound(String type, long version, List<Party> parties, Party party, String id, String detail,
 		Integer online, String url, String username, Long accountHash, Boolean badgesVisible, String from,
-		Boolean delivered) {
-		static Outbound snapshot(long version, List<Party> parties) {
-			return new Outbound("snapshot", version, parties, null, null, null, null, null, null, null, null, null, null);
+		Boolean delivered,
+		/** Snapshot only: the revision this board is current to, which the client offers back on resume. */
+		Long seq) {
+		static Outbound snapshot(long version, List<Party> parties, Long seq) {
+			return new Outbound("snapshot", version, parties, null, null, null, null, null, null, null, null, null, null, seq);
 		}
 
 		static Outbound hosted(long version, Party party) {
-			return new Outbound("hosted", version, null, party, null, null, null, null, null, null, null, null, null);
+			return new Outbound("hosted", version, null, party, null, null, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound gone(long version, String id) {
-			return new Outbound("gone", version, null, null, id, null, null, null, null, null, null, null, null);
+			return new Outbound("gone", version, null, null, id, null, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound error(long version, String id, String detail) {
-			return new Outbound("error", version, null, null, id, detail, null, null, null, null, null, null, null);
+			return new Outbound("error", version, null, null, id, detail, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound byCode(long version, String code, Party party) {
-			return new Outbound("byCode", version, null, party, code, null, null, null, null, null, null, null, null);
+			return new Outbound("byCode", version, null, party, code, null, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound byHost(long version, String host, Party party) {
-			return new Outbound("byHost", version, null, party, host, null, null, null, null, null, null, null, null);
+			return new Outbound("byHost", version, null, party, host, null, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound presence(long version, int online) {
-			return new Outbound("presence", version, null, null, null, null, online, null, null, null, null, null, null);
+			return new Outbound("presence", version, null, null, null, null, online, null, null, null, null, null, null, null);
 		}
 
 		static Outbound voiceChannel(long version, String id, String url) {
-			return new Outbound("voiceChannel", version, null, null, id, null, null, url, null, null, null, null, null);
+			return new Outbound("voiceChannel", version, null, null, id, null, null, url, null, null, null, null, null, null);
 		}
 
 		static Outbound discordLinkUrl(long version, String url) {
-			return new Outbound("discordLinkUrl", version, null, null, null, null, null, url, null, null, null, null, null);
+			return new Outbound("discordLinkUrl", version, null, null, null, null, null, url, null, null, null, null, null, null);
 		}
 
 		static Outbound discordLink(long version, long accountHash, String discordId, String username,
 			Boolean badgesVisible) {
 			return new Outbound("discordLink", version, null, null, discordId, null, null, null, username,
-				accountHash, badgesVisible, null, null);
+				accountHash, badgesVisible, null, null, null);
 		}
 
 		static Outbound voiceAccess(long version, String id) {
-			return new Outbound("voiceAccess", version, null, null, id, null, null, null, null, null, null, null, null);
+			return new Outbound("voiceAccess", version, null, null, id, null, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound transferred(long version, String id) {
-			return new Outbound("transferred", version, null, null, id, null, null, null, null, null, null, null, null);
+			return new Outbound("transferred", version, null, null, id, null, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound invited(long version, Party party, String from) {
-			return new Outbound("invited", version, null, party, null, null, null, null, null, null, null, from, null);
+			return new Outbound("invited", version, null, party, null, null, null, null, null, null, null, from, null, null);
 		}
 
 		static Outbound inviteAck(long version, String target, boolean delivered) {
 			return new Outbound("inviteAck", version, null, null, target, null, null, null, null, null, null, null,
-				delivered);
+				delivered, null);
 		}
 	}
 
+	/**
+	 * A tick's worth of board changes. {@code seq} is the highest revision it carries: a client stores it
+	 * and offers it back on its next {@code subscribe}, which is what lets a reconnect cost a handful of
+	 * deltas instead of the whole board.
+	 */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
-	record Batch(String type, long version, List<Party> created, List<PartyDelta> updated, List<String> removed) {
+	record Batch(String type, long version, List<Party> created, List<PartyDelta> updated,
+		List<String> removed, Long seq) {
 	}
 }

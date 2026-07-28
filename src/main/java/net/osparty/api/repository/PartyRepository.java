@@ -33,6 +33,15 @@ public interface PartyRepository {
 
 	Optional<Party> delete(String id);
 
+	/**
+	 * The next cluster-wide revision, for a change that has no advertisement left to stamp — a removal.
+	 *
+	 * <p>Ads carry their own {@link Party#getSeq()}; a deleted one carries nothing, so its tombstone needs a
+	 * number from the same sequence to be ordered against everything else a resuming client might have
+	 * missed.
+	 */
+	long nextRevision();
+
 	Optional<Party> transferHost(String id, String newHost, String newKey);
 
 	Optional<Party> attachVoiceChannel(String id, String channelId, String inviteUrl);

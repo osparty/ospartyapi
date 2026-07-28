@@ -21,6 +21,8 @@ import java.net.URI;
  */
 final class PartyV2PathFilter extends ChannelInboundHandlerAdapter {
 	private static final String WS_PATH = "/api/v2/ws/party";
+	/** The ad board, served here too so one server carries both protocols. */
+	static final String BOARD_PATH = "/api/v1/ws/parties";
 
 	@Override
 	public void channelRead(ChannelHandlerContext ctx, Object msg) {
@@ -55,7 +57,7 @@ final class PartyV2PathFilter extends ChannelInboundHandlerAdapter {
 		if (path == null) {
 			return false;
 		}
-		if (path.equals(WS_PATH)) {
+		if (path.equals(WS_PATH) || path.equals(BOARD_PATH)) {
 			return true;
 		}
 		// /n/{nodeId}/api/v2/ws/party — one segment of node id, and nothing else before the path.

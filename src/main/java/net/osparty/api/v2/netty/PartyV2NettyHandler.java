@@ -27,12 +27,18 @@ final class PartyV2NettyHandler extends SimpleChannelInboundHandler<WebSocketFra
 	private static final Logger log = LoggerFactory.getLogger(PartyV2NettyHandler.class);
 
 	private static final AttributeKey<PartySession> SESSION = AttributeKey.valueOf("partyV2Session");
+	/** Which protocol this channel speaks, decided once at the handshake from the path it arrived on. */
+	private static final AttributeKey<Boolean> BOARD = AttributeKey.valueOf("partyAdBoard");
 
 	private final PartyV2FrameHandler frames;
+	/** The ad board, served on the same server so a client needs one connection rather than two. */
+	private final net.osparty.api.web.ws.PartyBroadcaster board;
 	private final LongAdder dropped;
 
-	PartyV2NettyHandler(PartyV2FrameHandler frames, LongAdder dropped) {
+	PartyV2NettyHandler(PartyV2FrameHandler frames, net.osparty.api.web.ws.PartyBroadcaster board,
+		LongAdder dropped) {
 		this.frames = frames;
+		this.board = board;
 		this.dropped = dropped;
 	}
 
@@ -41,7 +47,18 @@ final class PartyV2NettyHandler extends SimpleChannelInboundHandler<WebSocketFra
 		if (evt instanceof WebSocketServerProtocolHandler.HandshakeComplete complete) {
 			NettyPartySession session = new NettyPartySession(ctx.channel(), complete.requestUri(), dropped);
 			ctx.channel().attr(SESSION).set(session);
-			frames.onOpen(session);
+			// The path decides which protocol this connection speaks. Both are served here so that a
+			// client can eventually hold one socket instead of two; until it does, this is simply the
+			// same two endpoints on a cheaper server.
+			boolean adBoard = complete.requestUri() != null
+				&& complete.requestUri().startsWith(PartyV2PathFilter.BOARD_PATH);
+			ctx.channel().attr(BOARD).set(adBoard);
+			if (adBoard) {
+				board.onOpen(session, clientIp(ctx));
+			}
+			else {
+				frames.onOpen(session);
+			}
 			return;
 		}
 		super.userEventTriggered(ctx, evt);
@@ -58,16 +75,32 @@ final class PartyV2NettyHandler extends SimpleChannelInboundHandler<WebSocketFra
 		ByteBuf content = frame.content();
 		byte[] payload = new byte[content.readableBytes()];
 		content.getBytes(content.readerIndex(), payload);
-		frames.onMessage(session.id(), payload);
+		if (Boolean.TRUE.equals(ctx.channel().attr(BOARD).get())) {
+			board.onMessage(session.id(), new String(payload, java.nio.charset.StandardCharsets.UTF_8));
+		}
+		else {
+			frames.onMessage(session.id(), payload);
+		}
 	}
 
 	@Override
 	public void channelInactive(ChannelHandlerContext ctx) throws Exception {
 		PartySession session = ctx.channel().attr(SESSION).getAndSet(null);
 		if (session != null) {
-			frames.onClose(session.id(), "channel inactive");
+			if (Boolean.TRUE.equals(ctx.channel().attr(BOARD).get())) {
+				board.onClose(session.id(), "channel inactive");
+			}
+			else {
+				frames.onClose(session.id(), "channel inactive");
+			}
 		}
 		super.channelInactive(ctx);
+	}
+
+	/** The peer address, which the ad board uses to rate-limit reports. */
+	private static String clientIp(ChannelHandlerContext ctx) {
+		return ctx.channel().remoteAddress() instanceof java.net.InetSocketAddress address
+			? address.getAddress().getHostAddress() : null;
 	}
 
 	@Override

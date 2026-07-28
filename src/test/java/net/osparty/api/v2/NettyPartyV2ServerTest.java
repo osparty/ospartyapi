@@ -44,7 +44,8 @@ class NettyPartyV2ServerTest {
 		manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node,
 			new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS);
 		// Port 0: an ephemeral port, so the test never collides with a real run of the service.
-		server = new NettyPartyV2Server(new PartyV2FrameHandler(manager, mapper), 0);
+		// No ad board in this test: it covers the live-party path, and the board has its own suite.
+		server = new NettyPartyV2Server(new PartyV2FrameHandler(manager, mapper), null, 0);
 		server.start();
 	}
 
@@ -100,10 +101,10 @@ class NettyPartyV2ServerTest {
 		assertThat(welcome.get("nodeId").asText()).isEqualTo("node-a");
 	}
 
-	/** This port carries the live socket and nothing else — the ad board and REST stay on the servlet one. */
+	/** This port carries the two WebSocket endpoints and nothing else; REST stays on the servlet one. */
 	@Test
 	void anyOtherPathIsRefused() {
-		assertThatThrownBy(() -> connect("/api/v1/ws/parties", new Collector()))
+		assertThatThrownBy(() -> connect("/api/v3/nope", new Collector()))
 			.isInstanceOf(Exception.class);
 	}
 

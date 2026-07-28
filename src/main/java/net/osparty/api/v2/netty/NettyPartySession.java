@@ -59,10 +59,20 @@ final class NettyPartySession implements PartySession {
 		channel.writeAndFlush(new BinaryWebSocketFrame(Unpooled.wrappedBuffer(frame)));
 	}
 
-	/** The live party never sends text; present because the ad board will once it shares this transport. */
+	/**
+	 * A genuine text frame, not bytes that happen to be UTF-8: the ad board answers clients that predate
+	 * compression, and those read text. Sending binary to one of them would be silently ignored.
+	 */
 	@Override
 	public void sendText(String json) {
-		send(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		if (!channel.isActive()) {
+			return;
+		}
+		if (!channel.isWritable()) {
+			dropped.increment();
+			return;
+		}
+		channel.writeAndFlush(new io.netty.handler.codec.http.websocketx.TextWebSocketFrame(json));
 	}
 
 	@Override

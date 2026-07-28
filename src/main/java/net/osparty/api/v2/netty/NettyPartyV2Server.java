@@ -62,6 +62,7 @@ public class NettyPartyV2Server implements SmartLifecycle {
 		new WriteBufferWaterMark(256 * 1024, 512 * 1024);
 
 	private final PartyV2FrameHandler frames;
+	private final net.osparty.api.web.ws.PartyBroadcaster board;
 	private final int port;
 	/** Live updates skipped because a client was not draining its socket. Reported at shutdown. */
 	private final LongAdder dropped = new LongAdder();
@@ -71,9 +72,10 @@ public class NettyPartyV2Server implements SmartLifecycle {
 	private volatile Channel serverChannel;
 	private volatile boolean running;
 
-	public NettyPartyV2Server(PartyV2FrameHandler frames,
+	public NettyPartyV2Server(PartyV2FrameHandler frames, net.osparty.api.web.ws.PartyBroadcaster board,
 		@Value("${app.party-v2.port:8081}") int port) {
 		this.frames = frames;
+		this.board = board;
 		this.port = port;
 	}
 
@@ -86,7 +88,7 @@ public class NettyPartyV2Server implements SmartLifecycle {
 		// Default sizing: two loops per core, each serving many connections. Sends run on the loop that owns
 		// the channel, so this is the pool the fan-out actually costs.
 		workers = new NioEventLoopGroup();
-		PartyV2NettyHandler handler = new PartyV2NettyHandler(frames, dropped);
+		PartyV2NettyHandler handler = new PartyV2NettyHandler(frames, board, dropped);
 		WebSocketServerProtocolConfig ws = WebSocketServerProtocolConfig.newBuilder()
 			// The path is checked by PartyV2PathFilter, which has to see it anyway to reject anything else:
 			// two forms are served, /api/v2/ws/party and the node-hinted /n/{nodeId}/api/v2/ws/party, and no

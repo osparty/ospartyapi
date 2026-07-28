@@ -136,23 +136,36 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 			session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT);
 		// Behind the seam from here on: the ad board no longer knows what carries its bytes, which is what
 		// lets it move onto the Netty transport and, eventually, share one connection with the live party.
-		Subscriber sub = new Subscriber(new net.osparty.api.transport.SpringPartySession(guarded),
+		onOpen(new net.osparty.api.transport.SpringPartySession(guarded),
 			(String) session.getAttributes().get(ClientAddressHandshakeInterceptor.CLIENT_IP_ATTRIBUTE));
-		subscribers.put(session.getId(), sub);
+	}
+
+	/**
+	 * A client arrived, whatever carried it here. The servlet container reaches this through
+	 * {@link #afterConnectionEstablished}; the Netty server calls it directly.
+	 */
+	public void onOpen(net.osparty.api.transport.PartySession session, String clientIp) {
+		Subscriber sub = new Subscriber(session, clientIp);
+		subscribers.put(session.id(), sub);
 		log.info("WS connected: session={} (subscribers={})",
-			session.getId(), subscribers.size());
+			session.id(), subscribers.size());
 		send(sub, Outbound.presence(version.get(), lastPresence >= 0 ? lastPresence : subscribers.size()));
 	}
 
 	@Override
 	protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-		Subscriber sub = subscribers.get(session.getId());
+		onMessage(session.getId(), message.getPayload());
+	}
+
+	/** One inbound frame, addressed by session id so neither transport has to hand over its own object. */
+	public void onMessage(String sessionId, String payload) {
+		Subscriber sub = subscribers.get(sessionId);
 		if (sub == null) {
 			return;
 		}
 		Inbound in;
 		try {
-			in = mapper.readValue(message.getPayload(), Inbound.class);
+			in = mapper.readValue(payload, Inbound.class);
 		}
 		catch (Exception e) {
 			return;
@@ -846,10 +859,15 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 
 	@Override
 	public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-		forgetIdentity(subscribers.remove(session.getId()));
-		unbind(session.getId());
+		onClose(session.getId(), String.valueOf(status));
+	}
+
+	/** The connection went away, whichever transport was carrying it. */
+	public void onClose(String sessionId, String status) {
+		forgetIdentity(subscribers.remove(sessionId));
+		unbind(sessionId);
 		log.info("WS closed: session={} status={} (subscribers={})",
-			session.getId(), status, subscribers.size());
+			sessionId, status, subscribers.size());
 	}
 
 	@Scheduled(fixedDelayString = "${app.ws.presence-interval-ms:5000}")

@@ -21,7 +21,8 @@ class PartyV2PathFilterTest {
 		// One segment of node id, not a path of them.
 		assertThat(PartyV2PathFilter.accepts("/n/a/b/api/v2/ws/party")).isFalse();
 		assertThat(PartyV2PathFilter.accepts("/api/v2/ws/party/extra")).isFalse();
-		assertThat(PartyV2PathFilter.accepts("/api/v1/ws/parties")).isFalse();
+		// The ad board is served here too, so one server carries both protocols.
+		assertThat(PartyV2PathFilter.accepts("/api/v1/ws/parties")).isTrue();
 		assertThat(PartyV2PathFilter.accepts("/")).isFalse();
 		assertThat(PartyV2PathFilter.accepts(null)).isFalse();
 	}

@@ -101,6 +101,15 @@ patches:
                       name: osparty-api
                       port:
                         name: live
+                # The ad board is served by the same Netty server now. Node-agnostic, so it goes to the
+                # round-robin Service — only the live socket needs a particular pod.
+                - path: /api/v1/ws/parties
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api
+                      port:
+                        name: live
                 - path: /n/osparty-api-0
                   pathType: Prefix
                   backend:

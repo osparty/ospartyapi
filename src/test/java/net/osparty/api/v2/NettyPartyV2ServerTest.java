@@ -1,5 +1,6 @@
 package net.osparty.api.v2;
 
+import net.osparty.api.transport.Mux;
 import net.osparty.api.transport.PartySession;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -30,6 +31,8 @@ import org.springframework.web.socket.handler.AbstractWebSocketHandler;
  * internal to the room layer.
  */
 class NettyPartyV2ServerTest {
+	/** No channel tag: a single-protocol socket, where every frame is already this collector's. */
+	private static final byte UNTAGGED = 0;
 	private static final long MEMBER_TIMEOUT_MS = 90_000L;
 	private static final long WAIT_MS = 5_000;
 
@@ -101,11 +104,44 @@ class NettyPartyV2ServerTest {
 		assertThat(welcome.get("nodeId").asText()).isEqualTo("node-a");
 	}
 
-	/** This port carries the two WebSocket endpoints and nothing else; REST stays on the servlet one. */
+	/** This port carries the WebSocket endpoints and nothing else; REST stays on the servlet one. */
 	@Test
 	void anyOtherPathIsRefused() {
 		assertThatThrownBy(() -> connect("/api/v3/nope", new Collector()))
 			.isInstanceOf(Exception.class);
+	}
+
+	/**
+	 * The merged endpoint: the same live party, reached over a connection that could equally be carrying the
+	 * ad board. Every frame is prefixed with its channel, in both directions — which is what lets a client in
+	 * a party hold one socket instead of two.
+	 *
+	 * <p>No board is wired up here, so a board-tagged frame has nowhere to go. Sending one anyway is the
+	 * point: it must be ignored rather than parsed as a live frame, since the two protocols share frame
+	 * names.
+	 */
+	@Test
+	void theMergedEndpointTagsEveryFrameWithItsChannel() throws Exception {
+		Collector out = new Collector(Mux.LIVE);
+		WebSocketSession host = connect("/api/ws", out);
+
+		// `host` means something in both protocols. Tagged for the board, it must not reach the live party.
+		host.sendMessage(tagged(Mux.BOARD,
+			"{\"type\":\"host\",\"room\":\"board\",\"hostName\":\"Nobody\",\"capacity\":3}"));
+		host.sendMessage(tagged(Mux.LIVE,
+			"{\"type\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+
+		assertThat(out.await("welcome").get("status").asText()).isEqualTo("HOST");
+		// One room, from the one frame that was addressed to the live party.
+		assertThat(out.find("error")).isNull();
+	}
+
+	/** A frame for one channel of a merged connection: the tag byte, then the JSON. */
+	private static BinaryMessage tagged(byte tag, String json) {
+		byte[] payload = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(payload.length + 1);
+		buffer.put(tag).put(payload).flip();
+		return new BinaryMessage(buffer);
 	}
 
 	private WebSocketSession connect(String path, Collector collector) throws Exception {
@@ -136,6 +172,16 @@ class NettyPartyV2ServerTest {
 	/** Collects inbound frames so a test can wait for the one it cares about. */
 	private final class Collector extends AbstractWebSocketHandler {
 		private final List<String> received = new ArrayList<>();
+		/** The channel this collector reads, or {@link #UNTAGGED} on a single-protocol socket. */
+		private final byte tag;
+
+		Collector() {
+			this(UNTAGGED);
+		}
+
+		Collector(byte tag) {
+			this.tag = tag;
+		}
 
 		/** The server sends binary (UTF-8 JSON), which is the point of the transport. */
 		@Override
@@ -143,8 +189,17 @@ class NettyPartyV2ServerTest {
 			java.nio.ByteBuffer payload = message.getPayload();
 			byte[] bytes = new byte[payload.remaining()];
 			payload.get(bytes);
+			int from = 0;
+			if (tag != UNTAGGED) {
+				// A merged connection: anything not addressed to this channel belongs to the other one.
+				if (bytes.length == 0 || bytes[0] != tag) {
+					return;
+				}
+				from = 1;
+			}
 			synchronized (received) {
-				received.add(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
+				received.add(new String(bytes, from, bytes.length - from,
+					java.nio.charset.StandardCharsets.UTF_8));
 			}
 		}
 

@@ -80,6 +80,30 @@ patches:
           - host: testing.osparty.net
             http:
               paths:
+                # The merged endpoint: one connection carrying both the live party and the ad board, so a
+                # client in a party costs the gateway one socket rather than two. Node-hinted like the live
+                # socket, because the live half of it is what has to reach a particular pod.
+                - path: /n/osparty-api-0/api/ws
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api-n0
+                      port:
+                        name: live
+                - path: /n/osparty-api-1/api/ws
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api-n1
+                      port:
+                        name: live
+                - path: /api/ws
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api
+                      port:
+                        name: live
                 - path: /n/osparty-api-0/api/v2/ws/party
                   pathType: Prefix
                   backend:

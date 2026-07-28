@@ -26,15 +26,19 @@ import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
 /**
- * Serves the Party V2 live socket from Netty, on its own port, when
+ * Serves every WebSocket this service has from Netty, on its own port, when
  * {@code app.party-v2.transport=netty}.
  *
  * <p><b>Why a second server at all.</b> Profiling put roughly half of this service's CPU inside Tomcat's
  * WebSocket send — a synchronized write path plus a per-session decorator, entered once per recipient per
  * frame (PARTY_V2_OPTIMIZATION.md §6.5.3). Nothing above the transport had to change to try the
- * alternative: rooms, ownership, placement and the protocol all sit behind {@code PartySession} and
- * {@link PartyV2FrameHandler}, so this class only carries bytes. The V1 ad board and every REST endpoint
- * stay on the servlet container's port, which is also why this is a second server rather than a migration.
+ * alternative: rooms, ownership, placement and the protocol all sit behind {@code PartySession},
+ * {@link PartyV2FrameHandler} and the ad board's own transport-neutral entry points, so this class only
+ * carries bytes. REST stays on the servlet container's port, which is why this is a second server rather
+ * than a migration.
+ *
+ * <p>Three endpoints: the live party, the ad board, and the merged one that carries both over a single
+ * connection so a client in a party costs the ingress one socket instead of two.
  *
  * <p><b>Shutdown order matters.</b> {@code PartyV2Heartbeat} drains owned rooms at
  * {@code Integer.MAX_VALUE}, and Spring stops the highest phase first — so this must sit below it, or the
@@ -90,9 +94,9 @@ public class NettyPartyV2Server implements SmartLifecycle {
 		workers = new NioEventLoopGroup();
 		PartyV2NettyHandler handler = new PartyV2NettyHandler(frames, board, dropped);
 		WebSocketServerProtocolConfig ws = WebSocketServerProtocolConfig.newBuilder()
-			// The path is checked by PartyV2PathFilter, which has to see it anyway to reject anything else:
-			// two forms are served, /api/v2/ws/party and the node-hinted /n/{nodeId}/api/v2/ws/party, and no
-			// single prefix covers both.
+			// The path is checked by PartyV2PathFilter, which has to see it anyway to reject anything else
+			// and to decide which protocols the connection carries. No single prefix covers the three
+			// endpoints plus their node-hinted /n/{nodeId} forms.
 			.websocketPath("/")
 			.checkStartsWith(true)
 			.maxFramePayloadLength(MAX_FRAME_BYTES)

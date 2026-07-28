@@ -76,6 +76,12 @@ spec:
             # Dev never talks to the prod Discord service.
             - name: DISCORD_SERVICE_URL
               value: ""
+            # The board is now driven by change events, so the sweep is a backstop rather than the
+            # mechanism: it exists for TTL expiries, which nobody can announce, and for anything a lost
+            # message dropped. At 5s every replica re-read and re-diffed every ad six times a minute
+            # whether or not anything had happened.
+            - name: APP_WS_RECONCILE_INTERVAL_MS
+              value: "30000"
             - name: APP_PARTY_V2_ENABLED
               value: "true"
             # Which server carries the live socket. Tomcat's send path measured as roughly half this

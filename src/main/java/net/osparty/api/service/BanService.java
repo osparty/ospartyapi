@@ -36,6 +36,12 @@ public class BanService {
 
 	private final BanRepository repository;
 	private volatile Snapshot snapshot = Snapshot.EMPTY;
+	/** Told when the active set actually changes, so precomputed views of the board can be rebuilt. */
+	private volatile Runnable onChange = () -> { };
+
+	public void setOnChange(Runnable onChange) {
+		this.onChange = onChange;
+	}
 
 	public BanService(BanRepository repository, MeterRegistry meterRegistry) {
 		this.repository = repository;
@@ -114,7 +120,18 @@ public class BanService {
 					hashes.add(ban.accountHash());
 				}
 			}
+			Snapshot previous = snapshot;
 			snapshot = new Snapshot(Set.copyOf(names), Set.copyOf(hashes), System.currentTimeMillis());
+			// A ban changes which ads are on the board without changing any ad, so nothing else would
+			// notice. Anything holding a precomputed view of the board has to be told.
+			if (!previous.names().equals(snapshot.names()) || !previous.hashes().equals(snapshot.hashes())) {
+				try {
+					onChange.run();
+				}
+				catch (Exception e) {
+					log.warn("Ban change listener failed", e);
+				}
+			}
 		}
 		catch (Exception e) {
 			// Keep serving the previous snapshot. See the class javadoc: erroring toward "hide

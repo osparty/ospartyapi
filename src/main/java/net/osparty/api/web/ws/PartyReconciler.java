@@ -45,19 +45,28 @@ public class PartyReconciler {
 	 */
 	private volatile Map<String, Known> lastKnown = new HashMap<>();
 
+	/** Ids announced since the last flush. A set, so a busy ad costs one read however often it changes. */
+	private final java.util.Set<String> dirty = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
 	public PartyReconciler(PartyRepository store, PartyBroadcaster broadcaster,
 		net.osparty.api.service.VoiceChannelService voice,
 		net.osparty.api.service.DiscordBadgeService badges,
-		BanService bans) {
+		BanService bans, PartyChangeBus changes) {
 		this.store = store;
 		this.broadcaster = broadcaster;
 		this.voice = voice;
 		this.badges = badges;
+		// One ad changed somewhere in the cluster: handle that ad rather than waiting for the next sweep
+		// over all of them. The sweep stays, for TTL expiries and for anything a lost message dropped.
+		changes.setListener(this::onChange);
+		// A ban changes what belongs on the board without changing any advertisement, so the board has to
+		// be recomputed when the active set moves. No ad is re-read: only visibility can have changed.
+		bans.setOnChange(this::onBansChanged);
 		this.bans = bans;
 	}
 
 	@Scheduled(fixedDelayString = "${app.ws.reconcile-interval-ms:5000}")
-	public void reconcile() {
+	public synchronized void reconcile() {
 		List<Party> current = badges.enrichParties(store.list(null));
 		Map<String, Known> currentById = new HashMap<>();
 		for (Party party : current) {
@@ -80,7 +89,11 @@ public class PartyReconciler {
 					entry.getKey(), previous.party().getActivity(), false));
 			}
 			String channelId = previous.party().getDiscordChannelId();
-			if (channelId != null) {
+			// Absent from the list is not the same as gone: list() hides private ads, so an ad that merely
+			// went private looks identical here to one that disbanded. Only the store can tell them apart,
+			// and getting it wrong destroys a voice channel with people in it — so ask, for the handful of
+			// ads that vanish in a tick.
+			if (channelId != null && store.findById(entry.getKey()).isEmpty()) {
 				voice.delete(channelId);
 			}
 		}
@@ -113,18 +126,149 @@ public class PartyReconciler {
 		}
 		broadcaster.broadcastBatch(created, updated, removed);
 
-		// Hand the board over so joiners are served from it instead of re-reading every ad from Redis,
-		// re-enriching it and re-serialising it per connect. Published after the batch so its version is
-		// the one the batch just moved to, which keeps a joiner's snapshot and the delta stream describing
-		// the same instant.
-		List<Party> visible = new ArrayList<>(current.size());
+		lastKnown = currentById;
+		publishBoard();
+	}
+
+	/**
+	 * An advertisement changed somewhere in the cluster. Note it and return: the work happens in
+	 * {@link #flushChanges()}, on the bus listener thread's behalf rather than on it.
+	 */
+	void onChange(String id) {
+		if (id != null) {
+			dirty.add(id);
+		}
+	}
+
+	/**
+	 * Apply everything announced since the last flush, as one batch.
+	 *
+	 * <p>Collecting is the point. Broadcasting each change the instant it lands turns one board event into
+	 * one send per subscriber, and sends are what this service's CPU tracks — a measured run produced one
+	 * frame per delta where the five-second sweep produced one per twenty-three. The window gets that
+	 * batching back without going back to re-reading every ad to find the few that moved.
+	 *
+	 * <p>Defaulted to the interval it replaces, so the send count and the board's latency both stay where
+	 * they were and the only thing removed is the scanning. Lowering it buys a fresher board and is paid
+	 * for in sends: at one second the same run produced four times the frames for the same information.
+	 *
+	 * <p>Shares {@code lastKnown} with the sweep, so both are serialised on this object.
+	 */
+	@Scheduled(fixedDelayString = "${app.ws.change-flush-ms:5000}")
+	public synchronized void flushChanges() {
+		if (dirty.isEmpty()) {
+			return;
+		}
+		List<String> ids = new ArrayList<>(dirty);
+		dirty.removeAll(ids);
+
+		List<Party> created = new ArrayList<>();
+		List<PartyDelta> updated = new ArrayList<>();
+		List<PartyBroadcaster.RemovedRef> removed = new ArrayList<>();
+		for (String id : ids) {
+			applyChange(id, created, updated, removed);
+		}
+		if (!created.isEmpty() || !updated.isEmpty() || !removed.isEmpty()) {
+			broadcaster.broadcastBatch(created, updated, removed);
+		}
+		publishBoard();
+	}
+
+	/**
+	 * One announced advertisement, folded into the batch being built. Call under this object's lock.
+	 *
+	 * <p>The same diff {@link #reconcile()} performs, narrowed to a single id: same visibility rules, same
+	 * separation of existence from visibility, same voice-channel teardown on a genuine disappearance.
+	 *
+	 * <p>An id nobody here has seen and that no longer exists is not an error — it is a delete announced by
+	 * a node whose creation we never happened to observe, and there is nothing to say about it.
+	 */
+	private void applyChange(String id, List<Party> created, List<PartyDelta> updated,
+		List<PartyBroadcaster.RemovedRef> removed) {
+		Known previous = lastKnown.get(id);
+		Party party = store.findById(id).map(p -> badges.enrichParties(List.of(p)).get(0)).orElse(null);
+		if (party == null) {
+			if (previous == null) {
+				return;
+			}
+			lastKnown.remove(id);
+			if (previous.visible()) {
+				removed.add(new PartyBroadcaster.RemovedRef(id, previous.party().getActivity(), false));
+			}
+			String channelId = previous.party().getDiscordChannelId();
+			if (channelId != null) {
+				voice.delete(channelId);
+			}
+			return;
+		}
+
+		// Mirrors what the sweep's list() would include: a private ad exists but is not on the board, which
+		// is the same shape as a shadowbanned one. Recording it as visible would make the next sweep — whose
+		// list cannot see it — read it as having disappeared.
+		boolean visible = !party.isPrivateParty() && !bans.isHidden(party);
+		lastKnown.put(id, new Known(Party.copyOf(party), visible));
+		if (previous == null || (!previous.visible() && visible)) {
+			if (visible) {
+				created.add(party);
+			}
+		}
+		else if (previous.visible() && !visible) {
+			// The record still exists and its host keeps using it, so no voice teardown; the flag is what
+			// lets the broadcaster spare the host this one event.
+			removed.add(new PartyBroadcaster.RemovedRef(id, party.getActivity(), true));
+		}
+		else if (visible) {
+			PartyDelta delta = PartyDelta.diff(previous.party(), party);
+			if (delta != null) {
+				updated.add(delta);
+			}
+		}
+	}
+
+	/**
+	 * The active ban set moved: recompute visibility across what this node already knows, emit whatever
+	 * appeared or disappeared, and rebuild the board.
+	 *
+	 * <p>No advertisement is re-read — a ban changes none of them, only whether they belong on the board.
+	 */
+	synchronized void onBansChanged() {
+		List<Party> created = new ArrayList<>();
+		List<PartyBroadcaster.RemovedRef> removed = new ArrayList<>();
+		for (Map.Entry<String, Known> entry : lastKnown.entrySet()) {
+			Known previous = entry.getValue();
+			Party party = previous.party();
+			boolean visible = !party.isPrivateParty() && !bans.isHidden(party);
+			if (visible == previous.visible()) {
+				continue;
+			}
+			entry.setValue(new Known(party, visible));
+			if (visible) {
+				created.add(party);
+			}
+			else {
+				// Flagged hidden: the record still exists and its host keeps using it, so the broadcaster
+				// withholds this one event from them and no voice channel is touched.
+				removed.add(new PartyBroadcaster.RemovedRef(entry.getKey(), party.getActivity(), true));
+			}
+		}
+		if (!created.isEmpty() || !removed.isEmpty()) {
+			broadcaster.broadcastBatch(created, List.of(), removed);
+			publishBoard();
+		}
+	}
+
+	/**
+	 * Hand the current board to the broadcaster, so joiners are served from it instead of re-reading every
+	 * ad from Redis, re-enriching it and re-serialising it per connect. Called after the events it belongs
+	 * with, so a joiner's snapshot and the delta stream describe the same instant.
+	 */
+	private void publishBoard() {
+		List<Party> visible = new ArrayList<>(lastKnown.size());
 		List<Party> hidden = new ArrayList<>();
-		for (Party party : current) {
-			(currentById.get(party.getId()).visible() ? visible : hidden).add(party);
+		for (Known known : lastKnown.values()) {
+			(known.visible() ? visible : hidden).add(known.party());
 		}
 		broadcaster.publishBoard(visible, hidden);
-
-		lastKnown = currentById;
 	}
 
 	/** A party as this node last saw it, plus whether it was publicly visible at the time. */

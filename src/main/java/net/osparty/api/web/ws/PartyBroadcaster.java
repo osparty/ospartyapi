@@ -50,6 +50,8 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 	private final PresenceRegistry presence;
 	private final InviteBus inviteBus;
 	private final net.osparty.api.service.BanService bans;
+	/** Announces an ad's change to every node, so nobody has to re-scan the board to find it. */
+	private final PartyChangeBus changes;
 	/** Kill switches: both lookups are reachable by the banned host's own client. */
 	private final boolean filterByHost;
 	private final boolean filterByCode;
@@ -79,6 +81,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		PresenceRegistry presence,
 		InviteBus inviteBus,
 		net.osparty.api.service.BanService bans,
+		PartyChangeBus changes,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-host:true}")
 		boolean filterByHost,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-code:true}")
@@ -99,6 +102,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		this.presence = presence;
 		this.inviteBus = inviteBus;
 		this.bans = bans;
+		this.changes = changes;
 		this.filterByHost = filterByHost;
 		this.filterByCode = filterByCode;
 		this.reports = reports;
@@ -263,6 +267,9 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		bind(sub.session.getId(), party.getId());
 		log.info("WS host: session={} party={} host={}", sub.session.getId(), party.getId(), party.getHost());
 		send(sub, Outbound.hosted(version.get(), enriched(party)));
+		// After the host's own ack, always: the announcement puts the ad on everyone's board, and a host
+		// should learn its advertisement exists before the rest of the world does.
+		changes.publish(party.getId());
 	}
 
 	private Party enriched(Party party) {
@@ -281,6 +288,16 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		if (store.update(id, in.patch() == null ? TTL_TOUCH : in.patch()).isEmpty()) {
 			sendError(sub, id, "gone");
 			unbind(sub.session.getId());
+			return;
+		}
+		// Only a real edit is announced. A bare heartbeat changes nothing anyone can see, and at one per
+		// hosted ad per interval it would put more traffic on the bus than the sweep it exists to replace.
+		if (in.patch() != null) {
+			changes.publish(id);
+		}
+		// Only a real edit is announced. A bare heartbeat changes nothing anyone can see, and at one per
+		// hosted ad per interval it would put more traffic on the bus than the sweep it exists to replace.
+		if (in.patch() != null) {
 		}
 	}
 
@@ -324,6 +341,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		unbind(sub.session.getId());
 		log.info("WS unhost: session={} party={}", sub.session.getId(), id);
+		changes.publish(id);
 	}
 
 	private void handleTransferHost(Subscriber sub, Inbound in) {
@@ -356,6 +374,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 		log.info("WS transferHost: session={} party={} newHost={}", sub.session.getId(), id, in.host());
 		send(sub, Outbound.transferred(version.get(), id));
+		changes.publish(id);
 	}
 
 	private void handleCreateVoiceChannel(Subscriber sub, Inbound in) {
@@ -387,6 +406,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		log.info("WS voice channel: session={} party={} channel={}", sub.session.getId(), id,
 			channel.get().channelId());
 		send(sub, Outbound.voiceChannel(version.get(), id, channel.get().inviteUrl()));
+		changes.publish(id);
 	}
 
 	private void handleStartDiscordLink(Subscriber sub, Inbound in) {

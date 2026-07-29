@@ -1,0 +1,130 @@
+# Prod runs the API as a StatefulSet rather than a Deployment, because Party V2's node-hint routing needs
+# each pod to be individually addressable (PARTY_V2_MIGRATION.md §3.2, R1).
+#
+# A Deployment cannot provide that: its pods have randomly suffixed names and carry no per-pod label, so
+# there is nothing stable for a Service to select. StatefulSet pods get stable ordinal names and an
+# automatic `statefulset.kubernetes.io/pod-name` label, which is what the per-pod Services in
+# pod-services.yaml select on.
+#
+# The pod name is also the nodeId: injected below as APP_PARTY_V2_NODE_ID, stamped into pv2:owner:{room},
+# returned in redirect frames, and travelling back as /n/{nodeId}/api/ws.
+#
+# This replaces the base Deployment outright rather than patching it, so **nothing here is inherited** —
+# every environment variable the base set has to be repeated. Leaving POSTGRES_URL out is the one that
+# does not fail loudly: the datasource falls back to application.yml's localhost default and every pod
+# dies during startup on a refused connection, before it ever reaches a probe.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: osparty-api
+  labels:
+    app: osparty-api
+spec:
+  serviceName: osparty-api-hl
+  # Keep in step with pod-services.yaml and the ingress paths: static per-pod routing means a replica
+  # without a Service and a path is reachable only through the round-robin Service, so a party placed
+  # there can never be redirected to.
+  replicas: 3
+  # Both the rolling update and the initial bring-up run in parallel: there is no ordering dependency
+  # between API replicas, and OrderedReady would make a deploy three times as slow for no benefit.
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: osparty-api
+  template:
+    metadata:
+      labels:
+        app: osparty-api
+    spec:
+      # Spread across nodes so ownership failover crosses a machine boundary. DoNotSchedule, as the base
+      # Deployment had it: in prod an unspread replica is worth waiting for.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: osparty-api
+      securityContext:
+        sysctls:
+          - name: net.core.somaxconn
+            value: "65535"
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: api
+          image: ghcr.io/osparty/osparty-api:latest
+          ports:
+            - name: http
+              containerPort: 8080
+            # The Party V2 live socket and the merged endpoint, served by Netty.
+            - name: live
+              containerPort: 8081
+            - name: management
+              containerPort: 9090
+          env:
+            - name: SPRING_DATA_REDIS_HOST
+              value: redis
+            - name: SPRING_DATA_REDIS_PORT
+              value: "6379"
+            - name: POSTGRES_URL
+              value: jdbc:postgresql://postgres:5432/osparty
+            # G1 is pinned rather than left to ergonomics: the collector the JVM picks depends on how much
+            # memory and how many CPUs the container happens to see, which is not something this should
+            # hinge on. Serial's full compactions are stop-the-world and scale with the tenured gen.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:+UseG1GC -XX:MaxRAMPercentage=65.0"
+            - name: DISCORD_SERVICE_URL
+              value: http://osparty-discord:8090
+            # The board is driven by change events, so the sweep is a backstop rather than the mechanism:
+            # it exists for TTL expiries, which nobody can announce, and for anything a lost message
+            # dropped. At 5s every replica re-read and re-diffed every ad six times a minute regardless.
+            - name: APP_WS_RECONCILE_INTERVAL_MS
+              value: "30000"
+            - name: APP_PARTY_V2_ENABLED
+              value: "true"
+            # Netty carries every WebSocket on port 8081; REST stays on Tomcat's 8080. Flipping this back
+            # to "tomcat" is the rollback for Party V2 — /api/ws stops existing, clients see refused
+            # upgrades and fall back to /api/v1/ws/parties on their own. The ingress paths below keep
+            # pointing at `live`, which is then simply unserved.
+            - name: APP_PARTY_V2_TRANSPORT
+              value: "netty"
+            - name: APP_PARTY_V2_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          envFrom:
+            - secretRef:
+                name: osparty-api-env
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+          # Requests are what the scheduler places on, and the base Deployment's 250m/1Gi was a fiction:
+          # load runs measure ~0.7 cores and a 1.8 GiB working set. Believing it, the scheduler put a
+          # replica on a small node that was already overcommitted on memory limits; that pod ran out of
+          # CPU first and every symptom followed — twice the live threads, sends backing up, handshake
+          # timeouts, heartbeat renewals missing the 30s ownership TTL. Requesting honestly is the fix.
+          #
+          # 1Gi is also below the ~1792 MB threshold at which the JVM selects G1, so a pod sized there
+          # falls back to the serial collector even with the flag above competing for the decision.
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 1536Mi
+            limits:
+              memory: 2Gi

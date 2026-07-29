@@ -10,6 +10,8 @@ import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import io.netty.util.AttributeKey;
 import java.nio.charset.StandardCharsets;
+import java.util.EnumMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import net.osparty.api.transport.Mux;
 import net.osparty.api.transport.PartySession;
@@ -42,11 +44,32 @@ final class PartyV2NettyHandler extends SimpleChannelInboundHandler<WebSocketFra
 	/** The ad board, served on the same server so a client needs one connection rather than two. */
 	private final PartyBroadcaster board;
 	private final LongAdder dropped;
+	/**
+	 * Open connections per endpoint.
+	 *
+	 * <p>What decides when the single-protocol endpoints can be retired. A client picks its endpoint from
+	 * what this deployment says it can do, and released plugins update on their own schedule, so the only
+	 * honest answer to "is anyone still on the old one" is to count. Dropping them on a guess disconnects
+	 * every user who has not updated, and does it silently — they would simply stop being able to connect.
+	 */
+	private final EnumMap<Route, AtomicInteger> open = new EnumMap<>(Route.class);
 
-	PartyV2NettyHandler(PartyV2FrameHandler frames, PartyBroadcaster board, LongAdder dropped) {
+	PartyV2NettyHandler(PartyV2FrameHandler frames, PartyBroadcaster board, LongAdder dropped,
+		io.micrometer.core.instrument.MeterRegistry meters) {
 		this.frames = frames;
 		this.board = board;
 		this.dropped = dropped;
+		for (Route route : new Route[] { Route.BOARD, Route.LIVE, Route.MUX }) {
+			AtomicInteger count = new AtomicInteger();
+			open.put(route, count);
+			if (meters != null) {
+				io.micrometer.core.instrument.Gauge
+					.builder("osparty.ws.connections", count, AtomicInteger::get)
+					.description("Open WebSocket connections, by the endpoint they arrived on")
+					.tag("endpoint", route.name().toLowerCase(java.util.Locale.ROOT))
+					.register(meters);
+			}
+		}
 	}
 
 	/**
@@ -57,7 +80,7 @@ final class PartyV2NettyHandler extends SimpleChannelInboundHandler<WebSocketFra
 	 * other protocol is switched off is still a merged connection, and reading its frames as untagged would
 	 * feed the tag byte to a JSON parser.
 	 */
-	private record Conn(PartySession board, PartySession live, boolean tagged) {
+	private record Conn(PartySession board, PartySession live, boolean tagged, Route route) {
 	}
 
 	@Override
@@ -85,7 +108,8 @@ final class PartyV2NettyHandler extends SimpleChannelInboundHandler<WebSocketFra
 			liveSession = new NettyPartySession(ctx.channel(), path, dropped,
 				tagged ? Mux.LIVE : NettyPartySession.UNTAGGED, true);
 		}
-		ctx.channel().attr(CONN).set(new Conn(boardSession, liveSession, tagged));
+		ctx.channel().attr(CONN).set(new Conn(boardSession, liveSession, tagged, route));
+		open.get(route).incrementAndGet();
 		// After the attribute is set, both of them: opening a session can send, and a send on a channel whose
 		// connection is not yet recorded would be answered by a close callback that finds nothing to clean up.
 		if (boardSession != null) {
@@ -147,6 +171,10 @@ final class PartyV2NettyHandler extends SimpleChannelInboundHandler<WebSocketFra
 	public void channelInactive(ChannelHandlerContext ctx) throws Exception {
 		Conn conn = ctx.channel().attr(CONN).getAndSet(null);
 		if (conn != null) {
+			AtomicInteger count = open.get(conn.route());
+			if (count != null) {
+				count.decrementAndGet();
+			}
 			if (conn.board() != null) {
 				board.onClose(conn.board().id(), "channel inactive");
 			}

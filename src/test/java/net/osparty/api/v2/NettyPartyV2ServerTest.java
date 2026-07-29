@@ -39,6 +39,7 @@ class NettyPartyV2ServerTest {
 	private final ObjectMapper mapper = new ObjectMapper();
 	private PartyV2Manager manager;
 	private NettyPartyV2Server server;
+	private io.micrometer.core.instrument.simple.SimpleMeterRegistry meters;
 	private final List<WebSocketSession> clients = new ArrayList<>();
 
 	@BeforeEach
@@ -48,7 +49,10 @@ class NettyPartyV2ServerTest {
 			new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS);
 		// Port 0: an ephemeral port, so the test never collides with a real run of the service.
 		// No ad board in this test: it covers the live-party path, and the board has its own suite.
-		server = new NettyPartyV2Server(new PartyV2FrameHandler(manager, mapper), null, 0);
+		// A real registry rather than null: the handler registers a gauge per endpoint on construction, and
+		// that is worth exercising rather than skipping.
+		meters = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+		server = new NettyPartyV2Server(new PartyV2FrameHandler(manager, mapper), null, 0, meters);
 		server.start();
 	}
 
@@ -134,6 +138,42 @@ class NettyPartyV2ServerTest {
 		assertThat(out.await("welcome").get("status").asText()).isEqualTo("HOST");
 		// One room, from the one frame that was addressed to the live party.
 		assertThat(out.find("error")).isNull();
+	}
+
+	/**
+	 * Connections are counted by the endpoint they arrived on, which is what decides when the
+	 * single-protocol endpoints can be retired. Retiring them on a guess disconnects everyone who has not
+	 * updated, so the count has to be right in both directions — up on connect and back down on close.
+	 */
+	@Test
+	void openConnectionsAreCountedPerEndpoint() throws Exception {
+		assertThat(openOn("live")).isZero();
+		assertThat(openOn("mux")).isZero();
+
+		WebSocketSession live = connect("/api/v2/ws/party", new Collector());
+		WebSocketSession merged = connect("/api/ws", new Collector(Mux.LIVE));
+		waitForCount("live", 1);
+		waitForCount("mux", 1);
+		// The board endpoint is served by the same handler and must stay at zero while nobody uses it.
+		assertThat(openOn("board")).isZero();
+
+		live.close(CloseStatus.NORMAL);
+		waitForCount("live", 0);
+		// Closing one endpoint's connection leaves the other's alone.
+		assertThat(openOn("mux")).isEqualTo(1);
+		merged.close(CloseStatus.NORMAL);
+		waitForCount("mux", 0);
+	}
+
+	private int openOn(String endpoint) {
+		io.micrometer.core.instrument.Gauge gauge = meters.find("osparty.ws.connections")
+			.tag("endpoint", endpoint).gauge();
+		return gauge == null ? -1 : (int) gauge.value();
+	}
+
+	/** The close callback runs on the event loop, so the count settles a moment after the socket does. */
+	private void waitForCount(String endpoint, int expected) throws Exception {
+		waitFor(() -> openOn(endpoint) == expected ? mapper.createObjectNode() : null);
 	}
 
 	/** A frame for one channel of a merged connection: the tag byte, then the JSON. */

@@ -131,8 +131,11 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
           ENVIRONMENT: ${{ github.event.inputs.environment }}
           NAMESPACE: ${{ github.event.inputs.environment == 'dev' && 'osparty-dev' || 'osparty' }}
-          # Dev runs the API as a StatefulSet so its pods are individually routable (node-hint routing).
-          WORKLOAD: ${{ github.event.inputs.environment == 'dev' && 'statefulset/osparty-api' || 'deployment/osparty-api' }}
+          # Both environments run the API as a StatefulSet, so its pods are individually routable —
+          # node-hint routing needs a stable per-pod name, which a Deployment cannot give
+          # (PARTY_V2_MIGRATION.md §3.2). Prod was a Deployment until the topology migration; leaving
+          # this conditional would fail `rollout status` on every prod deploy after it.
+          WORKLOAD: statefulset/osparty-api
         with:
           host: ${{ secrets.API_SERVER_ADDRESS }}
           username: ${{ secrets.SSH_USER }}

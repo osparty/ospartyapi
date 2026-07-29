@@ -1,985 +1,1239 @@
 {
- "annotations": {
-  "list": []
- },
- "editable": true,
- "graphTooltip": 1,
- "schemaVersion": 39,
- "title": "OSParty API",
- "uid": "osparty-api",
- "tags": [
-  "osparty"
- ],
- "time": {
-  "from": "now-3h",
-  "to": "now"
- },
- "refresh": "30s",
- "templating": {
-  "list": []
- },
- "panels": [
-  {
-   "type": "row",
-   "title": "Overview",
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 0
-   }
+  "annotations": {
+    "list": []
   },
-  {
-   "type": "stat",
-   "title": "Active socket connections (fleet)",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 6,
-    "w": 6,
-    "x": 0,
-    "y": 1
-   },
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "thresholds"
-     },
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       }
-      ]
-     }
-    }
-   },
-   "options": {
-    "colorMode": "value",
-    "graphMode": "area",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    }
-   },
-   "targets": [
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "title": "OSParty API",
+  "uid": "osparty-api",
+  "tags": [
+    "osparty"
+  ],
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "templating": {
+    "list": []
+  },
+  "panels": [
     {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum(osparty_ws_connections_active{namespace=\"osparty\",application=\"osrs-party-api\"})",
-     "legendFormat": "connections"
-    }
-   ]
-  },
-  {
-   "type": "stat",
-   "title": "JVM heap used %",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 6,
-    "w": 6,
-    "x": 6,
-    "y": 1
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "percent",
-     "color": {
-      "mode": "thresholds"
-     },
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       },
-       {
-        "color": "yellow",
-        "value": 75
-       },
-       {
-        "color": "red",
-        "value": 90
-       }
-      ]
-     }
-    }
-   },
-   "options": {
-    "colorMode": "value",
-    "graphMode": "area",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "100 * sum(jvm_memory_used_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"}) / sum(jvm_memory_max_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"})",
-     "legendFormat": "heap %"
-    }
-   ]
-  },
-  {
-   "type": "stat",
-   "title": "Redis avg command latency",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 6,
-    "w": 6,
-    "x": 12,
-    "y": 1
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "s",
-     "color": {
-      "mode": "thresholds"
-     },
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       },
-       {
-        "color": "yellow",
-        "value": 0.005
-       },
-       {
-        "color": "red",
-        "value": 0.02
-       }
-      ]
-     }
-    }
-   },
-   "options": {
-    "colorMode": "value",
-    "graphMode": "area",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum(rate(lettuce_command_completion_seconds_sum{namespace=\"osparty\",application=\"osrs-party-api\"}[5m])) / sum(rate(lettuce_command_completion_seconds_count{namespace=\"osparty\",application=\"osrs-party-api\"}[5m]))",
-     "legendFormat": "avg latency"
-    }
-   ]
-  },
-  {
-   "type": "stat",
-   "title": "Redis ops/sec (server)",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 6,
-    "w": 6,
-    "x": 18,
-    "y": 1
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "ops",
-     "color": {
-      "mode": "thresholds"
-     },
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       }
-      ]
-     }
-    }
-   },
-   "options": {
-    "colorMode": "value",
-    "graphMode": "area",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum(rate(redis_commands_processed_total{namespace=\"osparty\"}[5m]))",
-     "legendFormat": "ops/sec"
-    }
-   ]
-  },
-  {
-   "type": "row",
-   "title": "Per node",
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 7
-   }
-  },
-  {
-   "type": "stat",
-   "title": "API pods up",
-   "description": "Number of osparty-api scrape targets Prometheus sees as UP (expect 3 pods, spread over api01/api02/api03).",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 6,
-    "x": 0,
-    "y": 8
-   },
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "thresholds"
-     },
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "red",
-        "value": null
-       },
-       {
-        "color": "yellow",
-        "value": 1
-       },
-       {
-        "color": "green",
-        "value": 3
-       }
-      ]
-     }
-    }
-   },
-   "options": {
-    "colorMode": "value",
-    "graphMode": "none",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum(up{job=\"osparty-api\",namespace=\"osparty\"})",
-     "legendFormat": "up"
-    }
-   ]
-  },
-  {
-   "type": "timeseries",
-   "title": "Socket connections per node",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 9,
-    "x": 6,
-    "y": 8
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 20,
-      "stacking": {
-       "mode": "normal"
+      "type": "row",
+      "title": "Overview",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
       }
-     }
-    }
-   },
-   "targets": [
+    },
     {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum by (node) (osparty_ws_connections_active{namespace=\"osparty\",application=\"osrs-party-api\"})",
-     "legendFormat": "OSParty API ({{node}})"
-    }
-   ]
-  },
-  {
-   "type": "timeseries",
-   "title": "JVM heap used % per node",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 9,
-    "x": 15,
-    "y": 8
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "percent",
-     "min": 0,
-     "max": 100,
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 10
-     },
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       },
-       {
-        "color": "yellow",
-        "value": 75
-       },
-       {
-        "color": "red",
-        "value": 90
-       }
+      "type": "stat",
+      "title": "Active socket connections (fleet)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(osparty_ws_connections_active{namespace=\"osparty\",application=\"osrs-party-api\"})",
+          "legendFormat": "connections"
+        }
       ]
-     }
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "100 * sum by (node) (jvm_memory_used_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"}) / sum by (node) (jvm_memory_max_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"})",
-     "legendFormat": "OSParty API ({{node}})"
-    }
-   ]
-  },
-  {
-   "type": "row",
-   "title": "JVM",
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 16
-   }
-  },
-  {
-   "type": "timeseries",
-   "title": "JVM memory (heap vs non-heap, fleet)",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 0,
-    "y": 17
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "bytes",
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 10
-     }
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum(jvm_memory_used_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"})",
-     "legendFormat": "heap used"
     },
     {
-     "refId": "B",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum(jvm_memory_used_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"nonheap\"})",
-     "legendFormat": "non-heap used"
-    },
-    {
-     "refId": "C",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum(jvm_memory_max_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"})",
-     "legendFormat": "heap max"
-    }
-   ]
-  },
-  {
-   "type": "timeseries",
-   "title": "GC pause rate & live threads per node",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 12,
-    "y": 17
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 10
-     }
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum by (node) (rate(jvm_gc_pause_seconds_sum{namespace=\"osparty\",application=\"osrs-party-api\"}[5m]))",
-     "legendFormat": "gc pause s/s — {{node}}"
-    },
-    {
-     "refId": "B",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum by (node) (jvm_threads_live_threads{namespace=\"osparty\",application=\"osrs-party-api\"})",
-     "legendFormat": "threads — {{node}}"
-    }
-   ]
-  },
-  {
-   "type": "row",
-   "title": "WebSocket & Redis",
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 25
-   }
-  },
-  {
-   "type": "timeseries",
-   "title": "Active socket connections (fleet total)",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 0,
-    "y": 26
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 20
-     }
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum(osparty_ws_connections_active{namespace=\"osparty\",application=\"osrs-party-api\"})",
-     "legendFormat": "total"
-    }
-   ]
-  },
-  {
-   "type": "timeseries",
-   "title": "Redis command latency by command (avg)",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 12,
-    "y": 26
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "s",
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 10
-     }
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum by (command) (rate(lettuce_command_completion_seconds_sum{namespace=\"osparty\",application=\"osrs-party-api\"}[5m])) / sum by (command) (rate(lettuce_command_completion_seconds_count{namespace=\"osparty\",application=\"osrs-party-api\"}[5m]))",
-     "legendFormat": "{{command}}"
-    }
-   ]
-  },
-  {
-   "type": "timeseries",
-   "title": "Redis server: memory & connected clients",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 0,
-    "y": 34
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 10
-     }
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "redis_memory_used_bytes{namespace=\"osparty\"}",
-     "legendFormat": "memory used (bytes)"
-    },
-    {
-     "refId": "B",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "redis_connected_clients{namespace=\"osparty\"}",
-     "legendFormat": "connected clients"
-    }
-   ]
-  },
-  {
-   "type": "timeseries",
-   "title": "Redis keyspace hit ratio",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 12,
-    "y": 34
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "percentunit",
-     "min": 0,
-     "max": 1,
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 10
-     }
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum(rate(redis_keyspace_hits_total{namespace=\"osparty\"}[5m])) / clamp_min(sum(rate(redis_keyspace_hits_total{namespace=\"osparty\"}[5m])) + sum(rate(redis_keyspace_misses_total{namespace=\"osparty\"}[5m])), 1)",
-     "legendFormat": "hit ratio"
-    }
-   ]
-  },
-  {
-   "type": "row",
-   "title": "Cluster health & resources",
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 42
-   }
-  },
-  {
-   "type": "stat",
-   "title": "Service status",
-   "description": "One card per running instance (instant query — only pods that exist right now). Green = Prometheus scrape succeeded, red = down. The 'API pods up' stat catches a missing replica.",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 8,
-    "x": 0,
-    "y": 43
-   },
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "thresholds"
-     },
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "red",
-        "value": null
-       },
-       {
-        "color": "green",
-        "value": 1
-       }
+      "type": "stat",
+      "title": "JVM heap used %",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "100 * sum(jvm_memory_used_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"}) / sum(jvm_memory_max_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"})",
+          "legendFormat": "heap %"
+        }
       ]
-     }
-    }
-   },
-   "options": {
-    "colorMode": "background",
-    "graphMode": "none",
-    "textMode": "name",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "up{job=\"osparty-api\",namespace=\"osparty\"}",
-     "legendFormat": "OSParty API ({{node}})",
-     "instant": true,
-     "range": false
     },
     {
-     "refId": "B",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "up{job=\"osparty-discord\"}",
-     "legendFormat": "OSParty Discord",
-     "instant": true,
-     "range": false
+      "type": "stat",
+      "title": "Redis avg command latency",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.005
+              },
+              {
+                "color": "red",
+                "value": 0.02
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(lettuce_command_completion_seconds_sum{namespace=\"osparty\",application=\"osrs-party-api\"}[5m])) / sum(rate(lettuce_command_completion_seconds_count{namespace=\"osparty\",application=\"osrs-party-api\"}[5m]))",
+          "legendFormat": "avg latency"
+        }
+      ]
     },
     {
-     "refId": "C",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "up{job=\"redis\",namespace=\"osparty\"}",
-     "legendFormat": "Redis",
-     "instant": true,
-     "range": false
-    }
-   ]
-  },
-  {
-   "type": "timeseries",
-   "title": "Host CPU busy % per server",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 8,
-    "x": 8,
-    "y": 43
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "percent",
-     "min": 0,
-     "max": 100,
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 10
-     },
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       },
-       {
-        "color": "yellow",
-        "value": 75
-       },
-       {
-        "color": "red",
-        "value": 90
-       }
+      "type": "stat",
+      "title": "Redis ops/sec (server)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(redis_commands_processed_total{namespace=\"osparty\"}[5m]))",
+          "legendFormat": "ops/sec"
+        }
       ]
-     }
-    }
-   },
-   "targets": [
+    },
     {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"}[5m])) * 100)",
-     "legendFormat": "{{instance}}"
-    }
-   ]
-  },
-  {
-   "type": "timeseries",
-   "title": "Host memory used % per server",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 8,
-    "x": 16,
-    "y": 43
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "percent",
-     "min": 0,
-     "max": 100,
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 10
-     },
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       },
-       {
-        "color": "yellow",
-        "value": 80
-       },
-       {
-        "color": "red",
-        "value": 92
-       }
+      "type": "row",
+      "title": "Party V2 & sockets",
+      "collapsed": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Rooms owned (fleet)",
+      "description": "Live rooms held across all pods. Per-pod, so summed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(osparty_partyv2_rooms_owned{namespace=\"osparty\",application=\"osrs-party-api\"})",
+          "legendFormat": "rooms"
+        }
       ]
-     }
-    }
-   },
-   "targets": [
+    },
     {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"node-exporter\"} / node_memory_MemTotal_bytes{job=\"node-exporter\"})",
-     "legendFormat": "{{instance}}"
-    }
-   ]
-  },
-  {
-   "type": "row",
-   "title": "Pods (kubelet cadvisor)",
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 51
-   }
-  },
-  {
-   "type": "timeseries",
-   "title": "Pod CPU (cores) by namespace/pod",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 12,
-    "x": 0,
-    "y": 52
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "short",
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 10
-     }
-    }
-   },
-   "targets": [
+      "type": "stat",
+      "title": "Members in rooms (fleet)",
+      "description": "Members seated in live rooms across all pods. Per-pod, so summed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(osparty_partyv2_members_connected{namespace=\"osparty\",application=\"osrs-party-api\"})",
+          "legendFormat": "members"
+        }
+      ]
+    },
     {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{job=\"kubelet\",metrics_path=\"/metrics/cadvisor\",container!=\"\",container!=\"POD\",namespace=~\"osparty|traefik|monitoring\"}[5m]))",
-     "legendFormat": "{{namespace}}/{{pod}}"
-    }
-   ]
-  },
-  {
-   "type": "timeseries",
-   "title": "Pod memory (working set) by namespace/pod",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prometheus"
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 12,
-    "x": 12,
-    "y": 52
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "bytes",
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 10
-     }
-    }
-   },
-   "targets": [
+      "type": "stat",
+      "title": "API pods up",
+      "description": "Scrape targets reporting up.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(up{job=\"osparty-api\",namespace=\"osparty\"})",
+          "legendFormat": "pods"
+        }
+      ]
+    },
     {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "prometheus"
-     },
-     "expr": "sum by (namespace, pod) (container_memory_working_set_bytes{job=\"kubelet\",metrics_path=\"/metrics/cadvisor\",container!=\"\",container!=\"POD\",namespace=~\"osparty|traefik|monitoring\"})",
-     "legendFormat": "{{namespace}}/{{pod}}"
-    }
-   ]
-  },
-  {
-   "type": "row",
-   "title": "Logs",
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 61
-   }
-  },
-  {
-   "type": "logs",
-   "title": "API + bot logs (Loki)",
-   "datasource": {
-    "type": "loki",
-    "uid": "loki"
-   },
-   "gridPos": {
-    "h": 12,
-    "w": 24,
-    "x": 0,
-    "y": 62
-   },
-   "options": {
-    "showTime": true,
-    "wrapLogMessage": true,
-    "sortOrder": "Descending",
-    "enableLogDetails": true,
-    "dedupStrategy": "none"
-   },
-   "targets": [
+      "type": "stat",
+      "title": "Active parties",
+      "description": "Advertised parties. max(), not sum(): every pod reports the same cluster-wide count read from Redis, so summing would multiply it by the replica count.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(parties_active{namespace=\"osparty\",application=\"osrs-party-api\"})",
+          "legendFormat": "parties"
+        }
+      ]
+    },
     {
-     "refId": "A",
-     "datasource": {
-      "type": "loki",
-      "uid": "loki"
-     },
-     "expr": "{namespace=\"osparty\"}"
+      "type": "timeseries",
+      "title": "Socket connections by endpoint",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Open connections by the endpoint they arrived on. `mux` is the merged socket (one connection carrying both protocols); `board` and `live` are the single-protocol endpoints kept for clients that predate it. Retiring those is safe once they sit at zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (endpoint) (osparty_ws_connections{namespace=\"osparty\",application=\"osrs-party-api\"})",
+          "legendFormat": "{{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Stale parties purged (per minute)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Advertisements removed by the age sweep -- older than app.ads.stale-purge-age-ms regardless of a live host heartbeat. A sustained rise means ads are outliving their hosts.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(stale_parties_purged_total{namespace=\"osparty\",application=\"osrs-party-api\"}[5m])) * 60",
+          "legendFormat": "purged/min"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Per node",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      }
+    },
+    {
+      "type": "stat",
+      "title": "API pods up",
+      "description": "Number of osparty-api scrape targets Prometheus sees as UP (expect 3 pods, spread over api01/api02/api03).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 3
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(up{job=\"osparty-api\",namespace=\"osparty\"})",
+          "legendFormat": "up"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Socket connections per node",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 9,
+        "x": 6,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (node) (osparty_ws_connections_active{namespace=\"osparty\",application=\"osrs-party-api\"})",
+          "legendFormat": "OSParty API ({{node}})"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "JVM heap used % per node",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 9,
+        "x": 15,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "100 * sum by (node) (jvm_memory_used_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"}) / sum by (node) (jvm_memory_max_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"})",
+          "legendFormat": "OSParty API ({{node}})"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "JVM",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "JVM memory (heap vs non-heap, fleet)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(jvm_memory_used_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"})",
+          "legendFormat": "heap used"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(jvm_memory_used_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"nonheap\"})",
+          "legendFormat": "non-heap used"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(jvm_memory_max_bytes{namespace=\"osparty\",application=\"osrs-party-api\",area=\"heap\"})",
+          "legendFormat": "heap max"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "GC pause rate & live threads per node",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (node) (rate(jvm_gc_pause_seconds_sum{namespace=\"osparty\",application=\"osrs-party-api\"}[5m]))",
+          "legendFormat": "gc pause s/s — {{node}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (node) (jvm_threads_live_threads{namespace=\"osparty\",application=\"osrs-party-api\"})",
+          "legendFormat": "threads — {{node}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "WebSocket & Redis",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Active socket connections (fleet total)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(osparty_ws_connections_active{namespace=\"osparty\",application=\"osrs-party-api\"})",
+          "legendFormat": "total"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Redis command latency by command (avg)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (command) (rate(lettuce_command_completion_seconds_sum{namespace=\"osparty\",application=\"osrs-party-api\"}[5m])) / sum by (command) (rate(lettuce_command_completion_seconds_count{namespace=\"osparty\",application=\"osrs-party-api\"}[5m]))",
+          "legendFormat": "{{command}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Redis server: memory & connected clients",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "redis_memory_used_bytes{namespace=\"osparty\"}",
+          "legendFormat": "memory used (bytes)"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "redis_connected_clients{namespace=\"osparty\"}",
+          "legendFormat": "connected clients"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Redis keyspace hit ratio",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(redis_keyspace_hits_total{namespace=\"osparty\"}[5m])) / clamp_min(sum(rate(redis_keyspace_hits_total{namespace=\"osparty\"}[5m])) + sum(rate(redis_keyspace_misses_total{namespace=\"osparty\"}[5m])), 1)",
+          "legendFormat": "hit ratio"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Cluster health & resources",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Service status",
+      "description": "One card per running instance (instant query — only pods that exist right now). Green = Prometheus scrape succeeded, red = down. The 'API pods up' stat catches a missing replica.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "up{job=\"osparty-api\",namespace=\"osparty\"}",
+          "legendFormat": "OSParty API ({{node}})",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "up{job=\"osparty-discord\"}",
+          "legendFormat": "OSParty Discord",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "up{job=\"redis\",namespace=\"osparty\"}",
+          "legendFormat": "Redis",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Host CPU busy % per server",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{job=\"node-exporter\",mode=\"idle\"}[5m])) * 100)",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Host memory used % per server",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 92
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"node-exporter\"} / node_memory_MemTotal_bytes{job=\"node-exporter\"})",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Pods (kubelet cadvisor)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 66
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Pod CPU (cores) by namespace/pod",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 67
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{job=\"kubelet\",metrics_path=\"/metrics/cadvisor\",container!=\"\",container!=\"POD\",namespace=~\"osparty|traefik|monitoring\"}[5m]))",
+          "legendFormat": "{{namespace}}/{{pod}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Pod memory (working set) by namespace/pod",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 67
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (namespace, pod) (container_memory_working_set_bytes{job=\"kubelet\",metrics_path=\"/metrics/cadvisor\",container!=\"\",container!=\"POD\",namespace=~\"osparty|traefik|monitoring\"})",
+          "legendFormat": "{{namespace}}/{{pod}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Logs",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 76
+      }
+    },
+    {
+      "type": "logs",
+      "title": "API + bot logs (Loki)",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 77
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{namespace=\"osparty\"}"
+        }
+      ]
     }
-   ]
-  }
- ],
- "description": "Production only (namespace osparty). The dev environment runs the same app and ServiceMonitors in namespace osparty-dev, so every query here is namespace-scoped or its numbers would silently include dev load. Dev has its own dashboard: osparty-api-dev."
+  ],
+  "description": "Production only (namespace osparty). The dev environment runs the same app and ServiceMonitors in namespace osparty-dev, so every query here is namespace-scoped or its numbers would silently include dev load. Dev has its own dashboard: osparty-api-dev."
 }

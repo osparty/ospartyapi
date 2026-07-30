@@ -7,7 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
-import net.osparty.api.transport.PartySession;
+import net.osparty.api.transport.SocketSession;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -910,7 +910,7 @@ class PartyProtocolTest {
 	 * needs to drive — a socket that has quietly died, and one that closes itself while being written to —
 	 * are fields rather than stubs.
 	 */
-	private static final class FakeSession implements PartySession {
+	private static final class FakeSession implements SocketSession {
 		private final String id;
 		private final List<String> out;
 		private volatile boolean open = true;
@@ -940,7 +940,7 @@ class PartyProtocolTest {
 		public void send(byte[] frame) {
 			Runnable hook = onSend;
 			if (hook != null) {
-				// Deliberately no throw: the PartySession contract says an ordinary send failure must not
+				// Deliberately no throw: the SocketSession contract says an ordinary send failure must not
 				// unwind through another member's fan-out, so a transport swallows it. What is under test
 				// is the re-entrant removal, not the exception.
 				hook.run();

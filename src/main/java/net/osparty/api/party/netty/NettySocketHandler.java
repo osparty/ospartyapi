@@ -13,21 +13,21 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import net.osparty.api.transport.Mux;
-import net.osparty.api.transport.PartySession;
+import net.osparty.api.transport.SocketSession;
 import net.osparty.api.party.PartyFrameHandler;
-import net.osparty.api.web.ws.PartyBroadcaster;
+import net.osparty.api.web.ws.BoardBroadcaster;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Bridges one Netty channel to the two protocols it carries: the live party
- * ({@link PartyFrameHandler}) and the ad board ({@link PartyBroadcaster}).
+ * ({@link PartyFrameHandler}) and the ad board ({@link BoardBroadcaster}).
  *
  * <p>Sharable: one instance serves every connection, and everything per-connection hangs off the channel.
  * The connection is built on handshake completion rather than on channel activation, because until then
  * there is no WebSocket and no request path to say whether the client named a node.
  *
- * <p>Each protocol gets its own {@link PartySession} over the shared channel, tagged so its writes are
+ * <p>Each protocol gets its own {@link SocketSession} over the shared channel, tagged so its writes are
  * distinguishable, and each inbound frame is routed by the {@link Mux} byte in front of it. Neither
  * protocol is aware of the arrangement.
  */
@@ -39,12 +39,12 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 
 	private final PartyFrameHandler frames;
 	/** The ad board, sharing every connection with the live party so a client needs one rather than two. */
-	private final PartyBroadcaster board;
+	private final BoardBroadcaster board;
 	private final LongAdder dropped;
 	/** Open connections. One endpoint now, so one number. */
 	private final AtomicInteger open = new AtomicInteger();
 
-	NettySocketHandler(PartyFrameHandler frames, PartyBroadcaster board, LongAdder dropped,
+	NettySocketHandler(PartyFrameHandler frames, BoardBroadcaster board, LongAdder dropped,
 		io.micrometer.core.instrument.MeterRegistry meters) {
 		this.frames = frames;
 		this.board = board;
@@ -64,7 +64,7 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 	 * <p>Either may be null if that protocol is switched off in this deployment. That leaves its half of the
 	 * connection unopened rather than failing the handshake, because the other half is still worth serving.
 	 */
-	private record Conn(PartySession board, PartySession live) {
+	private record Conn(SocketSession board, SocketSession live) {
 	}
 
 	@Override
@@ -76,10 +76,10 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 		String path = complete.requestUri();
 		// Not lossy: board frames are deltas, and a skipped one leaves the client quietly out of date. Live
 		// updates are, because the next one supersedes whatever was dropped.
-		PartySession boardSession = board == null ? null
-			: new NettyPartySession(ctx.channel(), path, dropped, Mux.BOARD, false);
-		PartySession liveSession = frames == null ? null
-			: new NettyPartySession(ctx.channel(), path, dropped, Mux.LIVE, true);
+		SocketSession boardSession = board == null ? null
+			: new NettySocketSession(ctx.channel(), path, dropped, Mux.BOARD, false);
+		SocketSession liveSession = frames == null ? null
+			: new NettySocketSession(ctx.channel(), path, dropped, Mux.LIVE, true);
 
 		ctx.channel().attr(CONN).set(new Conn(boardSession, liveSession));
 		open.incrementAndGet();
@@ -122,7 +122,7 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 	 * Jackson reads UTF-8 directly, and decoding first would add a pass over every frame for nothing — while
 	 * the board still parses from a String.
 	 */
-	private void dispatch(PartySession session, boolean live, byte[] payload) {
+	private void dispatch(SocketSession session, boolean live, byte[] payload) {
 		if (session == null) {
 			return;
 		}

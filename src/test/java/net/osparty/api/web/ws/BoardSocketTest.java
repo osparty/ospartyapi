@@ -22,7 +22,7 @@ import org.springframework.web.socket.WebSocketSession;
 	// Every WebSocket is served by Netty on its own port, not by the servlet container's. Zero takes an
 	// ephemeral one so the whole suite can run without colliding on 8081.
 	"app.socket.port=0"})
-class PartyWebSocketTest {
+class BoardSocketTest {
 	@Autowired
 	private net.osparty.api.party.netty.NettySocketServer socketServer;
 
@@ -37,7 +37,7 @@ class PartyWebSocketTest {
 			session.sendMessage(BoardChannel.frame("{\"type\":\"subscribe\"}"));
 
 			JsonNode snapshot = awaitWhere(messages, m -> "snapshot".equals(type(m)), "snapshot");
-			assertThat(snapshot.has("parties")).isTrue();
+			assertThat(snapshot.has("ads")).isTrue();
 
 			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-snap\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsTester\",\"description\":\"trio\","
@@ -66,9 +66,9 @@ class PartyWebSocketTest {
 				+ "{\"activity\":\"tob\",\"host\":\"WsHost\",\"capacity\":3,\"passphrase\":\"pp-host\"}}"));
 
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
-			assertThat(hosted.path("party").path("host").asText()).isEqualTo("WsHost");
-			assertThat(hosted.path("party").path("id").asText()).isNotBlank();
-			assertThat(hosted.path("party").path("inviteCode").asText()).isNotBlank();
+			assertThat(hosted.path("ad").path("host").asText()).isEqualTo("WsHost");
+			assertThat(hosted.path("ad").path("id").asText()).isNotBlank();
+			assertThat(hosted.path("ad").path("inviteCode").asText()).isNotBlank();
 
 			awaitWhere(messages,
 				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> "WsHost".equals(p.path("host").asText())),
@@ -91,7 +91,7 @@ class PartyWebSocketTest {
 				+ "{\"activity\":\"cox\",\"host\":\"WsUpdater\",\"capacity\":3,\"passphrase\":\"pp-upd\","
 				+ "\"description\":\"original\"}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
-			String id = hosted.path("party").path("id").asText();
+			String id = hosted.path("ad").path("id").asText();
 
 			awaitWhere(messages,
 				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> id.equals(p.path("id").asText())),
@@ -124,7 +124,7 @@ class PartyWebSocketTest {
 				+ "{\"activity\":\"cox\",\"host\":\"WsRoles\",\"capacity\":3,\"passphrase\":\"pp-roles\","
 				+ "\"requiredRoles\":[\"melee\",\"fill\",\"fill\"],\"hostRole\":\"melee\",\"learner\":false}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
-			String id = hosted.path("party").path("id").asText();
+			String id = hosted.path("ad").path("id").asText();
 
 			awaitWhere(messages,
 				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> id.equals(p.path("id").asText())),
@@ -159,7 +159,7 @@ class PartyWebSocketTest {
 			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-old\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsXfer\",\"capacity\":3,\"passphrase\":\"pp-xfer\"}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
-			String id = hosted.path("party").path("id").asText();
+			String id = hosted.path("ad").path("id").asText();
 			awaitWhere(messages,
 				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> id.equals(p.path("id").asText())),
 				"created for the hosted ad");
@@ -203,17 +203,17 @@ class PartyWebSocketTest {
 				+ "{\"activity\":\"toa\",\"host\":\"WsPriv\",\"capacity\":2,\"passphrase\":\"pp\","
 				+ "\"privateParty\":true}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
-			String code = hosted.path("party").path("inviteCode").asText();
+			String code = hosted.path("ad").path("inviteCode").asText();
 			assertThat(code).isNotBlank();
 
 			session.sendMessage(BoardChannel.frame("{\"type\":\"getByCode\",\"code\":\"" + code + "\"}"));
 			JsonNode found = awaitWhere(messages, m -> "byCode".equals(type(m)), "byCode hit");
-			assertThat(found.path("party").path("host").asText()).isEqualTo("WsPriv");
+			assertThat(found.path("ad").path("host").asText()).isEqualTo("WsPriv");
 
 			session.sendMessage(BoardChannel.frame("{\"type\":\"getByCode\",\"code\":\"ZZZZZZ\"}"));
 			JsonNode miss = awaitWhere(messages,
 				m -> "byCode".equals(type(m)) && "ZZZZZZ".equals(m.path("id").asText()), "byCode miss");
-			assertThat(miss.has("party")).isFalse();
+			assertThat(miss.has("ad")).isFalse();
 		}
 		finally {
 			session.close();
@@ -231,12 +231,12 @@ class PartyWebSocketTest {
 
 			session.sendMessage(BoardChannel.frame("{\"type\":\"getByHost\",\"host\":\"WsByHost\"}"));
 			JsonNode found = awaitWhere(messages, m -> "byHost".equals(type(m)), "byHost hit");
-			assertThat(found.path("party").path("host").asText()).isEqualTo("WsByHost");
+			assertThat(found.path("ad").path("host").asText()).isEqualTo("WsByHost");
 
 			session.sendMessage(BoardChannel.frame("{\"type\":\"getByHost\",\"host\":\"NobodyHere\"}"));
 			JsonNode miss = awaitWhere(messages,
 				m -> "byHost".equals(type(m)) && "NobodyHere".equals(m.path("id").asText()), "byHost miss");
-			assertThat(miss.has("party")).isFalse();
+			assertThat(miss.has("ad")).isFalse();
 		}
 		finally {
 			session.close();

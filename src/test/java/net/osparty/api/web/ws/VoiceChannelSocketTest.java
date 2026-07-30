@@ -10,7 +10,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
-import net.osparty.api.model.Party;
+import net.osparty.api.model.Advertisement;
 import net.osparty.api.service.VoiceChannelService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,16 +53,16 @@ class VoiceChannelSocketTest {
 		int creates;
 
 		@Override
-		public void rename(String channelId, Party party) {
+		public void rename(String channelId, Advertisement ad) {
 			renamed.set(channelId);
 		}
 
 		@Override
-		public synchronized Optional<VoiceChannelInfo> createForParty(Party party,
+		public synchronized Optional<VoiceChannelInfo> createForParty(Advertisement ad,
 			java.util.Collection<String> allowedDiscordIds) {
 			creates++;
-			return Optional.of(new VoiceChannelInfo("chan-" + party.getId(),
-				"https://discord.gg/stub-" + party.getId()));
+			return Optional.of(new VoiceChannelInfo("chan-" + ad.getId(),
+				"https://discord.gg/stub-" + ad.getId()));
 		}
 
 		@Override
@@ -93,7 +93,7 @@ class VoiceChannelSocketTest {
 			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-voice\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsVoice\",\"capacity\":3,\"passphrase\":\"pp-voice\"}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
-			String id = hosted.path("party").path("id").asText();
+			String id = hosted.path("ad").path("id").asText();
 
 			session.sendMessage(BoardChannel.frame("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
 			JsonNode reply = awaitWhere(messages, m -> "voiceChannel".equals(type(m)), "voiceChannel reply");
@@ -120,7 +120,7 @@ class VoiceChannelSocketTest {
 			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-xfer\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"OldHost\",\"capacity\":3,\"passphrase\":\"pp-xfer\"}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
-			String id = hosted.path("party").path("id").asText();
+			String id = hosted.path("ad").path("id").asText();
 
 			session.sendMessage(BoardChannel.frame("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
 			awaitWhere(messages, m -> "voiceChannel".equals(type(m)), "voiceChannel reply");

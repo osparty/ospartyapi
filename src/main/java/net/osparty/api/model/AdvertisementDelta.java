@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Objects;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public record PartyDelta(
+public record AdvertisementDelta(
 	String id,
 	String activity,
 	String host,
@@ -18,7 +18,7 @@ public record PartyDelta(
 	Integer capacity,
 	String lootRule,
 	Boolean ironmanOnly,
-	Boolean privateParty,
+	Boolean privateAd,
 	Integer minKillCount,
 	Integer minHardModeKillCount,
 	Integer invocation,
@@ -36,7 +36,7 @@ public record PartyDelta(
 	 */
 	String node) {
 
-	public static PartyDelta diff(Party prev, Party cur) {
+	public static AdvertisementDelta diff(Advertisement prev, Advertisement cur) {
 		String host = Objects.equals(prev.getHost(), cur.getHost()) ? null : cur.getHost();
 		Integer size = prev.getSize() != cur.getSize() ? cur.getSize() : null;
 		List<Member> members = Objects.equals(prev.getMembers(), cur.getMembers()) ? null : cur.getMembers();
@@ -49,7 +49,7 @@ public record PartyDelta(
 		Integer capacity = prev.getCapacity() != cur.getCapacity() ? cur.getCapacity() : null;
 		String lootRule = Objects.equals(prev.getLootRule(), cur.getLootRule()) ? null : cur.getLootRule();
 		Boolean ironmanOnly = prev.isIronmanOnly() != cur.isIronmanOnly() ? cur.isIronmanOnly() : null;
-		Boolean privateParty = prev.isPrivateParty() != cur.isPrivateParty() ? cur.isPrivateParty() : null;
+		Boolean privateAd = prev.isPrivateAd() != cur.isPrivateAd() ? cur.isPrivateAd() : null;
 		Integer minKillCount = prev.getMinKillCount() != cur.getMinKillCount() ? cur.getMinKillCount() : null;
 		Integer minHardModeKillCount =
 			prev.getMinHardModeKillCount() != cur.getMinHardModeKillCount() ? cur.getMinHardModeKillCount() : null;
@@ -64,14 +64,14 @@ public record PartyDelta(
 		String node = Objects.equals(prev.getNode(), cur.getNode()) ? null : cur.getNode();
 
 		if (host == null && size == null && members == null && world == null && layout == null && neededRoles == null
-			&& description == null && capacity == null && lootRule == null && ironmanOnly == null && privateParty == null
+			&& description == null && capacity == null && lootRule == null && ironmanOnly == null && privateAd == null
 			&& minKillCount == null && minHardModeKillCount == null && invocation == null && hardMode == null
 			&& coxScale == null && requiredRoles == null && hostRole == null && learner == null && teacher == null
 			&& node == null) {
 			return null;
 		}
-		return new PartyDelta(cur.getId(), cur.getActivity(), host, size, members, world, layout, neededRoles, description,
-			capacity, lootRule, ironmanOnly, privateParty, minKillCount, minHardModeKillCount, invocation, hardMode,
+		return new AdvertisementDelta(cur.getId(), cur.getActivity(), host, size, members, world, layout, neededRoles, description,
+			capacity, lootRule, ironmanOnly, privateAd, minKillCount, minHardModeKillCount, invocation, hardMode,
 			coxScale, requiredRoles, hostRole, learner, teacher, node);
 	}
 }

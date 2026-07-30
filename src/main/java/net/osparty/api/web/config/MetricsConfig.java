@@ -7,7 +7,7 @@ import io.lettuce.core.resource.DefaultClientResources;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.binder.MeterBinder;
-import net.osparty.api.web.ws.PartyBroadcaster;
+import net.osparty.api.web.ws.BoardBroadcaster;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.autoconfigure.metrics.MeterRegistryCustomizer;
@@ -31,11 +31,11 @@ public class MetricsConfig {
 	}
 
 	@Bean
-	MeterBinder websocketConnectionsGauge(ObjectProvider<PartyBroadcaster> broadcaster) {
+	MeterBinder websocketConnectionsGauge(ObjectProvider<BoardBroadcaster> broadcaster) {
 		return registry -> {
-			PartyBroadcaster b = broadcaster.getIfAvailable();
+			BoardBroadcaster b = broadcaster.getIfAvailable();
 			if (b != null) {
-				Gauge.builder("osparty.ws.connections.active", b, PartyBroadcaster::activeConnections)
+				Gauge.builder("osparty.ws.connections.active", b, BoardBroadcaster::activeConnections)
 					.description("Currently connected WebSocket clients")
 					.register(registry);
 			}

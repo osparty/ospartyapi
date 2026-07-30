@@ -1,16 +1,16 @@
 package net.osparty.api.service;
 
-import net.osparty.api.model.Party;
+import net.osparty.api.model.Advertisement;
 import java.util.Optional;
 
 public class DisabledVoiceChannelService implements VoiceChannelService {
 	@Override
-	public Optional<VoiceChannelInfo> createForParty(Party party, java.util.Collection<String> allowedDiscordIds) {
+	public Optional<VoiceChannelInfo> createForParty(Advertisement ad, java.util.Collection<String> allowedDiscordIds) {
 		return Optional.empty();
 	}
 
 	@Override
-	public void rename(String channelId, Party party) {
+	public void rename(String channelId, Advertisement ad) {
 	}
 
 	@Override

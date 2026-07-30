@@ -4,14 +4,14 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
-import net.osparty.api.repository.PartyRepository;
-import net.osparty.api.repository.PartyRepository.Authorization;
-import net.osparty.api.model.Party;
-import net.osparty.api.model.PartyDelta;
-import net.osparty.api.model.PartyRequest;
-import net.osparty.api.model.PartyUpdate;
+import net.osparty.api.repository.AdvertisementRepository;
+import net.osparty.api.repository.AdvertisementRepository.Authorization;
+import net.osparty.api.model.Advertisement;
+import net.osparty.api.model.AdvertisementDelta;
+import net.osparty.api.model.AdvertisementRequest;
+import net.osparty.api.model.AdvertisementUpdate;
 import net.osparty.api.service.DiscordLinkService;
-import net.osparty.api.service.PartyFactory;
+import net.osparty.api.service.AdvertisementFactory;
 import net.osparty.api.service.ReportRateLimiter;
 import net.osparty.api.service.VoiceChannelService;
 import java.util.List;
@@ -27,12 +27,12 @@ import org.springframework.stereotype.Component;
 
 @Component
 @ConditionalOnProperty(name = "app.ws.enabled", havingValue = "true", matchIfMissing = true)
-public class PartyBroadcaster {
-	private static final Logger log = LoggerFactory.getLogger(PartyBroadcaster.class);
+public class BoardBroadcaster {
+	private static final Logger log = LoggerFactory.getLogger(BoardBroadcaster.class);
 
-	private static final PartyUpdate TTL_TOUCH = new PartyUpdate();
+	private static final AdvertisementUpdate TTL_TOUCH = new AdvertisementUpdate();
 
-	private final PartyRepository store;
+	private final AdvertisementRepository store;
 	private final ObjectMapper mapper;
 	private final net.osparty.api.service.VoiceChannelService voice;
 	private final net.osparty.api.service.DiscordLinkService discordLinks;
@@ -41,7 +41,7 @@ public class PartyBroadcaster {
 	private final InviteBus inviteBus;
 	private final net.osparty.api.service.BanService bans;
 	/** Announces an ad's change to every node, so nobody has to re-scan the board to find it. */
-	private final PartyChangeBus changes;
+	private final BoardChangeBus changes;
 	/** Kill switches: both lookups are reachable by the banned host's own client. */
 	private final boolean filterByHost;
 	private final boolean filterByCode;
@@ -64,14 +64,14 @@ public class PartyBroadcaster {
 	/** The board as of the last reconcile, shared by every subscriber that joins before the next one. */
 	private volatile Board board;
 
-	public PartyBroadcaster(PartyRepository store, ObjectMapper mapper,
+	public BoardBroadcaster(AdvertisementRepository store, ObjectMapper mapper,
 		net.osparty.api.service.VoiceChannelService voice,
 		net.osparty.api.service.DiscordLinkService discordLinks,
 		net.osparty.api.service.DiscordBadgeService badges,
 		PresenceRegistry presence,
 		InviteBus inviteBus,
 		net.osparty.api.service.BanService bans,
-		PartyChangeBus changes,
+		BoardChangeBus changes,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-host:true}")
 		boolean filterByHost,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-code:true}")
@@ -111,7 +111,7 @@ public class PartyBroadcaster {
 			.register(meterRegistry);
 		// Cross-node invite delivery calls back here to reach a target connected to this instance.
 		inviteBus.setLocalDelivery(this::deliverInviteLocally);
-		Gauge.builder("parties.active", store, PartyRepository::partyCount)
+		Gauge.builder("parties.active", store, AdvertisementRepository::partyCount)
 				.description("Current number of active parties")
 				.register(meterRegistry);
 	}
@@ -125,7 +125,7 @@ public class PartyBroadcaster {
 	 * because the transport is the only thing that can see the peer address, and the report rate limiter
 	 * needs it.
 	 */
-	public void onOpen(net.osparty.api.transport.PartySession session, String clientIp) {
+	public void onOpen(net.osparty.api.transport.SocketSession session, String clientIp) {
 		Subscriber sub = new Subscriber(session, clientIp);
 		subscribers.put(session.id(), sub);
 		log.info("WS connected: session={} (subscribers={})",
@@ -229,25 +229,25 @@ public class PartyBroadcaster {
 
 	private void handleGetByCode(Subscriber sub, Inbound in) {
 		String code = in.code();
-		Party party = code == null ? null : store.findByInviteCode(code).orElse(null);
-		if (filterByCode && hiddenFromViewer(sub, party)) {
-			party = null;
+		Advertisement ad = code == null ? null : store.findByInviteCode(code).orElse(null);
+		if (filterByCode && hiddenFromViewer(sub, ad)) {
+			ad = null;
 		}
-		send(sub, Outbound.byCode(version.get(), code, enriched(party)));
+		send(sub, Outbound.byCode(version.get(), code, enriched(ad)));
 	}
 
 	private void handleGetByHost(Subscriber sub, Inbound in) {
 		String host = in.host();
-		Party party = host == null ? null : store.findByHost(host).orElse(null);
-		if (filterByHost && hiddenFromViewer(sub, party)) {
-			party = null;
+		Advertisement ad = host == null ? null : store.findByHost(host).orElse(null);
+		if (filterByHost && hiddenFromViewer(sub, ad)) {
+			ad = null;
 		}
-		send(sub, Outbound.byHost(version.get(), host, enriched(party)));
+		send(sub, Outbound.byHost(version.get(), host, enriched(ad)));
 	}
 
-	/** Shadowbanned, and not this viewer's own advertisement. See {@link #isOwnParty}. */
-	private boolean hiddenFromViewer(Subscriber sub, Party party) {
-		return party != null && bans.isHidden(party) && !isOwnParty(sub, party);
+	/** Shadowbanned, and not this viewer's own advertisement. See {@link #isOwnAdvertisement}. */
+	private boolean hiddenFromViewer(Subscriber sub, Advertisement ad) {
+		return ad != null && bans.isHidden(ad) && !isOwnAdvertisement(sub, ad);
 	}
 
 	private void handleHost(Subscriber sub, Inbound in) {
@@ -255,17 +255,17 @@ public class PartyBroadcaster {
 			sendError(sub, null, "missing request");
 			return;
 		}
-		Party party = store.create(in.request(), in.key());
-		bind(sub.session.id(), party.getId());
-		log.info("WS host: session={} party={} host={}", sub.session.id(), party.getId(), party.getHost());
-		send(sub, Outbound.hosted(version.get(), enriched(party)));
+		Advertisement ad = store.create(in.request(), in.key());
+		bind(sub.session.id(), ad.getId());
+		log.info("WS host: session={} party={} host={}", sub.session.id(), ad.getId(), ad.getHost());
+		send(sub, Outbound.hosted(version.get(), enriched(ad)));
 		// After the host's own ack, always: the announcement puts the ad on everyone's board, and a host
 		// should learn its advertisement exists before the rest of the world does.
-		changes.publish(party.getId(), party.getSeq());
+		changes.publish(ad.getId(), ad.getSeq());
 	}
 
-	private Party enriched(Party party) {
-		return party == null ? null : badges.enrichParties(List.of(party)).get(0);
+	private Advertisement enriched(Advertisement ad) {
+		return ad == null ? null : badges.enrichAds(List.of(ad)).get(0);
 	}
 
 	private void handleUpdate(Subscriber sub, Inbound in) {
@@ -277,7 +277,7 @@ public class PartyBroadcaster {
 		if (!authorizeWrite(sub, id, in.key())) {
 			return;
 		}
-		Optional<Party> updated = store.update(id, in.patch() == null ? TTL_TOUCH : in.patch());
+		Optional<Advertisement> updated = store.update(id, in.patch() == null ? TTL_TOUCH : in.patch());
 		if (updated.isEmpty()) {
 			sendError(sub, id, "gone");
 			unbind(sub.session.id());
@@ -309,14 +309,14 @@ public class PartyBroadcaster {
 			sendError(sub, id, "forbidden");
 			return;
 		}
-		Optional<Party> party = store.update(id, TTL_TOUCH);
-		if (party.isEmpty()) {
+		Optional<Advertisement> ad = store.update(id, TTL_TOUCH);
+		if (ad.isEmpty()) {
 			send(sub, Outbound.gone(version.get(), id));
 			return;
 		}
 		bind(sub.session.id(), id);
 		log.info("WS resume: session={} party={}", sub.session.id(), id);
-		send(sub, Outbound.hosted(version.get(), enriched(party.get())));
+		send(sub, Outbound.hosted(version.get(), enriched(ad.get())));
 	}
 
 	private void handleUnhost(Subscriber sub, Inbound in) {
@@ -328,7 +328,7 @@ public class PartyBroadcaster {
 		if (!authorizeWrite(sub, id, in.key())) {
 			return;
 		}
-		Party deleted = store.delete(id).orElse(null);
+		Advertisement deleted = store.delete(id).orElse(null);
 		if (deleted != null && deleted.getDiscordChannelId() != null) {
 			voice.delete(deleted.getDiscordChannelId());
 		}
@@ -356,20 +356,20 @@ public class PartyBroadcaster {
 		if (!authorizeWrite(sub, id, in.key())) {
 			return;
 		}
-		Optional<Party> party = store.transferHost(id, in.host(), in.newKey());
-		if (party.isEmpty()) {
+		Optional<Advertisement> ad = store.transferHost(id, in.host(), in.newKey());
+		if (ad.isEmpty()) {
 			sendError(sub, id, "gone");
 			unbind(sub.session.id());
 			return;
 		}
 		unbind(sub.session.id());
 		// The Discord channel name embeds the host, so rename it to match the new host (best-effort).
-		if (party.get().getDiscordChannelId() != null) {
-			voice.rename(party.get().getDiscordChannelId(), party.get());
+		if (ad.get().getDiscordChannelId() != null) {
+			voice.rename(ad.get().getDiscordChannelId(), ad.get());
 		}
 		log.info("WS transferHost: session={} party={} newHost={}", sub.session.id(), id, in.host());
 		send(sub, Outbound.transferred(version.get(), id));
-		changes.publish(id, party.get().getSeq());
+		changes.publish(id, ad.get().getSeq());
 	}
 
 	private void handleCreateVoiceChannel(Subscriber sub, Inbound in) {
@@ -381,18 +381,18 @@ public class PartyBroadcaster {
 		if (!authorizeWrite(sub, id, in.key())) {
 			return;
 		}
-		Party party = store.findById(id).orElse(null);
-		if (party == null) {
+		Advertisement ad = store.findById(id).orElse(null);
+		if (ad == null) {
 			sendError(sub, id, "gone");
 			unbind(sub.session.id());
 			return;
 		}
-		if (party.getDiscordInviteUrl() != null) {
-			send(sub, Outbound.voiceChannel(version.get(), id, party.getDiscordInviteUrl()));
+		if (ad.getDiscordInviteUrl() != null) {
+			send(sub, Outbound.voiceChannel(version.get(), id, ad.getDiscordInviteUrl()));
 			return;
 		}
 		Optional<VoiceChannelService.VoiceChannelInfo> channel =
-			voice.createForParty(party, linkedDiscordIds(party));
+			voice.createForParty(ad, linkedDiscordIds(ad));
 		if (channel.isEmpty()) {
 			sendError(sub, id, "voice unavailable");
 			return;
@@ -401,7 +401,7 @@ public class PartyBroadcaster {
 		log.info("WS voice channel: session={} party={} channel={}", sub.session.id(), id,
 			channel.get().channelId());
 		send(sub, Outbound.voiceChannel(version.get(), id, channel.get().inviteUrl()));
-		changes.publish(id, store.findById(id).map(Party::getSeq).orElse(0L));
+		changes.publish(id, store.findById(id).map(Advertisement::getSeq).orElse(0L));
 	}
 
 	private void handleStartDiscordLink(Subscriber sub, Inbound in) {
@@ -454,10 +454,10 @@ public class PartyBroadcaster {
 			link == null ? null : link.discordId(), link == null ? null : link.username(), in.visible()));
 	}
 
-	private List<String> linkedDiscordIds(Party party) {
+	private List<String> linkedDiscordIds(Advertisement ad) {
 		List<String> ids = new java.util.ArrayList<>();
-		if (party.getMembers() != null) {
-			for (net.osparty.api.model.Member member : party.getMembers()) {
+		if (ad.getMembers() != null) {
+			for (net.osparty.api.model.Member member : ad.getMembers()) {
 				if (member.getAccountHash() != 0) {
 					discordLinks.discordIdForAccountHash(member.getAccountHash()).ifPresent(ids::add);
 				}
@@ -476,12 +476,12 @@ public class PartyBroadcaster {
 			sendError(sub, id, "missing accountHash");
 			return;
 		}
-		Party party = store.findById(id).orElse(null);
-		if (party == null || party.getDiscordChannelId() == null) {
+		Advertisement ad = store.findById(id).orElse(null);
+		if (ad == null || ad.getDiscordChannelId() == null) {
 			sendError(sub, id, "no channel");
 			return;
 		}
-		boolean inParty = party.getMembers() != null && party.getMembers().stream()
+		boolean inParty = ad.getMembers() != null && ad.getMembers().stream()
 			.anyMatch(m -> m.getAccountHash() == in.accountHash());
 		if (!inParty) {
 			sendError(sub, id, "not in party");
@@ -492,7 +492,7 @@ public class PartyBroadcaster {
 			sendError(sub, id, "not linked");
 			return;
 		}
-		if (!voice.grantAccess(party.getDiscordChannelId(), discordId)) {
+		if (!voice.grantAccess(ad.getDiscordChannelId(), discordId)) {
 			sendError(sub, id, "voice access failed");
 			return;
 		}
@@ -538,17 +538,17 @@ public class PartyBroadcaster {
 			sendError(sub, id, "missing target");
 			return;
 		}
-		Party party = store.findById(id).orElse(null);
-		if (party == null) {
+		Advertisement ad = store.findById(id).orElse(null);
+		if (ad == null) {
 			// The party vanished (TTL/disband) between opening the menu and inviting; report as not delivered.
 			send(sub, Outbound.inviteAck(version.get(), in.target(), false));
 			return;
 		}
-		if (!senderInParty(party, in)) {
+		if (!senderInAdvertisement(ad, in)) {
 			sendError(sub, id, "not in party");
 			return;
 		}
-		if (memberByName(party, target) != null) {
+		if (memberByName(ad, target) != null) {
 			// They joined between the menu opening and the invite; nothing to deliver.
 			send(sub, Outbound.inviteAck(version.get(), in.target(), false));
 			return;
@@ -557,15 +557,15 @@ public class PartyBroadcaster {
 		// players by name. Keyed on the party's host rather than the sender, so a banned host
 		// cannot route around it by asking a party-mate to send the invites for them. The ack
 		// claims delivery, because an invite that visibly fails is a ban notification.
-		if (bans.isHidden(party)) {
+		if (bans.isHidden(ad)) {
 			log.info("WS invite suppressed (host banned): party={} target={}", id, target);
 			send(sub, Outbound.inviteAck(version.get(), in.target(), true));
 			return;
 		}
-		String from = (in.name() == null || in.name().isBlank()) ? party.getHost() : in.name();
+		String from = (in.name() == null || in.name().isBlank()) ? ad.getHost() : in.name();
 		String frame;
 		try {
-			frame = mapper.writeValueAsString(Outbound.invited(version.get(), enriched(party), from));
+			frame = mapper.writeValueAsString(Outbound.invited(version.get(), enriched(ad), from));
 		}
 		catch (Exception e) {
 			sendError(sub, id, "invite failed");
@@ -603,24 +603,24 @@ public class PartyBroadcaster {
 		// party, and the cap is enforced before that. Recording ids up front would let a client
 		// grow this set without bound by reporting made-up ids, turning a rate limit into a memory
 		// leak.
-		if (sub.reportedPartyIds.contains(id)) {
+		if (sub.reportedAdIds.contains(id)) {
 			reportSuppressed("duplicate-session");
 			return;
 		}
-		if (sub.reportedPartyIds.size() >= reportsPerSession) {
+		if (sub.reportedAdIds.size() >= reportsPerSession) {
 			reportSuppressed("session-cap");
 			return;
 		}
-		Party party = store.findById(id).orElse(null);
-		if (party == null) {
+		Advertisement ad = store.findById(id).orElse(null);
+		if (ad == null) {
 			reportSuppressed("unknown-party");
 			return;
 		}
-		if (isOwnParty(sub, party)) {
+		if (isOwnAdvertisement(sub, ad)) {
 			reportSuppressed("self-report");
 			return;
 		}
-		if (bans.isHidden(party)) {
+		if (bans.isHidden(ad)) {
 			// Already handled; re-reporting a banned host would just re-notify moderators.
 			reportSuppressed("already-banned");
 			return;
@@ -632,10 +632,10 @@ public class PartyBroadcaster {
 			reportSuppressed("ip-cap");
 			return;
 		}
-		sub.reportedPartyIds.add(id);
+		sub.reportedAdIds.add(id);
 		reportsReceived.increment();
 
-		String normalizedHost = normalizeName(party.getHost());
+		String normalizedHost = normalizeName(ad.getHost());
 		String fingerprint = sub.accountHash != null ? "a:" + sub.accountHash
 			: (sub.name != null ? "n:" + sub.name : "s:" + sub.session.id());
 		ReportRateLimiter.Decision decision =
@@ -643,14 +643,14 @@ public class PartyBroadcaster {
 
 		long reportId;
 		try {
-			reportId = reports.insert(buildReport(sub, party, normalizedHost, rateLimiter.hash(clientIp)));
+			reportId = reports.insert(buildReport(sub, ad, normalizedHost, rateLimiter.hash(clientIp)));
 		}
 		catch (Exception e) {
 			log.warn("Failed to record report for party {}: {}", id, e.toString());
 			return;
 		}
 		log.info("WS report: session={} party={} host={} distinctReporters={} notify={} reason={}",
-			sub.session.id(), id, party.getHost(), decision.distinctReporters(),
+			sub.session.id(), id, ad.getHost(), decision.distinctReporters(),
 			decision.shouldNotify(), decision.reason());
 
 		if (!decision.shouldNotify()) {
@@ -658,29 +658,29 @@ public class PartyBroadcaster {
 			return;
 		}
 		adReports.publish(new net.osparty.api.service.AdReportService.ReviewRequest(
-				reportId, party.getHost(), party.getHostAccountHash(), party.getActivity(),
-				party.getDescription(), party.getWorld(), party.getCapacity(), party.getSize(),
-				party.getInviteCode(), sub.name, decision.distinctReporters()))
+				reportId, ad.getHost(), ad.getHostAccountHash(), ad.getActivity(),
+				ad.getDescription(), ad.getWorld(), ad.getCapacity(), ad.getSize(),
+				ad.getInviteCode(), sub.name, decision.distinctReporters()))
 			.ifPresent(posted -> {
 				reports.markNotified(reportId, posted.channelId(), posted.messageId());
 				reportsNotified.increment();
 			});
 	}
 
-	private net.osparty.api.model.AdReport buildReport(Subscriber sub, Party party,
+	private net.osparty.api.model.AdReport buildReport(Subscriber sub, Advertisement ad,
 		String normalizedHost, String ipHash) {
 		net.osparty.api.model.AdReport report = new net.osparty.api.model.AdReport();
-		report.setPartyId(party.getId());
+		report.setPartyId(ad.getId());
 		report.setHostName(normalizedHost == null ? "" : normalizedHost);
-		report.setHostNameRaw(party.getHost());
-		report.setHostAccountHash(party.getHostAccountHash() == 0 ? null : party.getHostAccountHash());
-		report.setActivity(party.getActivity());
-		report.setDescription(party.getDescription());
-		report.setWorld(party.getWorld());
-		report.setCapacity(party.getCapacity());
-		report.setPartySize(party.getSize());
-		report.setInviteCode(party.getInviteCode());
-		report.setAdSnapshot(snapshotJson(party));
+		report.setHostNameRaw(ad.getHost());
+		report.setHostAccountHash(ad.getHostAccountHash() == 0 ? null : ad.getHostAccountHash());
+		report.setActivity(ad.getActivity());
+		report.setDescription(ad.getDescription());
+		report.setWorld(ad.getWorld());
+		report.setCapacity(ad.getCapacity());
+		report.setPartySize(ad.getSize());
+		report.setInviteCode(ad.getInviteCode());
+		report.setAdSnapshot(snapshotJson(ad));
 		report.setReporterName(sub.name);
 		report.setReporterAccountHash(sub.accountHash);
 		report.setReporterSessionId(sub.session.id());
@@ -689,12 +689,12 @@ public class PartyBroadcaster {
 	}
 
 	/** The advertisement verbatim: the only surviving evidence once the 90s ad TTL elapses. */
-	private String snapshotJson(Party party) {
+	private String snapshotJson(Advertisement ad) {
 		try {
-			return mapper.writeValueAsString(party);
+			return mapper.writeValueAsString(ad);
 		}
 		catch (Exception e) {
-			log.warn("Failed to serialise ad snapshot for party {}: {}", party.getId(), e.toString());
+			log.warn("Failed to serialise ad snapshot for party {}: {}", ad.getId(), e.toString());
 			return "{}";
 		}
 	}
@@ -719,35 +719,35 @@ public class PartyBroadcaster {
 	}
 
 	/** Whether the invite sender is the party host or an admitted member (by name or accountHash). */
-	private static boolean senderInParty(Party party, Inbound in) {
+	private static boolean senderInAdvertisement(Advertisement ad, Inbound in) {
 		String senderName = normalizeName(in.name());
-		if (senderName != null && senderName.equals(normalizeName(party.getHost()))) {
+		if (senderName != null && senderName.equals(normalizeName(ad.getHost()))) {
 			return true;
 		}
-		if (party.getMembers() == null) {
+		if (ad.getMembers() == null) {
 			return false;
 		}
 		if (in.accountHash() != null && in.accountHash() != 0) {
 			long hash = in.accountHash();
-			if (party.getMembers().stream().anyMatch(m -> m.getAccountHash() == hash)) {
+			if (ad.getMembers().stream().anyMatch(m -> m.getAccountHash() == hash)) {
 				return true;
 			}
 		}
-		return senderName != null && memberByName(party, senderName) != null;
+		return senderName != null && memberByName(ad, senderName) != null;
 	}
 
-	private static net.osparty.api.model.Member memberByName(Party party, String normalizedName) {
-		if (party.getMembers() == null) {
+	private static net.osparty.api.model.Member memberByName(Advertisement ad, String normalizedName) {
+		if (ad.getMembers() == null) {
 			return null;
 		}
-		return party.getMembers().stream()
+		return ad.getMembers().stream()
 			.filter(m -> normalizedName.equals(normalizeName(m.getName())))
 			.findFirst().orElse(null);
 	}
 
 	/**
 	 * Normalise an OSRS name for identity matching, returning null rather than an empty string when
-	 * there is no usable name. Delegates to {@link PartyFactory#normalizeHost} so that socket
+	 * there is no usable name. Delegates to {@link AdvertisementFactory#normalizeHost} so that socket
 	 * identity, the Redis {@code partyhost:} index and the ban tables all key on one identity space
 	 * -- two subtly different normalisers here would mean a ban that matches the board but not a
 	 * lookup, or vice versa.
@@ -756,7 +756,7 @@ public class PartyBroadcaster {
 		if (name == null) {
 			return null;
 		}
-		String normalized = PartyFactory.normalizeHost(name);
+		String normalized = AdvertisementFactory.normalizeHost(name);
 		return normalized.isEmpty() ? null : normalized;
 	}
 
@@ -784,8 +784,8 @@ public class PartyBroadcaster {
 		if (in.accountHash() == null || in.accountHash() == 0) {
 			return;
 		}
-		Party party = store.findById(id).orElse(null);
-		if (party == null || party.getDiscordChannelId() == null) {
+		Advertisement ad = store.findById(id).orElse(null);
+		if (ad == null || ad.getDiscordChannelId() == null) {
 			log.info("kickVoiceMember party={} accountHash={}: no channel, skipping", id, in.accountHash());
 			return;
 		}
@@ -796,9 +796,9 @@ public class PartyBroadcaster {
 			return;
 		}
 		log.info("kickVoiceMember party={} accountHash={} -> revoking + disconnecting Discord user {} from channel {}",
-			id, in.accountHash(), discordId, party.getDiscordChannelId());
-		voice.revokeAccess(party.getDiscordChannelId(), discordId);
-		voice.disconnectFromChannel(party.getDiscordChannelId(), discordId);
+			id, in.accountHash(), discordId, ad.getDiscordChannelId());
+		voice.revokeAccess(ad.getDiscordChannelId(), discordId);
+		voice.disconnectFromChannel(ad.getDiscordChannelId(), discordId);
 	}
 
 	private boolean authorizeWrite(Subscriber sub, String id, String key) {
@@ -818,18 +818,18 @@ public class PartyBroadcaster {
 		return true;
 	}
 
-	private void bind(String sessionId, String partyId) {
-		hostedBy.put(sessionId, partyId);
-		String previous = ownerSession.put(partyId, sessionId);
+	private void bind(String sessionId, String adId) {
+		hostedBy.put(sessionId, adId);
+		String previous = ownerSession.put(adId, sessionId);
 		if (previous != null && !previous.equals(sessionId)) {
-			hostedBy.remove(previous, partyId);
+			hostedBy.remove(previous, adId);
 		}
 	}
 
 	private void unbind(String sessionId) {
-		String partyId = hostedBy.remove(sessionId);
-		if (partyId != null) {
-			ownerSession.remove(partyId, sessionId);
+		String adId = hostedBy.remove(sessionId);
+		if (adId != null) {
+			ownerSession.remove(adId, sessionId);
 		}
 	}
 
@@ -883,8 +883,8 @@ public class PartyBroadcaster {
 	 * @param visible what everyone may see.
 	 * @param hidden shadowbanned ads — almost always empty, and only their own hosts are shown them.
 	 */
-	void publishBoard(List<Party> visible, List<Party> hidden,
-		Map<String, PartyReconciler.Tombstone> tombstones, long prunedThroughSeq) {
+	void publishBoard(List<Advertisement> visible, List<Advertisement> hidden,
+		Map<String, BoardReconciler.Tombstone> tombstones, long prunedThroughSeq) {
 		board = new Board(version.get(), List.copyOf(visible), List.copyOf(hidden),
 			tombstones, prunedThroughSeq);
 	}
@@ -929,11 +929,11 @@ public class PartyBroadcaster {
 				return;
 			}
 		}
-		List<Party> all = badges.enrichParties(store.list(sub.activity));
-		List<Party> list = new java.util.ArrayList<>(all.size());
-		for (Party party : all) {
-			if (!bans.isHidden(party) || isOwnParty(sub, party)) {
-				list.add(party);
+		List<Advertisement> all = badges.enrichAds(store.list(sub.activity));
+		List<Advertisement> list = new java.util.ArrayList<>(all.size());
+		for (Advertisement ad : all) {
+			if (!bans.isHidden(ad) || isOwnAdvertisement(sub, ad)) {
+				list.add(ad);
 			}
 		}
 		log.debug("WS snapshot -> {} ({} of {} parties)", sub.session.id(), list.size(), all.size());
@@ -941,10 +941,10 @@ public class PartyBroadcaster {
 	}
 
 	/** The highest revision among a list of ads — what a client resumes from after a full board. */
-	private static Long headSeq(List<Party> parties) {
+	private static Long headSeq(List<Advertisement> parties) {
 		long head = 0;
-		for (Party party : parties) {
-			head = Math.max(head, party.getSeq());
+		for (Advertisement ad : parties) {
+			head = Math.max(head, ad.getSeq());
 		}
 		return head > 0 ? head : null;
 	}
@@ -957,16 +957,16 @@ public class PartyBroadcaster {
 	 */
 	private static final class Board {
 		private final long version;
-		private final List<Party> visible;
-		private final List<Party> hidden;
-		private final Map<String, PartyReconciler.Tombstone> tombstones;
+		private final List<Advertisement> visible;
+		private final List<Advertisement> hidden;
+		private final Map<String, BoardReconciler.Tombstone> tombstones;
 		/** Removals older than this are forgotten, so a client asking from before it needs the whole board. */
 		private final long prunedThroughSeq;
 		/** activity ("" for the all-activities firehose) -> the frame to send. */
 		private final Map<String, Frame> frames = new ConcurrentHashMap<>();
 
-		Board(long version, List<Party> visible, List<Party> hidden,
-			Map<String, PartyReconciler.Tombstone> tombstones, long prunedThroughSeq) {
+		Board(long version, List<Advertisement> visible, List<Advertisement> hidden,
+			Map<String, BoardReconciler.Tombstone> tombstones, long prunedThroughSeq) {
 			this.version = version;
 			this.visible = visible;
 			this.hidden = hidden;
@@ -977,10 +977,10 @@ public class PartyBroadcaster {
 		/** The highest revision anything on this board carries — what a client should resume from next. */
 		long headSeq() {
 			long head = prunedThroughSeq;
-			for (Party party : visible) {
-				head = Math.max(head, party.getSeq());
+			for (Advertisement ad : visible) {
+				head = Math.max(head, ad.getSeq());
 			}
-			for (PartyReconciler.Tombstone stone : tombstones.values()) {
+			for (BoardReconciler.Tombstone stone : tombstones.values()) {
 				head = Math.max(head, stone.seq());
 			}
 			return head;
@@ -990,18 +990,18 @@ public class PartyBroadcaster {
 		 * What changed since {@code since}, for a client that still holds the rest, or null if it has been
 		 * away too long to be caught up and needs the board itself.
 		 */
-		Frame resume(String activity, long since, PartyBroadcaster owner) {
+		Frame resume(String activity, long since, BoardBroadcaster owner) {
 			if (since <= 0 || since <= prunedThroughSeq) {
 				return null;
 			}
-			List<Party> created = new java.util.ArrayList<>();
-			for (Party party : visible) {
-				if (party.getSeq() > since && matches(activity, party.getActivity())) {
-					created.add(party);
+			List<Advertisement> created = new java.util.ArrayList<>();
+			for (Advertisement ad : visible) {
+				if (ad.getSeq() > since && matches(activity, ad.getActivity())) {
+					created.add(ad);
 				}
 			}
 			List<String> removed = new java.util.ArrayList<>();
-			for (Map.Entry<String, PartyReconciler.Tombstone> entry : tombstones.entrySet()) {
+			for (Map.Entry<String, BoardReconciler.Tombstone> entry : tombstones.entrySet()) {
 				if (entry.getValue().seq() > since && matches(activity, entry.getValue().activity())) {
 					removed.add(entry.getKey());
 				}
@@ -1023,26 +1023,26 @@ public class PartyBroadcaster {
 		}
 
 		/** Whether this subscriber must be served a board of its own because one of its ads is hidden. */
-		boolean showsOwnHidden(Subscriber sub, PartyBroadcaster owner) {
+		boolean showsOwnHidden(Subscriber sub, BoardBroadcaster owner) {
 			if (hidden.isEmpty()) {
 				return false;
 			}
-			for (Party party : hidden) {
-				if (owner.isOwnParty(sub, party)) {
+			for (Advertisement ad : hidden) {
+				if (owner.isOwnAdvertisement(sub, ad)) {
 					return true;
 				}
 			}
 			return false;
 		}
 
-		Frame frame(String activity, PartyBroadcaster owner) {
+		Frame frame(String activity, BoardBroadcaster owner) {
 			return frames.computeIfAbsent(activity == null ? "" : activity, key -> {
-				List<Party> list = visible;
+				List<Advertisement> list = visible;
 				if (!key.isEmpty()) {
 					list = new java.util.ArrayList<>();
-					for (Party party : visible) {
-						if (key.equals(party.getActivity())) {
-							list.add(party);
+					for (Advertisement ad : visible) {
+						if (key.equals(ad.getActivity())) {
+							list.add(ad);
 						}
 					}
 				}
@@ -1068,18 +1068,18 @@ public class PartyBroadcaster {
 	 * from the Party tab, where a null answer makes it disband the party and tell the user so. A
 	 * missed self-check there would turn a silent ban into a very loud one.
 	 */
-	private boolean isOwnParty(Subscriber sub, Party party) {
-		if (party == null) {
+	private boolean isOwnAdvertisement(Subscriber sub, Advertisement ad) {
+		if (ad == null) {
 			return false;
 		}
-		if (party.getId().equals(hostedBy.get(sub.session.id()))) {
+		if (ad.getId().equals(hostedBy.get(sub.session.id()))) {
 			return true;
 		}
-		if (sub.accountHash != null && party.getHostAccountHash() != 0
-			&& sub.accountHash == party.getHostAccountHash()) {
+		if (sub.accountHash != null && ad.getHostAccountHash() != 0
+			&& sub.accountHash == ad.getHostAccountHash()) {
 			return true;
 		}
-		return sub.name != null && sub.name.equals(normalizeName(party.getHost()));
+		return sub.name != null && sub.name.equals(normalizeName(ad.getHost()));
 	}
 
 	private void sendError(Subscriber sub, String id, String detail) {
@@ -1096,7 +1096,7 @@ public class PartyBroadcaster {
 	 * component is empty for everybody, so the cache collapses back to one entry per activity and
 	 * costs nothing.
 	 */
-	void broadcastBatch(List<Party> created, List<PartyDelta> updated, List<RemovedRef> removed) {
+	void broadcastBatch(List<Advertisement> created, List<AdvertisementDelta> updated, List<RemovedRef> removed) {
 		if (created.isEmpty() && updated.isEmpty() && removed.isEmpty()) {
 			return;
 		}
@@ -1132,10 +1132,10 @@ public class PartyBroadcaster {
 		}
 	}
 
-	private Frame buildBatch(long v, String activity, List<Party> created, List<PartyDelta> updated,
+	private Frame buildBatch(long v, String activity, List<Advertisement> created, List<AdvertisementDelta> updated,
 		List<RemovedRef> removed, String suppress) {
-		List<Party> c = filterCreated(created, activity);
-		List<PartyDelta> u = filterUpdated(updated, activity);
+		List<Advertisement> c = filterCreated(created, activity);
+		List<AdvertisementDelta> u = filterUpdated(updated, activity);
 		List<String> r = new java.util.ArrayList<>();
 		for (RemovedRef ref : removed) {
 			if (ref.id().equals(suppress)) {
@@ -1149,8 +1149,8 @@ public class PartyBroadcaster {
 			return null;
 		}
 		long head = 0;
-		for (Party party : c) {
-			head = Math.max(head, party.getSeq());
+		for (Advertisement ad : c) {
+			head = Math.max(head, ad.getSeq());
 		}
 		Board current = board;
 		if (current != null) {
@@ -1167,12 +1167,12 @@ public class PartyBroadcaster {
 		}
 	}
 
-	private static List<Party> filterCreated(List<Party> parties, String activity) {
+	private static List<Advertisement> filterCreated(List<Advertisement> parties, String activity) {
 		if (activity == null) {
 			return parties;
 		}
-		List<Party> out = new java.util.ArrayList<>();
-		for (Party p : parties) {
+		List<Advertisement> out = new java.util.ArrayList<>();
+		for (Advertisement p : parties) {
 			if (activity.equals(p.getActivity())) {
 				out.add(p);
 			}
@@ -1180,12 +1180,12 @@ public class PartyBroadcaster {
 		return out;
 	}
 
-	private static List<PartyDelta> filterUpdated(List<PartyDelta> deltas, String activity) {
+	private static List<AdvertisementDelta> filterUpdated(List<AdvertisementDelta> deltas, String activity) {
 		if (activity == null) {
 			return deltas;
 		}
-		List<PartyDelta> out = new java.util.ArrayList<>();
-		for (PartyDelta d : deltas) {
+		List<AdvertisementDelta> out = new java.util.ArrayList<>();
+		for (AdvertisementDelta d : deltas) {
 			if (activity.equals(d.activity())) {
 				out.add(d);
 			}
@@ -1300,7 +1300,7 @@ public class PartyBroadcaster {
 	}
 
 	private static final class Subscriber {
-		final net.osparty.api.transport.PartySession session;
+		final net.osparty.api.transport.SocketSession session;
 		/** Captured at the handshake: the seam carries frames, not the servlet's attribute bag. */
 		final String clientIp;
 		volatile boolean subscribed;
@@ -1311,15 +1311,15 @@ public class PartyBroadcaster {
 		volatile Long accountHash;
 		volatile String name;
 		/** Advertisements reported on this connection, so each is only reported once per session. */
-		final java.util.Set<String> reportedPartyIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+		final java.util.Set<String> reportedAdIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-		Subscriber(net.osparty.api.transport.PartySession session, String clientIp) {
+		Subscriber(net.osparty.api.transport.SocketSession session, String clientIp) {
 			this.clientIp = clientIp;
 			this.session = session;
 		}
 	}
 
-	record Inbound(String type, String activity, PartyRequest request, PartyUpdate patch, String id, String key,
+	record Inbound(String type, String activity, AdvertisementRequest request, AdvertisementUpdate patch, String id, String key,
 		String code, String host, Long accountHash, Boolean visible, String newKey, String name, String target,
 		/** Sent with {@code subscribe}: this client can read gzipped binary frames. Absent means it cannot. */
 		Boolean compress,
@@ -1331,17 +1331,17 @@ public class PartyBroadcaster {
 	}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)
-	record Outbound(String type, long version, List<Party> parties, Party party, String id, String detail,
+	record Outbound(String type, long version, List<Advertisement> ads, Advertisement ad, String id, String detail,
 		Integer online, String url, String username, Long accountHash, Boolean badgesVisible, String from,
 		Boolean delivered,
 		/** Snapshot only: the revision this board is current to, which the client offers back on resume. */
 		Long seq) {
-		static Outbound snapshot(long version, List<Party> parties, Long seq) {
-			return new Outbound("snapshot", version, parties, null, null, null, null, null, null, null, null, null, null, seq);
+		static Outbound snapshot(long version, List<Advertisement> ads, Long seq) {
+			return new Outbound("snapshot", version, ads, null, null, null, null, null, null, null, null, null, null, seq);
 		}
 
-		static Outbound hosted(long version, Party party) {
-			return new Outbound("hosted", version, null, party, null, null, null, null, null, null, null, null, null, null);
+		static Outbound hosted(long version, Advertisement ad) {
+			return new Outbound("hosted", version, null, ad, null, null, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound gone(long version, String id) {
@@ -1352,12 +1352,12 @@ public class PartyBroadcaster {
 			return new Outbound("error", version, null, null, id, detail, null, null, null, null, null, null, null, null);
 		}
 
-		static Outbound byCode(long version, String code, Party party) {
-			return new Outbound("byCode", version, null, party, code, null, null, null, null, null, null, null, null, null);
+		static Outbound byCode(long version, String code, Advertisement ad) {
+			return new Outbound("byCode", version, null, ad, code, null, null, null, null, null, null, null, null, null);
 		}
 
-		static Outbound byHost(long version, String host, Party party) {
-			return new Outbound("byHost", version, null, party, host, null, null, null, null, null, null, null, null, null);
+		static Outbound byHost(long version, String host, Advertisement ad) {
+			return new Outbound("byHost", version, null, ad, host, null, null, null, null, null, null, null, null, null);
 		}
 
 		static Outbound presence(long version, int online) {
@@ -1386,8 +1386,8 @@ public class PartyBroadcaster {
 			return new Outbound("transferred", version, null, null, id, null, null, null, null, null, null, null, null, null);
 		}
 
-		static Outbound invited(long version, Party party, String from) {
-			return new Outbound("invited", version, null, party, null, null, null, null, null, null, null, from, null, null);
+		static Outbound invited(long version, Advertisement ad, String from) {
+			return new Outbound("invited", version, null, ad, null, null, null, null, null, null, null, from, null, null);
 		}
 
 		static Outbound inviteAck(long version, String target, boolean delivered) {
@@ -1402,7 +1402,7 @@ public class PartyBroadcaster {
 	 * deltas instead of the whole board.
 	 */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
-	record Batch(String type, long version, List<Party> created, List<PartyDelta> updated,
+	record Batch(String type, long version, List<Advertisement> created, List<AdvertisementDelta> updated,
 		List<String> removed, Long seq) {
 	}
 }

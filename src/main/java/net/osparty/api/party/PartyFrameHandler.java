@@ -1,6 +1,6 @@
 package net.osparty.api.party;
 
-import net.osparty.api.transport.PartySession;
+import net.osparty.api.transport.SocketSession;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Map;
@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
  * The live-party protocol, with no transport in it. Decodes {@link Inbound} frames and drives the in-memory
  * {@link PartyManager}; the roster is server-authoritative (PARTY_V2_MIGRATION.md §3.1/§8).
  *
- * <p>Everything a connection means to this service lives here, behind {@link PartySession}: which room it is
+ * <p>Everything a connection means to this service lives here, behind {@link SocketSession}: which room it is
  * in, which member id it was assigned, what it claims to be called. What actually carries the bytes knows
  * nothing about any of it beyond calling {@link #onOpen}, {@link #onMessage} and {@link #onClose}.
  */
@@ -38,7 +38,7 @@ public class PartyFrameHandler {
 		this.mapper = mapper;
 	}
 
-	public void onOpen(PartySession session) {
+	public void onOpen(SocketSession session) {
 		contexts.put(session.id(), new Ctx(session));
 		log.info("Party WSconnected: session={}", session.id());
 	}
@@ -389,13 +389,13 @@ public class PartyFrameHandler {
 
 	/** Per-connection state: the session, its assigned member id, identity and current room. */
 	private static final class Ctx {
-		final PartySession session;
+		final SocketSession session;
 		volatile long memberId;
 		volatile long accountHash;
 		volatile String name;
 		volatile String roomId;
 
-		Ctx(PartySession session) {
+		Ctx(SocketSession session) {
 			this.session = session;
 		}
 	}

@@ -4,10 +4,10 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import java.util.concurrent.atomic.LongAdder;
-import net.osparty.api.transport.PartySession;
+import net.osparty.api.transport.SocketSession;
 
 /**
- * A {@link PartySession} backed by a Netty channel, tagged as one channel of the merged connection.
+ * A {@link SocketSession} backed by a Netty channel, tagged as one channel of the merged connection.
  *
  * <p>No lock and no send queue, unlike the servlet transport: every write is handed to the channel's event
  * loop, which serialises them by construction. That is most of the point of this transport — the servlet
@@ -17,7 +17,7 @@ import net.osparty.api.transport.PartySession;
  * net.osparty.api.transport.Mux} tag. Neither knows the other exists; the demultiplexer on the read side is
  * what pairs them.
  */
-final class NettyPartySession implements PartySession {
+final class NettySocketSession implements SocketSession {
 	private final Channel channel;
 	private final String id;
 	private final boolean nodeHinted;
@@ -29,7 +29,7 @@ final class NettyPartySession implements PartySession {
 	private final boolean lossy;
 	private final LongAdder dropped;
 
-	NettyPartySession(Channel channel, String path, LongAdder dropped, byte tag, boolean lossy) {
+	NettySocketSession(Channel channel, String path, LongAdder dropped, byte tag, boolean lossy) {
 		this.channel = channel;
 		// Distinct per protocol as well as per channel: the two handlers keep separate maps, and a shared id
 		// would make their log lines impossible to tell apart.

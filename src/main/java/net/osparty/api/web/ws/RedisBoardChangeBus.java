@@ -13,11 +13,11 @@ import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.stereotype.Component;
 
-/** {@link PartyChangeBus} over Redis pub/sub, the same shape as {@link RedisInviteBus}. */
+/** {@link BoardChangeBus} over Redis pub/sub, the same shape as {@link RedisInviteBus}. */
 @Component
 @Profile("!test")
-public class RedisPartyChangeBus implements PartyChangeBus {
-	private static final Logger log = LoggerFactory.getLogger(RedisPartyChangeBus.class);
+public class RedisBoardChangeBus implements BoardChangeBus {
+	private static final Logger log = LoggerFactory.getLogger(RedisBoardChangeBus.class);
 
 	private static final String CHANNEL = "osparty:ad:changed";
 
@@ -26,7 +26,7 @@ public class RedisPartyChangeBus implements PartyChangeBus {
 	private volatile BiConsumer<String, Long> listener = (id, seq) -> { };
 	private RedisMessageListenerContainer container;
 
-	public RedisPartyChangeBus(StringRedisTemplate redis, RedisConnectionFactory connectionFactory) {
+	public RedisBoardChangeBus(StringRedisTemplate redis, RedisConnectionFactory connectionFactory) {
 		this.redis = redis;
 		this.connectionFactory = connectionFactory;
 	}
@@ -55,17 +55,17 @@ public class RedisPartyChangeBus implements PartyChangeBus {
 	}
 
 	@Override
-	public void publish(String partyId, long seq) {
-		if (partyId == null) {
+	public void publish(String adId, long seq) {
+		if (adId == null) {
 			return;
 		}
 		try {
-			redis.convertAndSend(CHANNEL, partyId + ":" + seq);
+			redis.convertAndSend(CHANNEL, adId + ":" + seq);
 		}
 		catch (Exception e) {
 			// The periodic reconcile is the backstop, so a failed announcement costs latency, not
 			// correctness. Never let it take down the write that caused it.
-			log.debug("ad change publish failed for {}: {}", partyId, e.toString());
+			log.debug("ad change publish failed for {}: {}", adId, e.toString());
 		}
 	}
 
@@ -74,7 +74,7 @@ public class RedisPartyChangeBus implements PartyChangeBus {
 		if (at < 0) {
 			return;
 		}
-		String partyId = message.substring(0, at);
+		String adId = message.substring(0, at);
 		long seq;
 		try {
 			seq = Long.parseLong(message.substring(at + 1));
@@ -83,10 +83,10 @@ public class RedisPartyChangeBus implements PartyChangeBus {
 			return;
 		}
 		try {
-			listener.accept(partyId, seq);
+			listener.accept(adId, seq);
 		}
 		catch (Exception e) {
-			log.warn("ad change listener failed for {}", partyId, e);
+			log.warn("ad change listener failed for {}", adId, e);
 		}
 	}
 }

@@ -45,14 +45,14 @@ class MemberBadgesTest {
 		assertNotEquals(plain, badged);
 		assertEquals(new Member("Host", 42L, List.of("developer")), badged);
 
-		Party prev = new Party();
+		Advertisement prev = new Advertisement();
 		prev.setId("p1");
 		prev.setActivity("cox");
 		prev.setMembers(List.of(plain));
-		Party cur = Party.copyOf(prev);
+		Advertisement cur = Advertisement.copyOf(prev);
 		cur.setMembers(List.of(badged));
 
-		PartyDelta delta = PartyDelta.diff(prev, cur);
+		AdvertisementDelta delta = AdvertisementDelta.diff(prev, cur);
 		assertEquals(List.of(badged), delta.members());
 	}
 }

@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import net.osparty.api.transport.PartySession;
+import net.osparty.api.transport.SocketSession;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -55,7 +55,7 @@ class PartyHeartbeatTest {
 	}
 
 	private static void hostARoom(PartyFrameHandler handler) {
-		PartySession host = new CollectingSession("host");
+		SocketSession host = new CollectingSession("host");
 		handler.onOpen(host);
 		handler.onMessage(host.id(),
 			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"
@@ -63,7 +63,7 @@ class PartyHeartbeatTest {
 	}
 
 	/** A connection with no transport under it. What it received does not matter here, only that it is open. */
-	private static final class CollectingSession implements PartySession {
+	private static final class CollectingSession implements SocketSession {
 		private final String id;
 		private final List<String> out = new ArrayList<>();
 

@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import net.osparty.api.model.Member;
-import net.osparty.api.model.Party;
+import net.osparty.api.model.Advertisement;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -118,20 +118,20 @@ public class DiscordBadgeService {
 		badgesByDiscordId.forEach(this::setBadges);
 	}
 
-	public List<Party> enrichParties(List<Party> parties) {
+	public List<Advertisement> enrichAds(List<Advertisement> ads) {
 		Set<Long> hashes = new HashSet<>();
-		for (Party party : parties) {
-			if (party.getMembers() == null) {
+		for (Advertisement ad : ads) {
+			if (ad.getMembers() == null) {
 				continue;
 			}
-			for (Member member : party.getMembers()) {
+			for (Member member : ad.getMembers()) {
 				if (member.getAccountHash() != 0) {
 					hashes.add(member.getAccountHash());
 				}
 			}
 		}
 		if (hashes.isEmpty()) {
-			return parties;
+			return ads;
 		}
 		Map<Long, List<String>> badgesByHash;
 		try {
@@ -139,14 +139,14 @@ public class DiscordBadgeService {
 		}
 		catch (Exception e) {
 			log.debug("Badge lookup failed; broadcasting without badges: {}", e.toString());
-			return parties;
+			return ads;
 		}
 		if (badgesByHash.isEmpty()) {
-			return parties;
+			return ads;
 		}
-		List<Party> out = new ArrayList<>(parties.size());
-		for (Party party : parties) {
-			out.add(enrich(party, badgesByHash));
+		List<Advertisement> out = new ArrayList<>(ads.size());
+		for (Advertisement ad : ads) {
+			out.add(enrich(ad, badgesByHash));
 		}
 		return out;
 	}
@@ -211,10 +211,10 @@ public class DiscordBadgeService {
 		}
 	}
 
-	private static Party enrich(Party party, Map<Long, List<String>> badgesByHash) {
-		List<Member> members = party.getMembers();
+	private static Advertisement enrich(Advertisement ad, Map<Long, List<String>> badgesByHash) {
+		List<Member> members = ad.getMembers();
 		if (members == null || members.isEmpty()) {
-			return party;
+			return ad;
 		}
 		boolean any = false;
 		for (Member member : members) {
@@ -224,14 +224,14 @@ public class DiscordBadgeService {
 			}
 		}
 		if (!any) {
-			return party;
+			return ad;
 		}
 		List<Member> enriched = new ArrayList<>(members.size());
 		for (Member member : members) {
 			enriched.add(new Member(member.getName(), member.getAccountHash(),
 				badgesByHash.get(member.getAccountHash())));
 		}
-		Party copy = Party.copyOf(party);
+		Advertisement copy = Advertisement.copyOf(ad);
 		copy.setMembers(enriched);
 		return copy;
 	}

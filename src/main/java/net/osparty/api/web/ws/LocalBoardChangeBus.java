@@ -5,12 +5,12 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 /**
- * Single-node {@link PartyChangeBus}: a publish is delivered straight back to the listener, which is what
+ * Single-node {@link BoardChangeBus}: a publish is delivered straight back to the listener, which is what
  * a one-node cluster would do anyway. Used by the tests, which have no Redis.
  */
 @Component
 @Profile("test")
-public class LocalPartyChangeBus implements PartyChangeBus {
+public class LocalBoardChangeBus implements BoardChangeBus {
 	private volatile BiConsumer<String, Long> listener = (id, seq) -> { };
 
 	@Override
@@ -19,9 +19,9 @@ public class LocalPartyChangeBus implements PartyChangeBus {
 	}
 
 	@Override
-	public void publish(String partyId, long seq) {
-		if (partyId != null) {
-			listener.accept(partyId, seq);
+	public void publish(String adId, long seq) {
+		if (adId != null) {
+			listener.accept(adId, seq);
 		}
 	}
 

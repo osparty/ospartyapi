@@ -4,7 +4,7 @@ import java.util.List;
 import lombok.Data;
 
 @Data
-public class PartyUpdate {
+public class AdvertisementUpdate {
 	private Integer size;
 	private List<Member> members;
 	private String world;
@@ -14,7 +14,7 @@ public class PartyUpdate {
 	private Integer capacity;
 	private String lootRule;
 	private Boolean ironmanOnly;
-	private Boolean privateParty;
+	private Boolean privateAd;
 	private Integer minKillCount;
 	private Integer minHardModeKillCount;
 	private Integer invocation;

@@ -6,7 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import net.osparty.api.model.AdBan;
-import net.osparty.api.model.Party;
+import net.osparty.api.model.Advertisement;
 import net.osparty.api.repository.BanRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,7 +61,7 @@ public class BanService {
 	 * joining an innocent host's party silently shadowbans that innocent host -- a griefing vector
 	 * dressed up as moderation.
 	 */
-	public boolean isHidden(Party party) {
+	public boolean isHidden(Advertisement party) {
 		if (party == null) {
 			return false;
 		}
@@ -77,12 +77,12 @@ public class BanService {
 		if (accountHash != 0 && current.hashes().contains(accountHash)) {
 			return true;
 		}
-		return host != null && current.names().contains(PartyFactory.normalizeHost(host));
+		return host != null && current.names().contains(AdvertisementFactory.normalizeHost(host));
 	}
 
 	public AdBan ban(String host, long accountHash, String reason, String moderatorDiscordId,
 		String moderatorDiscordName, Long sourceReportId) {
-		String normalized = host == null ? "" : PartyFactory.normalizeHost(host);
+		String normalized = host == null ? "" : AdvertisementFactory.normalizeHost(host);
 		AdBan ban = repository.ban(normalized, host, accountHash == 0 ? null : accountHash, reason,
 			moderatorDiscordId, moderatorDiscordName, sourceReportId);
 		log.info("Ad ban applied: id={} host='{}' accountHash={} by={} report={}",
@@ -93,7 +93,7 @@ public class BanService {
 
 	public List<AdBan> unban(String host, long accountHash, String reason, String moderatorDiscordId,
 		String moderatorDiscordName) {
-		String normalized = host == null ? "" : PartyFactory.normalizeHost(host);
+		String normalized = host == null ? "" : AdvertisementFactory.normalizeHost(host);
 		List<AdBan> revoked = repository.revoke(normalized, accountHash == 0 ? null : accountHash,
 			moderatorDiscordId, moderatorDiscordName, reason);
 		log.info("Ad ban revoked: host='{}' accountHash={} rows={} by={}",

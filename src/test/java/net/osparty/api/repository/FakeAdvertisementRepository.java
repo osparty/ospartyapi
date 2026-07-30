@@ -1,9 +1,9 @@
 package net.osparty.api.repository;
 
-import net.osparty.api.model.Party;
-import net.osparty.api.model.PartyRequest;
-import net.osparty.api.model.PartyUpdate;
-import net.osparty.api.service.PartyFactory;
+import net.osparty.api.model.Advertisement;
+import net.osparty.api.model.AdvertisementRequest;
+import net.osparty.api.model.AdvertisementUpdate;
+import net.osparty.api.service.AdvertisementFactory;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -16,18 +16,18 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 @Profile("test")
-public class FakePartyRepository implements PartyRepository {
-	private final Map<String, Party> parties = new ConcurrentHashMap<>();
+public class FakeAdvertisementRepository implements AdvertisementRepository {
+	private final Map<String, Advertisement> parties = new ConcurrentHashMap<>();
 	private final Map<String, String> hostKeys = new ConcurrentHashMap<>();
 	private final AtomicLong idSequence = new AtomicLong(1000);
 	private final AtomicLong revisions = new AtomicLong();
 
 	@Override
-	public List<Party> list(String activity) {
+	public List<Advertisement> list(String activity) {
 		return parties.values().stream()
-			.filter(p -> !p.isPrivateParty())
+			.filter(p -> !p.isPrivateAd())
 			.filter(p -> activity == null || activity.isBlank() || activity.equals(p.getActivity()))
-			.sorted(Comparator.comparingLong(Party::getCreatedAt).reversed())
+			.sorted(Comparator.comparingLong(Advertisement::getCreatedAt).reversed())
 			.collect(Collectors.toList());
 	}
 
@@ -37,13 +37,13 @@ public class FakePartyRepository implements PartyRepository {
 	}
 	
 	@Override
-	public Optional<Party> findById(String id) {
+	public Optional<Advertisement> findById(String id) {
 		return id == null ? Optional.empty() : Optional.ofNullable(parties.get(id));
 	}
 
 	@Override
-	public Optional<Party> findByInviteCode(String code) {
-		String normalized = PartyFactory.normalizeInviteCode(code);
+	public Optional<Advertisement> findByInviteCode(String code) {
+		String normalized = AdvertisementFactory.normalizeInviteCode(code);
 		if (normalized == null) {
 			return Optional.empty();
 		}
@@ -53,12 +53,12 @@ public class FakePartyRepository implements PartyRepository {
 	}
 
 	@Override
-	public Optional<Party> findByHost(String host) {
+	public Optional<Advertisement> findByHost(String host) {
 		if (host == null) {
 			return Optional.empty();
 		}
 		return parties.values().stream()
-			.filter(p -> PartyFactory.sameHost(p.getHost(), host))
+			.filter(p -> AdvertisementFactory.sameHost(p.getHost(), host))
 			.findFirst();
 	}
 
@@ -68,13 +68,13 @@ public class FakePartyRepository implements PartyRepository {
 	}
 
 	@Override
-	public Party create(PartyRequest request, String hostKey) {
+	public Advertisement create(AdvertisementRequest request, String hostKey) {
 		long now = System.currentTimeMillis();
-		Party party = PartyFactory.fromRequest(request, nextId(), uniqueInviteCode(), now);
+		Advertisement party = AdvertisementFactory.fromRequest(request, nextId(), uniqueInviteCode(), now);
 		party.setSeq(nextRevision());
 
 		parties.values().removeIf(p -> {
-			if (PartyFactory.sameHost(p.getHost(), request.host())) {
+			if (AdvertisementFactory.sameHost(p.getHost(), request.host())) {
 				hostKeys.remove(p.getId());
 				return true;
 			}
@@ -93,17 +93,17 @@ public class FakePartyRepository implements PartyRepository {
 		if (!parties.containsKey(id)) {
 			return Authorization.NOT_FOUND;
 		}
-		return PartyFactory.hostKeyAuthorized(hostKeys.get(id), hostKey)
+		return AdvertisementFactory.hostKeyAuthorized(hostKeys.get(id), hostKey)
 			? Authorization.OK : Authorization.FORBIDDEN;
 	}
 
 	@Override
-	public Optional<Party> update(String id, PartyUpdate patch) {
-		Party party = parties.get(id);
+	public Optional<Advertisement> update(String id, AdvertisementUpdate patch) {
+		Advertisement party = parties.get(id);
 		if (party == null) {
 			return Optional.empty();
 		}
-		if (PartyFactory.applyUpdate(party, patch)) {
+		if (AdvertisementFactory.applyUpdate(party, patch)) {
 			// Only a real edit, matching the Redis repository: a TTL touch must not look like a change.
 			party.setSeq(nextRevision());
 		}
@@ -111,21 +111,21 @@ public class FakePartyRepository implements PartyRepository {
 	}
 
 	@Override
-	public Optional<Party> transferHost(String id, String newHost, String newKey) {
-		Party party = parties.get(id);
+	public Optional<Advertisement> transferHost(String id, String newHost, String newKey) {
+		Advertisement party = parties.get(id);
 		if (party == null) {
 			return Optional.empty();
 		}
 		party.setHost(newHost);
-		party.setHostAccountHash(PartyFactory.accountHashOf(party, newHost));
+		party.setHostAccountHash(AdvertisementFactory.accountHashOf(party, newHost));
 		party.setSeq(nextRevision());
 		hostKeys.put(id, newKey);
 		return Optional.of(party);
 	}
 
 	@Override
-	public Optional<Party> attachVoiceChannel(String id, String channelId, String inviteUrl) {
-		Party party = parties.get(id);
+	public Optional<Advertisement> attachVoiceChannel(String id, String channelId, String inviteUrl) {
+		Advertisement party = parties.get(id);
 		if (party == null) {
 			return Optional.empty();
 		}
@@ -136,7 +136,7 @@ public class FakePartyRepository implements PartyRepository {
 	}
 
 	@Override
-	public Optional<Party> delete(String id) {
+	public Optional<Advertisement> delete(String id) {
 		hostKeys.remove(id);
 		return Optional.ofNullable(parties.remove(id));
 	}
@@ -148,7 +148,7 @@ public class FakePartyRepository implements PartyRepository {
 	private String uniqueInviteCode() {
 		String code;
 		do {
-			code = PartyFactory.newInviteCode();
+			code = AdvertisementFactory.newInviteCode();
 		}
 		while (findByInviteCode(code).isPresent());
 		return code;

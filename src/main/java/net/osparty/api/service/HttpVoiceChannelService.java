@@ -4,7 +4,7 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
-import net.osparty.api.model.Party;
+import net.osparty.api.model.Advertisement;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -28,11 +28,11 @@ public class HttpVoiceChannelService implements VoiceChannelService {
 	}
 
 	@Override
-	public Optional<VoiceChannelInfo> createForParty(Party party, Collection<String> allowedDiscordIds) {
+	public Optional<VoiceChannelInfo> createForParty(Advertisement ad, Collection<String> allowedDiscordIds) {
 		try {
 			CreateChannelResponse resp = http.post()
 				.uri("/voice/channels")
-				.body(new CreateChannelRequest(PartyRef.of(party),
+				.body(new CreateChannelRequest(PartyRef.of(ad),
 					allowedDiscordIds == null ? List.of() : List.copyOf(allowedDiscordIds)))
 				.retrieve()
 				.body(CreateChannelResponse.class);
@@ -42,20 +42,20 @@ public class HttpVoiceChannelService implements VoiceChannelService {
 			return Optional.of(new VoiceChannelInfo(resp.channelId(), resp.inviteUrl()));
 		}
 		catch (Exception e) {
-			log.warn("createForParty via bot failed for party {}: {}", party.getId(), e.toString());
+			log.warn("createForParty via bot failed for ad {}: {}", ad.getId(), e.toString());
 			return Optional.empty();
 		}
 	}
 
 	@Override
-	public void rename(String channelId, Party party) {
-		if (channelId == null || channelId.isBlank() || party == null) {
+	public void rename(String channelId, Advertisement ad) {
+		if (channelId == null || channelId.isBlank() || ad == null) {
 			return;
 		}
 		try {
 			http.post()
 				.uri("/voice/channels/{id}/rename", channelId)
-				.body(PartyRef.of(party))
+				.body(PartyRef.of(ad))
 				.retrieve()
 				.toBodilessEntity();
 		}
@@ -133,9 +133,13 @@ public class HttpVoiceChannelService implements VoiceChannelService {
 		}
 	}
 
+	/**
+	 * What the Discord bot service is told about an ad. Its field names — and {@code CreateChannelRequest}'s
+	 * {@code party} — are that service's HTTP contract, not ours, so they stay put while the Java type moves.
+	 */
 	private record PartyRef(String id, String host, String inviteCode, String activity) {
-		static PartyRef of(Party p) {
-			return new PartyRef(p.getId(), p.getHost(), p.getInviteCode(), p.getActivity());
+		static PartyRef of(Advertisement ad) {
+			return new PartyRef(ad.getId(), ad.getHost(), ad.getInviteCode(), ad.getActivity());
 		}
 	}
 

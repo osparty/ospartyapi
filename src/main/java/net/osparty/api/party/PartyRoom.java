@@ -1,6 +1,6 @@
 package net.osparty.api.party;
 
-import net.osparty.api.transport.PartySession;
+import net.osparty.api.transport.SocketSession;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.util.TokenBuffer;
@@ -34,10 +34,10 @@ final class PartyRoom {
 	private final Object lock = new Object();
 
 	private final Map<Long, MemberState> members = new LinkedHashMap<>();
-	private final Map<Long, PartySession> sessions = new LinkedHashMap<>();
+	private final Map<Long, SocketSession> sessions = new LinkedHashMap<>();
 	/**
 	 * When each member was last heard from. Liveness cannot be read off the socket: a half-open connection
-	 * — client gone, proxy never tearing the backend leg down — leaves {@link PartySession#isOpen()}
+	 * — client gone, proxy never tearing the backend leg down — leaves {@link SocketSession#isOpen()}
 	 * true indefinitely, so a room of the departed never empties and is never discarded. Traffic is the only
 	 * honest signal, and a live party always has some: a member with nothing to report still heartbeats every
 	 * few seconds, which is exactly what that frame is for. (It used to be the plugin's periodic full resync
@@ -80,7 +80,7 @@ final class PartyRoom {
 	}
 
 	/** Seat the host (the member that created the room). Sends them a welcome + the initial roster. */
-	void seatHost(long memberId, PartySession session, String name, long accountHash,
+	void seatHost(long memberId, SocketSession session, String name, long accountHash,
 		int capacity, boolean locked, String role, boolean learner, boolean teacher) {
 		synchronized (lock) {
 			this.hostMemberId = memberId;
@@ -105,7 +105,7 @@ final class PartyRoom {
 	 * Seat an applicant. Invited joiners are auto-admitted when there's room; everyone else joins PENDING
 	 * until the host admits them. Sends them a welcome + snapshot, and re-broadcasts the roster.
 	 */
-	void seatApplicant(long memberId, PartySession session, String name, long accountHash,
+	void seatApplicant(long memberId, SocketSession session, String name, long accountHash,
 		String role, boolean learner, boolean teacher, boolean invited) {
 		synchronized (lock) {
 			MemberState.Status status = (invited && canAdmit())
@@ -179,7 +179,7 @@ final class PartyRoom {
 			if (members.remove(targetMemberId) == null) {
 				return;
 			}
-			PartySession session = sessions.remove(targetMemberId);
+			SocketSession session = sessions.remove(targetMemberId);
 			lastSeen.remove(targetMemberId);
 			if (session != null) {
 				send(session, Outbound.kicked());
@@ -266,7 +266,7 @@ final class PartyRoom {
 			encoded[i] = serializeBytes(window.get(i));
 		}
 		synchronized (lock) {
-			for (Map.Entry<Long, PartySession> entry : recipients()) {
+			for (Map.Entry<Long, SocketSession> entry : recipients()) {
 				byte[] frame = updatesFrame(window, encoded, entry.getKey());
 				if (frame != null) {
 					sendRaw(entry.getValue(), frame);
@@ -360,7 +360,7 @@ final class PartyRoom {
 			if (actorMemberId != hostMemberId) {
 				return;
 			}
-			PartySession target = sessions.get(targetMemberId);
+			SocketSession target = sessions.get(targetMemberId);
 			if (target != null) {
 				send(target, Outbound.fcRequest(actorMemberId, hostName, kind, friendsChat));
 			}
@@ -385,7 +385,7 @@ final class PartyRoom {
 			if (target == null) {
 				return;
 			}
-			PartySession session = sessions.get(targetMemberId);
+			SocketSession session = sessions.get(targetMemberId);
 			if (session != null) {
 				send(session, Outbound.transferHost(actorMemberId, kind, newHostKey, newHostName, hostStays));
 			}
@@ -506,7 +506,7 @@ final class PartyRoom {
 		List<Long> gone = new ArrayList<>();
 		synchronized (lock) {
 			long now = System.currentTimeMillis();
-			for (Map.Entry<Long, PartySession> entry : sessions.entrySet()) {
+			for (Map.Entry<Long, SocketSession> entry : sessions.entrySet()) {
 				Long seen = lastSeen.get(entry.getKey());
 				boolean silent = seen != null && now - seen > silentAfterMs;
 				if (!entry.getValue().isOpen() || silent) {
@@ -594,7 +594,7 @@ final class PartyRoom {
 	 * this node owns. Peers' live state is not here — the owner does not hold any — and arrives instead from
 	 * the {@link #broadcastResync} the peers answer on their next tick.
 	 */
-	private void sendSnapshotTo(PartySession session) {
+	private void sendSnapshotTo(SocketSession session) {
 		send(session, Outbound.roster(hostName, capacity, locked, false, discordUrl, roster()));
 		if (meta != null) {
 			send(session, Outbound.meta(meta));
@@ -630,12 +630,12 @@ final class PartyRoom {
 		}
 		if (exceptMemberId == null) {
 			// The common case: no key comparison, no entry objects.
-			for (PartySession session : openSessions()) {
+			for (SocketSession session : openSessions()) {
 				sendRaw(session, json);
 			}
 			return;
 		}
-		for (Map.Entry<Long, PartySession> entry : recipients()) {
+		for (Map.Entry<Long, SocketSession> entry : recipients()) {
 			if (entry.getKey().equals(exceptMemberId)) {
 				continue;
 			}
@@ -644,7 +644,7 @@ final class PartyRoom {
 	}
 
 	/** As {@link #recipients()}, for the sends that go to everyone — same snapshot rule, no entry boxing. */
-	private List<PartySession> openSessions() {
+	private List<SocketSession> openSessions() {
 		return new ArrayList<>(sessions.values());
 	}
 
@@ -658,20 +658,20 @@ final class PartyRoom {
 	 * that propagates out of the frame handler and takes down the <em>sender's</em> session too — one dead
 	 * peer knocking out a healthy one, and under load that cascades.
 	 */
-	private List<Map.Entry<Long, PartySession>> recipients() {
-		List<Map.Entry<Long, PartySession>> out = new ArrayList<>(sessions.size());
+	private List<Map.Entry<Long, SocketSession>> recipients() {
+		List<Map.Entry<Long, SocketSession>> out = new ArrayList<>(sessions.size());
 		sessions.forEach((memberId, session) -> out.add(Map.entry(memberId, session)));
 		return out;
 	}
 
-	private void send(PartySession session, Outbound frame) {
+	private void send(SocketSession session, Outbound frame) {
 		byte[] json = serialize(frame);
 		if (json != null) {
 			sendRaw(session, json);
 		}
 	}
 
-	private void sendRaw(PartySession session, byte[] json) {
+	private void sendRaw(SocketSession session, byte[] json) {
 		if (!session.isOpen()) {
 			return;
 		}

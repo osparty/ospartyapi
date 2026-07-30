@@ -1,16 +1,16 @@
 package net.osparty.api.transport;
 
 /**
- * One client's live-party connection, as much of it as the room layer needs to know.
+ * One client's connection, as much of it as the protocols above need to know. Both of them — the ad board
+ * and the live party — talk to one of these, which is what lets them share a socket.
  *
- * <p>The live party exists to move live state off a relay this project does not own, and the measurements say the cost
- * of doing that is the send itself — Tomcat's send path is roughly half of this service's CPU
- * (PARTY_V2_OPTIMIZATION.md §6.5.3). That makes the transport a thing worth replacing, and replacing it is
- * only safe if the rooms, the ownership and the placement logic never knew which transport they were on.
- * Hence this: the room layer and the frame handlers speak to sessions, not to servlets — and once the
- * ad board speaks it too, both protocols can share one transport and, in time, one connection.
+ * <p>The live party exists to move live state off a relay this project does not own, and the measurements
+ * say the cost of doing that is the send itself — Tomcat's send path was roughly half of this service's CPU
+ * (PARTY_V2_OPTIMIZATION.md §6.5.3). That made the transport a thing worth replacing, and replacing it was
+ * only safe because the rooms, the ownership and the placement logic never knew which transport they were
+ * on. Hence this: they speak to sessions, not to servlets.
  */
-public interface PartySession {
+public interface SocketSession {
 	/** Stable per-connection id; the frame handler keys its per-connection context on it. */
 	String id();
 

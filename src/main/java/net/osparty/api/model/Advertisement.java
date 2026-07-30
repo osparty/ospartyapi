@@ -3,8 +3,19 @@ package net.osparty.api.model;
 import java.util.List;
 import lombok.Data;
 
+/**
+ * One advertisement on the board: what a host is running, who is in it, and how to reach it.
+ *
+ * <p>Not a party. The party is the live room on its owning node ({@code net.osparty.api.party.PartyRoom});
+ * this is the listing that lets somebody find it. The two were both called {@code Party} until the live
+ * layer took the name it had the better claim to.
+ *
+ * <p>Field names here are the wire — no {@code @JsonProperty} anywhere, so Jackson serialises by field name
+ * and the plugin reads them straight back. {@code privateAd} was {@code privateParty}; the plugin's own
+ * model has to match it or the flag silently reads false on every ad.
+ */
 @Data
-public class Party {
+public class Advertisement {
 	private String id;
 	private String activity;
 	private String host;
@@ -52,7 +63,7 @@ public class Party {
 	private int minKillCount;
 	private int minHardModeKillCount;
 	private List<Member> members;
-	private boolean privateParty;
+	private boolean privateAd;
 	private String inviteCode;
 	private String lootRule;
 	private boolean ironmanOnly;
@@ -65,8 +76,8 @@ public class Party {
 	private String discordChannelId;
 	private String discordInviteUrl;
 
-	public static Party copyOf(Party src) {
-		Party c = new Party();
+	public static Advertisement copyOf(Advertisement src) {
+		Advertisement c = new Advertisement();
 		c.id = src.id;
 		c.activity = src.activity;
 		c.host = src.host;
@@ -86,7 +97,7 @@ public class Party {
 		c.minKillCount = src.minKillCount;
 		c.minHardModeKillCount = src.minHardModeKillCount;
 		c.members = src.members;
-		c.privateParty = src.privateParty;
+		c.privateAd = src.privateAd;
 		c.inviteCode = src.inviteCode;
 		c.lootRule = src.lootRule;
 		c.ironmanOnly = src.ironmanOnly;

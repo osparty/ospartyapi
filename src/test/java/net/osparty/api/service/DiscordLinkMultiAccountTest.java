@@ -14,7 +14,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import net.osparty.api.model.Member;
-import net.osparty.api.model.Party;
+import net.osparty.api.model.Advertisement;
 import net.osparty.api.repository.InMemoryDiscordLinkRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -77,7 +77,7 @@ class DiscordLinkMultiAccountTest {
 
 		assertThat(links.accountHashesForDiscordId(DISCORD_ID)).containsExactlyInAnyOrder(ACCOUNT_A, ACCOUNT_B);
 
-		Party enriched = badges.enrichParties(List.of(partyWith(ACCOUNT_A, ACCOUNT_B))).get(0);
+		Advertisement enriched = badges.enrichAds(List.of(partyWith(ACCOUNT_A, ACCOUNT_B))).get(0);
 		assertThat(badgeOf(enriched, ACCOUNT_A)).containsExactly("developer", "backer");
 		assertThat(badgeOf(enriched, ACCOUNT_B)).containsExactly("developer", "backer");
 	}
@@ -94,7 +94,7 @@ class DiscordLinkMultiAccountTest {
 		assertThat(links.getByAccountHash(ACCOUNT_B)).isPresent();
 		assertThat(links.accountHashesForDiscordId(DISCORD_ID)).containsExactly(ACCOUNT_B);
 
-		Party enriched = badges.enrichParties(List.of(partyWith(ACCOUNT_B))).get(0);
+		Advertisement enriched = badges.enrichAds(List.of(partyWith(ACCOUNT_B))).get(0);
 		assertThat(badgeOf(enriched, ACCOUNT_B)).containsExactly("developer");
 	}
 
@@ -123,13 +123,13 @@ class DiscordLinkMultiAccountTest {
 		assertThat(badges.isBadgesHidden(ACCOUNT_A)).isTrue();
 		assertThat(badges.isBadgesHidden(ACCOUNT_B)).isFalse();
 
-		Party enriched = badges.enrichParties(List.of(partyWith(ACCOUNT_A, ACCOUNT_B))).get(0);
+		Advertisement enriched = badges.enrichAds(List.of(partyWith(ACCOUNT_A, ACCOUNT_B))).get(0);
 		assertThat(badgeOf(enriched, ACCOUNT_A)).isNull();
 		assertThat(badgeOf(enriched, ACCOUNT_B)).containsExactly("developer");
 	}
 
-	private static Party partyWith(long... accountHashes) {
-		Party party = new Party();
+	private static Advertisement partyWith(long... accountHashes) {
+		Advertisement party = new Advertisement();
 		party.setId("p-multiaccount");
 		List<Member> members = new ArrayList<>();
 		for (long hash : accountHashes) {
@@ -139,7 +139,7 @@ class DiscordLinkMultiAccountTest {
 		return party;
 	}
 
-	private static List<String> badgeOf(Party party, long accountHash) {
+	private static List<String> badgeOf(Advertisement party, long accountHash) {
 		return party.getMembers().stream()
 			.filter(m -> m.getAccountHash() == accountHash)
 			.findFirst()

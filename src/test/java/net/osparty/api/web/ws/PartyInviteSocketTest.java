@@ -39,7 +39,7 @@ class PartyInviteSocketTest {
 			host.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-inv\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsInviteHost\",\"capacity\":3,\"passphrase\":\"pp-inv\"}}"));
 			JsonNode hosted = awaitWhere(hostMsgs, m -> "hosted".equals(type(m)), "hosted ack");
-			String id = hosted.path("party").path("id").asText();
+			String id = hosted.path("ad").path("id").asText();
 
 			// The friend registers its identity so the server can route an invite to it.
 			friend.sendMessage(BoardChannel.frame("{\"type\":\"identify\",\"accountHash\":222,\"name\":\"Friendo\"}"));
@@ -50,7 +50,7 @@ class PartyInviteSocketTest {
 				"{\"type\":\"invite\",\"id\":\"" + id + "\",\"name\":\"WsInviteHost\",\"target\":\"Friendo\"}"));
 
 			JsonNode invited = awaitWhere(friendMsgs, m -> "invited".equals(type(m)), "invited push");
-			assertThat(invited.path("party").path("id").asText()).isEqualTo(id);
+			assertThat(invited.path("ad").path("id").asText()).isEqualTo(id);
 			assertThat(invited.path("from").asText()).isEqualTo("WsInviteHost");
 
 			JsonNode ack = awaitWhere(hostMsgs, m -> "inviteAck".equals(type(m)), "inviteAck");
@@ -71,7 +71,7 @@ class PartyInviteSocketTest {
 			host.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-inv2\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsInviteHost2\",\"capacity\":3,\"passphrase\":\"pp-inv2\"}}"));
 			JsonNode hosted = awaitWhere(hostMsgs, m -> "hosted".equals(type(m)), "hosted ack");
-			String id = hosted.path("party").path("id").asText();
+			String id = hosted.path("ad").path("id").asText();
 
 			host.sendMessage(BoardChannel.frame(
 				"{\"type\":\"invite\",\"id\":\"" + id + "\",\"name\":\"WsInviteHost2\",\"target\":\"NobodyHere\"}"));
@@ -95,7 +95,7 @@ class PartyInviteSocketTest {
 			host.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-inv3\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsInviteHost3\",\"capacity\":3,\"passphrase\":\"pp-inv3\"}}"));
 			JsonNode hosted = awaitWhere(hostMsgs, m -> "hosted".equals(type(m)), "hosted ack");
-			String id = hosted.path("party").path("id").asText();
+			String id = hosted.path("ad").path("id").asText();
 
 			// A stranger who is neither host nor member may not invite into the party.
 			stranger.sendMessage(BoardChannel.frame(

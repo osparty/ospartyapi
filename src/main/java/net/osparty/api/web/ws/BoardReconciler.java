@@ -1,8 +1,8 @@
 package net.osparty.api.web.ws;
 
-import net.osparty.api.repository.PartyRepository;
-import net.osparty.api.model.Party;
-import net.osparty.api.model.PartyDelta;
+import net.osparty.api.repository.AdvertisementRepository;
+import net.osparty.api.model.Advertisement;
+import net.osparty.api.model.AdvertisementDelta;
 import net.osparty.api.service.BanService;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -13,26 +13,26 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Diffs the shared party store against this node's last view and pushes the delta to subscribers.
+ * Diffs the shared advertisement store against this node's last view and pushes the delta to subscribers.
  *
  * <h2>Two axes, not one</h2>
- * A party has two independent properties that each change over time: whether the record still
+ * An ad has two independent properties that each change over time: whether the record still
  * exists, and whether it is publicly visible. Collapsing them -- treating "absent from the public
  * list" as "gone" -- is what makes a shadowban destroy the banned host's Discord voice channel, and
- * it is a bug that predates bans: {@code RedisPartyRepository.list()} already filters out private
- * parties, so toggling an ad to private used to delete a live voice channel and eject everyone from
+ * it is a bug that predates bans: {@code RedisAdvertisementRepository.list()} already filters out private
+ * ads, so toggling one to private used to delete a live voice channel and eject everyone from
  * it. Tracking visibility separately fixes both at once.
  *
  * <p>Concretely: voice-channel garbage collection follows <em>existence</em> only, while board
- * events follow <em>visibility</em>. A party that goes hidden emits a {@code removed} flagged as
- * such, so the broadcaster can withhold that one event from the host it belongs to; a party that
+ * events follow <em>visibility</em>. An ad that goes hidden emits a {@code removed} flagged as
+ * such, so the broadcaster can withhold that one event from the host it belongs to; one that
  * becomes visible again emits a plain {@code created}.
  */
 @Component
 @ConditionalOnProperty(name = "app.ws.enabled", havingValue = "true", matchIfMissing = true)
-public class PartyReconciler {
-	private final PartyRepository store;
-	private final PartyBroadcaster broadcaster;
+public class BoardReconciler {
+	private final AdvertisementRepository store;
+	private final BoardBroadcaster broadcaster;
 	private final net.osparty.api.service.VoiceChannelService voice;
 	private final net.osparty.api.service.DiscordBadgeService badges;
 	private final BanService bans;
@@ -62,10 +62,10 @@ public class PartyReconciler {
 	/** How long a removal is remembered. Generous next to a reconnect, cheap at an id and two longs. */
 	private static final long TOMBSTONE_RETENTION_MS = 10 * 60 * 1000L;
 
-	public PartyReconciler(PartyRepository store, PartyBroadcaster broadcaster,
+	public BoardReconciler(AdvertisementRepository store, BoardBroadcaster broadcaster,
 		net.osparty.api.service.VoiceChannelService voice,
 		net.osparty.api.service.DiscordBadgeService badges,
-		BanService bans, PartyChangeBus changes) {
+		BanService bans, BoardChangeBus changes) {
 		this.store = store;
 		this.broadcaster = broadcaster;
 		this.voice = voice;
@@ -82,15 +82,15 @@ public class PartyReconciler {
 	@Scheduled(fixedDelayString = "${app.ws.reconcile-interval-ms:5000}")
 	public synchronized void reconcile() {
 		startHistory();
-		List<Party> current = badges.enrichParties(store.list(null));
+		List<Advertisement> current = badges.enrichAds(store.list(null));
 		Map<String, Known> currentById = new HashMap<>();
-		for (Party party : current) {
-			currentById.put(party.getId(), new Known(Party.copyOf(party), !bans.isHidden(party)));
+		for (Advertisement ad : current) {
+			currentById.put(ad.getId(), new Known(Advertisement.copyOf(ad), !bans.isHidden(ad)));
 		}
 
-		List<Party> created = new ArrayList<>();
-		List<PartyDelta> updated = new ArrayList<>();
-		List<PartyBroadcaster.RemovedRef> removed = new ArrayList<>();
+		List<Advertisement> created = new ArrayList<>();
+		List<AdvertisementDelta> updated = new ArrayList<>();
+		List<BoardBroadcaster.RemovedRef> removed = new ArrayList<>();
 
 		// Records that genuinely disappeared: disbanded, or the host stopped heartbeating and the
 		// ad TTL'd out. This is the only branch allowed to tear down a Discord voice channel.
@@ -101,13 +101,13 @@ public class PartyReconciler {
 			Known previous = entry.getValue();
 			// A TTL expiry is the change nobody announces, so the sweep is where its tombstone is minted.
 			if (!tombstones.containsKey(entry.getKey())) {
-				entomb(entry.getKey(), 0, previous.party().getActivity());
+				entomb(entry.getKey(), 0, previous.ad().getActivity());
 			}
 			if (previous.visible()) {
-				removed.add(new PartyBroadcaster.RemovedRef(
-					entry.getKey(), previous.party().getActivity(), false));
+				removed.add(new BoardBroadcaster.RemovedRef(
+					entry.getKey(), previous.ad().getActivity(), false));
 			}
-			String channelId = previous.party().getDiscordChannelId();
+			String channelId = previous.ad().getDiscordChannelId();
 			// Absent from the list is not the same as gone: list() hides private ads, so an ad that merely
 			// went private looks identical here to one that disbanded. Only the store can tell them apart,
 			// and getting it wrong destroys a voice channel with people in it — so ask, for the handful of
@@ -117,26 +117,26 @@ public class PartyReconciler {
 			}
 		}
 
-		for (Party party : current) {
-			Known previous = lastKnown.get(party.getId());
-			boolean visible = currentById.get(party.getId()).visible();
+		for (Advertisement ad : current) {
+			Known previous = lastKnown.get(ad.getId());
+			boolean visible = currentById.get(ad.getId()).visible();
 			if (previous == null) {
 				if (visible) {
-					created.add(party);
+					created.add(ad);
 				}
 				continue;
 			}
 			if (!previous.visible() && visible) {
 				// Unbanned, or flipped back to public: everyone else learns about it as a new ad.
-				created.add(party);
+				created.add(ad);
 			}
 			else if (previous.visible() && !visible) {
 				// Newly hidden. The record still exists and the host keeps using it, so no voice
 				// teardown; the `hidden` flag tells the broadcaster to spare the host this event.
-				removed.add(new PartyBroadcaster.RemovedRef(party.getId(), party.getActivity(), true));
+				removed.add(new BoardBroadcaster.RemovedRef(ad.getId(), ad.getActivity(), true));
 			}
 			else if (visible) {
-				PartyDelta delta = PartyDelta.diff(previous.party(), party);
+				AdvertisementDelta delta = AdvertisementDelta.diff(previous.ad(), ad);
 				if (delta != null) {
 					updated.add(delta);
 				}
@@ -181,9 +181,9 @@ public class PartyReconciler {
 		Map<String, Long> ids = new HashMap<>(dirty);
 		ids.keySet().forEach(dirty::remove);
 
-		List<Party> created = new ArrayList<>();
-		List<PartyDelta> updated = new ArrayList<>();
-		List<PartyBroadcaster.RemovedRef> removed = new ArrayList<>();
+		List<Advertisement> created = new ArrayList<>();
+		List<AdvertisementDelta> updated = new ArrayList<>();
+		List<BoardBroadcaster.RemovedRef> removed = new ArrayList<>();
 		for (Map.Entry<String, Long> entry : ids.entrySet()) {
 			applyChange(entry.getKey(), entry.getValue(), created, updated, removed);
 		}
@@ -202,21 +202,21 @@ public class PartyReconciler {
 	 * <p>An id nobody here has seen and that no longer exists is not an error — it is a delete announced by
 	 * a node whose creation we never happened to observe, and there is nothing to say about it.
 	 */
-	private void applyChange(String id, long seq, List<Party> created, List<PartyDelta> updated,
-		List<PartyBroadcaster.RemovedRef> removed) {
+	private void applyChange(String id, long seq, List<Advertisement> created, List<AdvertisementDelta> updated,
+		List<BoardBroadcaster.RemovedRef> removed) {
 		Known previous = lastKnown.get(id);
-		Party party = store.findById(id).map(p -> badges.enrichParties(List.of(p)).get(0)).orElse(null);
-		if (party == null) {
+		Advertisement ad = store.findById(id).map(p -> badges.enrichAds(List.of(p)).get(0)).orElse(null);
+		if (ad == null) {
 			if (previous == null) {
 				return;
 			}
 			lastKnown.remove(id);
-			entomb(id, seq, previous.party().getActivity());
+			entomb(id, seq, previous.ad().getActivity());
 			// fall through to the board events below
 			if (previous.visible()) {
-				removed.add(new PartyBroadcaster.RemovedRef(id, previous.party().getActivity(), false));
+				removed.add(new BoardBroadcaster.RemovedRef(id, previous.ad().getActivity(), false));
 			}
-			String channelId = previous.party().getDiscordChannelId();
+			String channelId = previous.ad().getDiscordChannelId();
 			if (channelId != null) {
 				voice.delete(channelId);
 			}
@@ -226,20 +226,20 @@ public class PartyReconciler {
 		// Mirrors what the sweep's list() would include: a private ad exists but is not on the board, which
 		// is the same shape as a shadowbanned one. Recording it as visible would make the next sweep — whose
 		// list cannot see it — read it as having disappeared.
-		boolean visible = !party.isPrivateParty() && !bans.isHidden(party);
-		lastKnown.put(id, new Known(Party.copyOf(party), visible));
+		boolean visible = !ad.isPrivateAd() && !bans.isHidden(ad);
+		lastKnown.put(id, new Known(Advertisement.copyOf(ad), visible));
 		if (previous == null || (!previous.visible() && visible)) {
 			if (visible) {
-				created.add(party);
+				created.add(ad);
 			}
 		}
 		else if (previous.visible() && !visible) {
 			// The record still exists and its host keeps using it, so no voice teardown; the flag is what
 			// lets the broadcaster spare the host this one event.
-			removed.add(new PartyBroadcaster.RemovedRef(id, party.getActivity(), true));
+			removed.add(new BoardBroadcaster.RemovedRef(id, ad.getActivity(), true));
 		}
 		else if (visible) {
-			PartyDelta delta = PartyDelta.diff(previous.party(), party);
+			AdvertisementDelta delta = AdvertisementDelta.diff(previous.ad(), ad);
 			if (delta != null) {
 				updated.add(delta);
 			}
@@ -253,23 +253,23 @@ public class PartyReconciler {
 	 * <p>No advertisement is re-read — a ban changes none of them, only whether they belong on the board.
 	 */
 	synchronized void onBansChanged() {
-		List<Party> created = new ArrayList<>();
-		List<PartyBroadcaster.RemovedRef> removed = new ArrayList<>();
+		List<Advertisement> created = new ArrayList<>();
+		List<BoardBroadcaster.RemovedRef> removed = new ArrayList<>();
 		for (Map.Entry<String, Known> entry : lastKnown.entrySet()) {
 			Known previous = entry.getValue();
-			Party party = previous.party();
-			boolean visible = !party.isPrivateParty() && !bans.isHidden(party);
+			Advertisement ad = previous.ad();
+			boolean visible = !ad.isPrivateAd() && !bans.isHidden(ad);
 			if (visible == previous.visible()) {
 				continue;
 			}
-			entry.setValue(new Known(party, visible));
+			entry.setValue(new Known(ad, visible));
 			if (visible) {
-				created.add(party);
+				created.add(ad);
 			}
 			else {
 				// Flagged hidden: the record still exists and its host keeps using it, so the broadcaster
 				// withholds this one event from them and no voice channel is touched.
-				removed.add(new PartyBroadcaster.RemovedRef(entry.getKey(), party.getActivity(), true));
+				removed.add(new BoardBroadcaster.RemovedRef(entry.getKey(), ad.getActivity(), true));
 			}
 		}
 		if (!created.isEmpty() || !removed.isEmpty()) {
@@ -284,10 +284,10 @@ public class PartyReconciler {
 	 * with, so a joiner's snapshot and the delta stream describe the same instant.
 	 */
 	private void publishBoard() {
-		List<Party> visible = new ArrayList<>(lastKnown.size());
-		List<Party> hidden = new ArrayList<>();
+		List<Advertisement> visible = new ArrayList<>(lastKnown.size());
+		List<Advertisement> hidden = new ArrayList<>();
 		for (Known known : lastKnown.values()) {
-			(known.visible() ? visible : hidden).add(known.party());
+			(known.visible() ? visible : hidden).add(known.ad());
 		}
 		prune();
 		broadcaster.publishBoard(visible, hidden, Map.copyOf(tombstones), prunedThroughSeq);
@@ -344,8 +344,8 @@ public class PartyReconciler {
 		}
 	}
 
-	/** A party as this node last saw it, plus whether it was publicly visible at the time. */
-	private record Known(Party party, boolean visible) {
+	/** An ad as this node last saw it, plus whether it was publicly visible at the time. */
+	private record Known(Advertisement ad, boolean visible) {
 	}
 
 	/** An advertisement that is gone, the revision it went at, and when we noticed. */

@@ -1,56 +1,56 @@
 package net.osparty.api.service;
 
 import net.osparty.api.model.Member;
-import net.osparty.api.model.Party;
-import net.osparty.api.model.PartyRequest;
-import net.osparty.api.model.PartyUpdate;
+import net.osparty.api.model.Advertisement;
+import net.osparty.api.model.AdvertisementRequest;
+import net.osparty.api.model.AdvertisementUpdate;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.List;
 
-public final class PartyFactory {
+public final class AdvertisementFactory {
 	private static final char[] CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray();
 	private static final int CODE_LENGTH = 6;
 	private static final SecureRandom RANDOM = new SecureRandom();
 
-	private PartyFactory() {
+	private AdvertisementFactory() {
 	}
 
-	public static Party fromRequest(PartyRequest request, String id, String inviteCode, long now) {
-		Party party = new Party();
-		party.setId(id);
-		party.setActivity(request.activity());
-		party.setHost(request.host());
-		party.setHostAccountHash(request.hostAccountHash());
-		party.setDescription(request.description());
-		party.setCapacity(request.capacity());
-		party.setWorld(request.world());
-		party.setMinKillCount(request.minKillCount());
-		party.setMinHardModeKillCount(request.minHardModeKillCount());
-		party.setPassphrase(request.passphrase());
-		party.setCreatedAt(now);
-		party.setPrivateParty(request.privateParty());
-		party.setInviteCode(inviteCode);
-		party.setLootRule(normalizeLootRule(request.lootRule()));
-		party.setIronmanOnly(request.ironmanOnly());
-		party.setHostAccountType(request.hostAccountType());
-		party.setHardMode(request.hardMode());
-		party.setInvocation(request.invocation());
-		party.setCoxScale(request.coxScale());
-		party.setRequiredRoles(request.requiredRoles());
-		party.setHostRole(request.hostRole());
-		party.setNeededRoles(initialNeededRoles(request.requiredRoles(), request.hostRole()));
-		party.setLearner(request.learner());
-		party.setTeacher(request.teacher());
-		party.setSize(1);
+	public static Advertisement fromRequest(AdvertisementRequest request, String id, String inviteCode, long now) {
+		Advertisement ad = new Advertisement();
+		ad.setId(id);
+		ad.setActivity(request.activity());
+		ad.setHost(request.host());
+		ad.setHostAccountHash(request.hostAccountHash());
+		ad.setDescription(request.description());
+		ad.setCapacity(request.capacity());
+		ad.setWorld(request.world());
+		ad.setMinKillCount(request.minKillCount());
+		ad.setMinHardModeKillCount(request.minHardModeKillCount());
+		ad.setPassphrase(request.passphrase());
+		ad.setCreatedAt(now);
+		ad.setPrivateAd(request.privateAd());
+		ad.setInviteCode(inviteCode);
+		ad.setLootRule(normalizeLootRule(request.lootRule()));
+		ad.setIronmanOnly(request.ironmanOnly());
+		ad.setHostAccountType(request.hostAccountType());
+		ad.setHardMode(request.hardMode());
+		ad.setInvocation(request.invocation());
+		ad.setCoxScale(request.coxScale());
+		ad.setRequiredRoles(request.requiredRoles());
+		ad.setHostRole(request.hostRole());
+		ad.setNeededRoles(initialNeededRoles(request.requiredRoles(), request.hostRole()));
+		ad.setLearner(request.learner());
+		ad.setTeacher(request.teacher());
+		ad.setSize(1);
 		List<Member> members = new ArrayList<>();
 		if (request.host() != null) {
 			members.add(new Member(request.host(), request.hostAccountHash()));
 		}
-		party.setMembers(members);
-		return party;
+		ad.setMembers(members);
+		return ad;
 	}
 
 	private static List<String> initialNeededRoles(List<String> requiredRoles, String hostRole) {
@@ -78,106 +78,106 @@ public final class PartyFactory {
 		return roles;
 	}
 
-	public static boolean applyUpdate(Party party, PartyUpdate patch) {
+	public static boolean applyUpdate(Advertisement ad, AdvertisementUpdate patch) {
 		if (patch == null) {
 			return false;
 		}
 		boolean changed = false;
-		if (patch.getSize() != null && patch.getSize() > 0 && patch.getSize() != party.getSize()) {
-			party.setSize(patch.getSize());
+		if (patch.getSize() != null && patch.getSize() > 0 && patch.getSize() != ad.getSize()) {
+			ad.setSize(patch.getSize());
 			changed = true;
 		}
 		if (patch.getMembers() != null && !patch.getMembers().isEmpty()) {
-			List<Member> merged = mergeKnownHashes(party.getMembers(), patch.getMembers());
-			if (!merged.equals(party.getMembers())) {
-				party.setMembers(merged);
+			List<Member> merged = mergeKnownHashes(ad.getMembers(), patch.getMembers());
+			if (!merged.equals(ad.getMembers())) {
+				ad.setMembers(merged);
 				changed = true;
 			}
 		}
-		if (patch.getNode() != null && !patch.getNode().isBlank() && !patch.getNode().equals(party.getNode())) {
-			party.setNode(patch.getNode());
+		if (patch.getNode() != null && !patch.getNode().isBlank() && !patch.getNode().equals(ad.getNode())) {
+			ad.setNode(patch.getNode());
 			changed = true;
 		}
-		if (patch.getWorld() != null && !patch.getWorld().isBlank() && !patch.getWorld().equals(party.getWorld())) {
-			party.setWorld(patch.getWorld());
+		if (patch.getWorld() != null && !patch.getWorld().isBlank() && !patch.getWorld().equals(ad.getWorld())) {
+			ad.setWorld(patch.getWorld());
 			changed = true;
 		}
-		if (patch.getLayout() != null && !patch.getLayout().isBlank() && !patch.getLayout().equals(party.getLayout())) {
-			party.setLayout(patch.getLayout());
+		if (patch.getLayout() != null && !patch.getLayout().isBlank() && !patch.getLayout().equals(ad.getLayout())) {
+			ad.setLayout(patch.getLayout());
 			changed = true;
 		}
-		if (patch.getNeededRoles() != null && !patch.getNeededRoles().equals(party.getNeededRoles())) {
-			party.setNeededRoles(patch.getNeededRoles());
+		if (patch.getNeededRoles() != null && !patch.getNeededRoles().equals(ad.getNeededRoles())) {
+			ad.setNeededRoles(patch.getNeededRoles());
 			changed = true;
 		}
-		if (patch.getDescription() != null && !patch.getDescription().equals(party.getDescription())) {
-			party.setDescription(patch.getDescription());
+		if (patch.getDescription() != null && !patch.getDescription().equals(ad.getDescription())) {
+			ad.setDescription(patch.getDescription());
 			changed = true;
 		}
-		if (patch.getCapacity() != null && patch.getCapacity() > 0 && patch.getCapacity() != party.getCapacity()) {
-			party.setCapacity(patch.getCapacity());
+		if (patch.getCapacity() != null && patch.getCapacity() > 0 && patch.getCapacity() != ad.getCapacity()) {
+			ad.setCapacity(patch.getCapacity());
 			changed = true;
 		}
 		if (patch.getLootRule() != null) {
 			String lootRule = normalizeLootRule(patch.getLootRule());
-			if (!lootRule.equals(party.getLootRule())) {
-				party.setLootRule(lootRule);
+			if (!lootRule.equals(ad.getLootRule())) {
+				ad.setLootRule(lootRule);
 				changed = true;
 			}
 		}
-		if (patch.getIronmanOnly() != null && patch.getIronmanOnly() != party.isIronmanOnly()) {
-			party.setIronmanOnly(patch.getIronmanOnly());
+		if (patch.getIronmanOnly() != null && patch.getIronmanOnly() != ad.isIronmanOnly()) {
+			ad.setIronmanOnly(patch.getIronmanOnly());
 			changed = true;
 		}
-		if (patch.getPrivateParty() != null && patch.getPrivateParty() != party.isPrivateParty()) {
-			party.setPrivateParty(patch.getPrivateParty());
+		if (patch.getPrivateAd() != null && patch.getPrivateAd() != ad.isPrivateAd()) {
+			ad.setPrivateAd(patch.getPrivateAd());
 			changed = true;
 		}
-		if (patch.getMinKillCount() != null && patch.getMinKillCount() != party.getMinKillCount()) {
-			party.setMinKillCount(patch.getMinKillCount());
+		if (patch.getMinKillCount() != null && patch.getMinKillCount() != ad.getMinKillCount()) {
+			ad.setMinKillCount(patch.getMinKillCount());
 			changed = true;
 		}
 		if (patch.getMinHardModeKillCount() != null
-			&& patch.getMinHardModeKillCount() != party.getMinHardModeKillCount()) {
-			party.setMinHardModeKillCount(patch.getMinHardModeKillCount());
+			&& patch.getMinHardModeKillCount() != ad.getMinHardModeKillCount()) {
+			ad.setMinHardModeKillCount(patch.getMinHardModeKillCount());
 			changed = true;
 		}
-		if (patch.getInvocation() != null && patch.getInvocation() != party.getInvocation()) {
-			party.setInvocation(patch.getInvocation());
+		if (patch.getInvocation() != null && patch.getInvocation() != ad.getInvocation()) {
+			ad.setInvocation(patch.getInvocation());
 			changed = true;
 		}
-		if (patch.getHardMode() != null && patch.getHardMode() != party.isHardMode()) {
-			party.setHardMode(patch.getHardMode());
+		if (patch.getHardMode() != null && patch.getHardMode() != ad.isHardMode()) {
+			ad.setHardMode(patch.getHardMode());
 			changed = true;
 		}
 		// Scale is host-editable and clearable (an empty string removes it), so merge on any
 		// non-null difference rather than guarding against blank like world/layout.
-		if (patch.getCoxScale() != null && !patch.getCoxScale().equals(party.getCoxScale())) {
-			party.setCoxScale(patch.getCoxScale());
+		if (patch.getCoxScale() != null && !patch.getCoxScale().equals(ad.getCoxScale())) {
+			ad.setCoxScale(patch.getCoxScale());
 			changed = true;
 		}
 		// Roles: when the required composition or host role changes, re-seed neededRoles
 		// from it (the live host's heartbeat then keeps it accurate against admitted members).
 		boolean rolesChanged = false;
-		if (patch.getRequiredRoles() != null && !patch.getRequiredRoles().equals(party.getRequiredRoles())) {
-			party.setRequiredRoles(patch.getRequiredRoles());
+		if (patch.getRequiredRoles() != null && !patch.getRequiredRoles().equals(ad.getRequiredRoles())) {
+			ad.setRequiredRoles(patch.getRequiredRoles());
 			changed = true;
 			rolesChanged = true;
 		}
-		if (patch.getHostRole() != null && !patch.getHostRole().equals(party.getHostRole())) {
-			party.setHostRole(patch.getHostRole());
+		if (patch.getHostRole() != null && !patch.getHostRole().equals(ad.getHostRole())) {
+			ad.setHostRole(patch.getHostRole());
 			changed = true;
 			rolesChanged = true;
 		}
 		if (rolesChanged) {
-			party.setNeededRoles(initialNeededRoles(party.getRequiredRoles(), party.getHostRole()));
+			ad.setNeededRoles(initialNeededRoles(ad.getRequiredRoles(), ad.getHostRole()));
 		}
-		if (patch.getLearner() != null && patch.getLearner() != party.isLearner()) {
-			party.setLearner(patch.getLearner());
+		if (patch.getLearner() != null && patch.getLearner() != ad.isLearner()) {
+			ad.setLearner(patch.getLearner());
 			changed = true;
 		}
-		if (patch.getTeacher() != null && patch.getTeacher() != party.isTeacher()) {
-			party.setTeacher(patch.getTeacher());
+		if (patch.getTeacher() != null && patch.getTeacher() != ad.isTeacher()) {
+			ad.setTeacher(patch.getTeacher());
 			changed = true;
 		}
 		return changed;
@@ -202,15 +202,15 @@ public final class PartyFactory {
 	}
 
 	/**
-	 * The account hash the party knows for {@code host}, or 0 when no admitted member matches by
+	 * The account hash the ad knows for {@code host}, or 0 when no admitted member matches by
 	 * name or that member never reported one. Used on host transfer to keep
-	 * {@code Party.hostAccountHash} pointing at whoever actually runs the ad.
+	 * {@code Advertisement.hostAccountHash} pointing at whoever actually runs the ad.
 	 */
-	public static long accountHashOf(Party party, String host) {
-		if (party.getMembers() == null || host == null) {
+	public static long accountHashOf(Advertisement ad, String host) {
+		if (ad.getMembers() == null || host == null) {
 			return 0;
 		}
-		Member member = findByName(party.getMembers(), host);
+		Member member = findByName(ad.getMembers(), host);
 		return member == null ? 0 : member.getAccountHash();
 	}
 

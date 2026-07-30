@@ -2,10 +2,10 @@ package net.osparty.api.repository;
 
 import java.util.List;
 import net.osparty.api.model.Member;
-import net.osparty.api.model.Party;
-import net.osparty.api.model.PartyDelta;
-import net.osparty.api.model.PartyRequest;
-import net.osparty.api.repository.PartyRepository.Authorization;
+import net.osparty.api.model.Advertisement;
+import net.osparty.api.model.AdvertisementDelta;
+import net.osparty.api.model.AdvertisementRequest;
+import net.osparty.api.repository.AdvertisementRepository.Authorization;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -14,19 +14,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TransferHostTest {
 
-	private PartyRequest request(String host) {
-		return new PartyRequest("cox", host, 1L, "trio", 3, "301", 0, 0, "pp-xfer",
+	private AdvertisementRequest request(String host) {
+		return new AdvertisementRequest("cox", host, 1L, "trio", 3, "301", 0, 0, "pp-xfer",
 			false, null, false, null, false, 0, null, null, null, false, false);
 	}
 
 	@Test
 	void transferHostReKeysAndMovesIndex() {
-		FakePartyRepository repo = new FakePartyRepository();
-		Party party = repo.create(request("OldHost"), "k-old");
+		FakeAdvertisementRepository repo = new FakeAdvertisementRepository();
+		Advertisement party = repo.create(request("OldHost"), "k-old");
 		String id = party.getId();
 		assertEquals(Authorization.OK, repo.authorize(id, "k-old"));
 
-		Party updated = repo.transferHost(id, "NewHost", "k-new").orElseThrow();
+		Advertisement updated = repo.transferHost(id, "NewHost", "k-new").orElseThrow();
 
 		assertEquals(id, updated.getId());
 		assertEquals("NewHost", updated.getHost());
@@ -37,38 +37,38 @@ class TransferHostTest {
 	}
 
 	@Test
-	void transferHostOnMissingPartyReturnsEmpty() {
-		FakePartyRepository repo = new FakePartyRepository();
+	void transferHostOnMissingAdvertisementReturnsEmpty() {
+		FakeAdvertisementRepository repo = new FakeAdvertisementRepository();
 		assertTrue(repo.transferHost("nope", "NewHost", "k-new").isEmpty());
 	}
 
 	@Test
 	void diffCarriesHostChange() {
-		Party prev = new Party();
+		Advertisement prev = new Advertisement();
 		prev.setId("p1");
 		prev.setActivity("cox");
 		prev.setHost("OldHost");
 		prev.setMembers(List.of(new Member("OldHost", 1L)));
-		Party cur = new Party();
+		Advertisement cur = new Advertisement();
 		cur.setId("p1");
 		cur.setActivity("cox");
 		cur.setHost("NewHost");
 		cur.setMembers(List.of(new Member("OldHost", 1L)));
 
-		PartyDelta delta = PartyDelta.diff(prev, cur);
+		AdvertisementDelta delta = AdvertisementDelta.diff(prev, cur);
 		assertNotNull(delta);
 		assertEquals("NewHost", delta.host());
 	}
 
 	@Test
 	void diffNullWhenHostUnchanged() {
-		Party prev = new Party();
+		Advertisement prev = new Advertisement();
 		prev.setId("p1");
 		prev.setHost("Host");
-		Party cur = new Party();
+		Advertisement cur = new Advertisement();
 		cur.setId("p1");
 		cur.setHost("Host");
 
-		assertNull(PartyDelta.diff(prev, cur));
+		assertNull(AdvertisementDelta.diff(prev, cur));
 	}
 }

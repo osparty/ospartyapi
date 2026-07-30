@@ -289,7 +289,7 @@ class AdReportSocketTest {
 			+ "{\"activity\":\"cox\",\"host\":\"" + host + "\",\"capacity\":3,"
 			+ "\"description\":\"" + description + "\",\"passphrase\":\"pp-" + key + "\"}}");
 		return awaitWhere(messages, m -> "hosted".equals(m.path("type").asText()), "hosted ack")
-			.path("party").path("id").asText();
+			.path("ad").path("id").asText();
 	}
 
 	private WebSocketSession connect(BlockingQueue<JsonNode> messages) throws Exception {

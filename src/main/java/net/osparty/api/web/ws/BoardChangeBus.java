@@ -18,7 +18,7 @@ import java.util.function.BiConsumer;
  * single read that follows, at the cost of a second serialised representation of the model to keep in step
  * with the first, forever. A GET per change is cheap; a duplicated schema is not.
  */
-public interface PartyChangeBus {
+public interface BoardChangeBus {
 	/**
 	 * Announce that {@code partyId} was created, updated or removed. Never throws.
 	 *

@@ -1,6 +1,6 @@
 package net.osparty.api.party.netty;
 
-import net.osparty.api.transport.PartySession;
+import net.osparty.api.transport.SocketSession;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component;
  * <p><b>Why a second server at all.</b> Profiling put roughly half of this service's CPU inside Tomcat's
  * WebSocket send — a synchronized write path plus a per-session decorator, entered once per recipient per
  * frame (PARTY_V2_OPTIMIZATION.md §6.5.3). Nothing above the transport had to change to move off it: rooms,
- * ownership, placement and the protocol all sit behind {@code PartySession}, {@link PartyFrameHandler}
+ * ownership, placement and the protocol all sit behind {@code SocketSession}, {@link PartyFrameHandler}
  * and the ad board's own transport-neutral entry points, so this class only carries bytes. REST stays on
  * the servlet container's port, which is why this is a second server rather than a migration.
  *
@@ -56,13 +56,13 @@ public class NettySocketServer implements SmartLifecycle {
 	/**
 	 * A channel stops being writable above the high mark and becomes writable again below the low one.
 	 * Sized to hold a healthy burst — a roster plus a few update rounds — and no more: past that, a live
-	 * update is better dropped than queued (see {@link NettyPartySession#send}).
+	 * update is better dropped than queued (see {@link NettySocketSession#send}).
 	 */
 	private static final WriteBufferWaterMark WATER_MARK =
 		new WriteBufferWaterMark(256 * 1024, 512 * 1024);
 
 	private final PartyFrameHandler frames;
-	private final net.osparty.api.web.ws.PartyBroadcaster board;
+	private final net.osparty.api.web.ws.BoardBroadcaster board;
 	private final int port;
 	private final io.micrometer.core.instrument.MeterRegistry meters;
 	/** Live updates skipped because a client was not draining its socket. Reported at shutdown. */
@@ -73,7 +73,7 @@ public class NettySocketServer implements SmartLifecycle {
 	private volatile Channel serverChannel;
 	private volatile boolean running;
 
-	public NettySocketServer(PartyFrameHandler frames, net.osparty.api.web.ws.PartyBroadcaster board,
+	public NettySocketServer(PartyFrameHandler frames, net.osparty.api.web.ws.BoardBroadcaster board,
 		@Value("${app.socket.port:8081}") int port,
 		io.micrometer.core.instrument.MeterRegistry meters) {
 		this.frames = frames;

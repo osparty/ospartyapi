@@ -2,7 +2,7 @@ package net.osparty.api.model;
 
 import java.util.List;
 
-public record PartyRequest(
+public record AdvertisementRequest(
 	String activity,
 	String host,
 	long hostAccountHash,
@@ -12,7 +12,7 @@ public record PartyRequest(
 	int minKillCount,
 	int minHardModeKillCount,
 	String passphrase,
-	boolean privateParty,
+	boolean privateAd,
 	String lootRule,
 	boolean ironmanOnly,
 	String hostAccountType,

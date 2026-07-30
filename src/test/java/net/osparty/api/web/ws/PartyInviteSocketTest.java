@@ -13,10 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -24,10 +21,10 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 	"app.ws.reconcile-interval-ms=150",
 	// Every WebSocket is served by Netty on its own port, not by the servlet container's. Zero takes an
 	// ephemeral one so the whole suite can run without colliding on 8081.
-	"app.party-v2.port=0"})
+	"app.socket.port=0"})
 class PartyInviteSocketTest {
 	@Autowired
-	private net.osparty.api.v2.netty.NettyPartyV2Server socketServer;
+	private net.osparty.api.party.netty.NettySocketServer socketServer;
 
 	@Autowired
 	private ObjectMapper mapper;
@@ -39,17 +36,17 @@ class PartyInviteSocketTest {
 		WebSocketSession host = connect(hostMsgs);
 		WebSocketSession friend = connect(friendMsgs);
 		try {
-			host.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-inv\",\"request\":"
+			host.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-inv\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsInviteHost\",\"capacity\":3,\"passphrase\":\"pp-inv\"}}"));
 			JsonNode hosted = awaitWhere(hostMsgs, m -> "hosted".equals(type(m)), "hosted ack");
 			String id = hosted.path("party").path("id").asText();
 
 			// The friend registers its identity so the server can route an invite to it.
-			friend.sendMessage(new TextMessage("{\"type\":\"identify\",\"accountHash\":222,\"name\":\"Friendo\"}"));
+			friend.sendMessage(BoardChannel.frame("{\"type\":\"identify\",\"accountHash\":222,\"name\":\"Friendo\"}"));
 			// The host identifies too (host name matches the party, authorising the invite).
-			host.sendMessage(new TextMessage("{\"type\":\"identify\",\"accountHash\":111,\"name\":\"WsInviteHost\"}"));
+			host.sendMessage(BoardChannel.frame("{\"type\":\"identify\",\"accountHash\":111,\"name\":\"WsInviteHost\"}"));
 
-			host.sendMessage(new TextMessage(
+			host.sendMessage(BoardChannel.frame(
 				"{\"type\":\"invite\",\"id\":\"" + id + "\",\"name\":\"WsInviteHost\",\"target\":\"Friendo\"}"));
 
 			JsonNode invited = awaitWhere(friendMsgs, m -> "invited".equals(type(m)), "invited push");
@@ -71,12 +68,12 @@ class PartyInviteSocketTest {
 		BlockingQueue<JsonNode> hostMsgs = new LinkedBlockingQueue<>();
 		WebSocketSession host = connect(hostMsgs);
 		try {
-			host.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-inv2\",\"request\":"
+			host.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-inv2\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsInviteHost2\",\"capacity\":3,\"passphrase\":\"pp-inv2\"}}"));
 			JsonNode hosted = awaitWhere(hostMsgs, m -> "hosted".equals(type(m)), "hosted ack");
 			String id = hosted.path("party").path("id").asText();
 
-			host.sendMessage(new TextMessage(
+			host.sendMessage(BoardChannel.frame(
 				"{\"type\":\"invite\",\"id\":\"" + id + "\",\"name\":\"WsInviteHost2\",\"target\":\"NobodyHere\"}"));
 
 			JsonNode ack = awaitWhere(hostMsgs, m -> "inviteAck".equals(type(m)), "inviteAck");
@@ -95,13 +92,13 @@ class PartyInviteSocketTest {
 		WebSocketSession host = connect(hostMsgs);
 		WebSocketSession stranger = connect(strangerMsgs);
 		try {
-			host.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-inv3\",\"request\":"
+			host.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-inv3\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsInviteHost3\",\"capacity\":3,\"passphrase\":\"pp-inv3\"}}"));
 			JsonNode hosted = awaitWhere(hostMsgs, m -> "hosted".equals(type(m)), "hosted ack");
 			String id = hosted.path("party").path("id").asText();
 
 			// A stranger who is neither host nor member may not invite into the party.
-			stranger.sendMessage(new TextMessage(
+			stranger.sendMessage(BoardChannel.frame(
 				"{\"type\":\"invite\",\"id\":\"" + id + "\",\"name\":\"RandomGuy\",\"accountHash\":999,"
 					+ "\"target\":\"Friendo\"}"));
 
@@ -115,14 +112,7 @@ class PartyInviteSocketTest {
 	}
 
 	private WebSocketSession connect(BlockingQueue<JsonNode> messages) throws Exception {
-		return new StandardWebSocketClient().execute(
-			new TextWebSocketHandler() {
-				@Override
-				protected void handleTextMessage(WebSocketSession s, TextMessage m) throws Exception {
-					messages.add(mapper.readTree(m.getPayload()));
-				}
-			},
-			"ws://localhost:" + socketServer.boundPort() + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
+		return BoardChannel.connect(socketServer.boundPort(), mapper, messages);
 	}
 
 	private static String type(JsonNode msg) {

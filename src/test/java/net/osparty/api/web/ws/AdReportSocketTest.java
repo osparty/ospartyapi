@@ -26,10 +26,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 /**
  * Report ingress over the socket.
@@ -51,10 +48,10 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 	"app.reports.global-per-minute=1000000",
 	// Every WebSocket is served by Netty on its own port, not by the servlet container's. Zero takes an
 	// ephemeral one so the whole suite can run without colliding on 8081.
-	"app.party-v2.port=0"})
+	"app.socket.port=0"})
 class AdReportSocketTest {
 	@Autowired
-	private net.osparty.api.v2.netty.NettyPartyV2Server socketServer;
+	private net.osparty.api.party.netty.NettySocketServer socketServer;
 
 	@Autowired
 	private ObjectMapper mapper;
@@ -296,18 +293,11 @@ class AdReportSocketTest {
 	}
 
 	private WebSocketSession connect(BlockingQueue<JsonNode> messages) throws Exception {
-		return new StandardWebSocketClient().execute(
-			new TextWebSocketHandler() {
-				@Override
-				protected void handleTextMessage(WebSocketSession s, TextMessage m) throws Exception {
-					messages.add(mapper.readTree(m.getPayload()));
-				}
-			},
-			"ws://localhost:" + socketServer.boundPort() + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
+		return BoardChannel.connect(socketServer.boundPort(), mapper, messages);
 	}
 
 	private static void send(WebSocketSession session, String json) throws Exception {
-		session.sendMessage(new TextMessage(json));
+		BoardChannel.send(session, json);
 	}
 
 	private static void close(WebSocketSession... sessions) throws Exception {

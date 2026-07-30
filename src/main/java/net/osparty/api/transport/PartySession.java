@@ -3,7 +3,7 @@ package net.osparty.api.transport;
 /**
  * One client's live-party connection, as much of it as the room layer needs to know.
  *
- * <p>V2 exists to move live state off a relay this project does not own, and the measurements say the cost
+ * <p>The live party exists to move live state off a relay this project does not own, and the measurements say the cost
  * of doing that is the send itself — Tomcat's send path is roughly half of this service's CPU
  * (PARTY_V2_OPTIMIZATION.md §6.5.3). That makes the transport a thing worth replacing, and replacing it is
  * only safe if the rooms, the ownership and the placement logic never knew which transport they were on.

@@ -37,7 +37,7 @@ import org.springframework.stereotype.Service;
  *       not forwarded. The audit trail stays complete while the channel stays readable.</li>
  *   <li><b>Per-IP ceiling</b> — the only semi-real identity available, and self-disabling when the
  *       ingress does not give us one. The address comes from the transport, which is the only layer
- *       that can see it (see {@code PartyV2NettyHandler#clientIp}).</li>
+ *       that can see it (see {@code NettySocketHandler#clientIp}).</li>
  * </ol>
  *
  * <p>Every counter lives in Redis so the limits hold across all replicas, and every one of them

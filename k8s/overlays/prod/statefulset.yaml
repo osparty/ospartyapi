@@ -1,4 +1,4 @@
-# Prod runs the API as a StatefulSet rather than a Deployment, because Party V2's node-hint routing needs
+# Prod runs the API as a StatefulSet rather than a Deployment, because the live party's node-hint routing needs
 # each pod to be individually addressable (PARTY_V2_MIGRATION.md §3.2, R1).
 #
 # A Deployment cannot provide that: its pods have randomly suffixed names and carry no per-pod label, so
@@ -6,7 +6,7 @@
 # automatic `statefulset.kubernetes.io/pod-name` label, which is what the per-pod Services in
 # pod-services.yaml select on.
 #
-# The pod name is also the nodeId: injected below as APP_PARTY_V2_NODE_ID, stamped into pv2:owner:{room},
+# The pod name is also the nodeId: injected below as APP_PARTY_NODE_ID, stamped into pv2:owner:{room},
 # returned in redirect frames, and travelling back as /n/{nodeId}/api/ws.
 #
 # This replaces the base Deployment outright rather than patching it, so **nothing here is inherited** —
@@ -59,7 +59,7 @@ spec:
           ports:
             - name: http
               containerPort: 8080
-            # The Party V2 live socket and the merged endpoint, served by Netty.
+            # Every WebSocket, served by Netty: the ad board and the live party share one connection.
             - name: live
               containerPort: 8081
             - name: management
@@ -83,7 +83,7 @@ spec:
             # dropped. At 5s every replica re-read and re-diffed every ad six times a minute regardless.
             - name: APP_WS_RECONCILE_INTERVAL_MS
               value: "30000"
-            - name: APP_PARTY_V2_NODE_ID
+            - name: APP_PARTY_NODE_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name

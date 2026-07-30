@@ -32,11 +32,9 @@ patches:
   # gives the longest matching prefix priority, so the /n/ paths win over the bare ones, and the bare
   # socket paths win over /.
   #
-  # Every WebSocket is served by Netty on `live`; REST stays on Tomcat's `http`.
-  #
-  # /api/v1/ws/parties is the ad board on its own connection, for clients that predate the merged socket.
-  # It is node-agnostic, so it goes to the round-robin Service. Retire it once
-  # osparty_ws_connections{endpoint="board"} reads zero.
+  # One WebSocket endpoint, served by Netty on `live`; REST stays on Tomcat's `http`. The single-protocol
+  # paths the board and the live party used to have are gone — a client below plugin 1.0.49 cannot reach
+  # this service at all after this, which is the deliberate cutover, not an oversight.
   - patch: |-
       apiVersion: networking.k8s.io/v1
       kind: Ingress
@@ -69,13 +67,6 @@ patches:
                       port:
                         name: live
                 - path: /api/ws
-                  pathType: Prefix
-                  backend:
-                    service:
-                      name: osparty-api
-                      port:
-                        name: live
-                - path: /api/v1/ws/parties
                   pathType: Prefix
                   backend:
                     service:

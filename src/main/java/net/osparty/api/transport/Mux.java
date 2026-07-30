@@ -17,9 +17,9 @@ package net.osparty.api.transport;
  * frame has nowhere to put the tag.
  */
 public final class Mux {
-	/** The V1 advertisement board. */
+	/** The advertisement board: search, hosting, invites, Discord. */
 	public static final byte BOARD = 1;
-	/** The V2 live party. */
+	/** The live party: roster, member state, pings, ready checks. */
 	public static final byte LIVE = 2;
 
 	private Mux() {

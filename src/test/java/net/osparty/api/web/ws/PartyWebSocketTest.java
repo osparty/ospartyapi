@@ -13,10 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -24,10 +21,10 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 	"app.ws.reconcile-interval-ms=150",
 	// Every WebSocket is served by Netty on its own port, not by the servlet container's. Zero takes an
 	// ephemeral one so the whole suite can run without colliding on 8081.
-	"app.party-v2.port=0"})
+	"app.socket.port=0"})
 class PartyWebSocketTest {
 	@Autowired
-	private net.osparty.api.v2.netty.NettyPartyV2Server socketServer;
+	private net.osparty.api.party.netty.NettySocketServer socketServer;
 
 	@Autowired
 	private ObjectMapper mapper;
@@ -37,12 +34,12 @@ class PartyWebSocketTest {
 		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
 		WebSocketSession session = connect(messages);
 		try {
-			session.sendMessage(new TextMessage("{\"type\":\"subscribe\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"subscribe\"}"));
 
 			JsonNode snapshot = awaitWhere(messages, m -> "snapshot".equals(type(m)), "snapshot");
 			assertThat(snapshot.has("parties")).isTrue();
 
-			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-snap\",\"request\":"
+			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-snap\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsTester\",\"description\":\"trio\","
 				+ "\"capacity\":3,\"world\":\"301\",\"passphrase\":\"wine-of-zamorak\"}}"));
 
@@ -62,10 +59,10 @@ class PartyWebSocketTest {
 		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
 		WebSocketSession session = connect(messages);
 		try {
-			session.sendMessage(new TextMessage("{\"type\":\"subscribe\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"subscribe\"}"));
 			awaitWhere(messages, m -> "snapshot".equals(type(m)), "snapshot");
 
-			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-host\",\"request\":"
+			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-host\",\"request\":"
 				+ "{\"activity\":\"tob\",\"host\":\"WsHost\",\"capacity\":3,\"passphrase\":\"pp-host\"}}"));
 
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
@@ -87,10 +84,10 @@ class PartyWebSocketTest {
 		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
 		WebSocketSession session = connect(messages);
 		try {
-			session.sendMessage(new TextMessage("{\"type\":\"subscribe\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"subscribe\"}"));
 			awaitWhere(messages, m -> "snapshot".equals(type(m)), "snapshot");
 
-			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-upd\",\"request\":"
+			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-upd\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsUpdater\",\"capacity\":3,\"passphrase\":\"pp-upd\","
 				+ "\"description\":\"original\"}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
@@ -100,7 +97,7 @@ class PartyWebSocketTest {
 				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> id.equals(p.path("id").asText())),
 				"created for the hosted ad");
 
-			session.sendMessage(new TextMessage(
+			session.sendMessage(BoardChannel.frame(
 				"{\"type\":\"update\",\"id\":\"" + id + "\",\"patch\":{\"description\":\"changed!\"}}"));
 
 			JsonNode batch = awaitWhere(messages,
@@ -120,10 +117,10 @@ class PartyWebSocketTest {
 		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
 		WebSocketSession session = connect(messages);
 		try {
-			session.sendMessage(new TextMessage("{\"type\":\"subscribe\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"subscribe\"}"));
 			awaitWhere(messages, m -> "snapshot".equals(type(m)), "snapshot");
 
-			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-roles\",\"request\":"
+			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-roles\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsRoles\",\"capacity\":3,\"passphrase\":\"pp-roles\","
 				+ "\"requiredRoles\":[\"melee\",\"fill\",\"fill\"],\"hostRole\":\"melee\",\"learner\":false}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
@@ -133,7 +130,7 @@ class PartyWebSocketTest {
 				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> id.equals(p.path("id").asText())),
 				"created for the hosted ad");
 
-			session.sendMessage(new TextMessage("{\"type\":\"update\",\"id\":\"" + id + "\",\"patch\":"
+			session.sendMessage(BoardChannel.frame("{\"type\":\"update\",\"id\":\"" + id + "\",\"patch\":"
 				+ "{\"requiredRoles\":[\"mage\",\"range\",\"fill\"],\"hostRole\":\"mage\",\"learner\":true}}"));
 
 			JsonNode batch = awaitWhere(messages,
@@ -156,10 +153,10 @@ class PartyWebSocketTest {
 		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
 		WebSocketSession session = connect(messages);
 		try {
-			session.sendMessage(new TextMessage("{\"type\":\"subscribe\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"subscribe\"}"));
 			awaitWhere(messages, m -> "snapshot".equals(type(m)), "snapshot");
 
-			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-old\",\"request\":"
+			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-old\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsXfer\",\"capacity\":3,\"passphrase\":\"pp-xfer\"}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
 			String id = hosted.path("party").path("id").asText();
@@ -167,7 +164,7 @@ class PartyWebSocketTest {
 				m -> "batch".equals(type(m)) && anyMatch(m.path("created"), p -> id.equals(p.path("id").asText())),
 				"created for the hosted ad");
 
-			session.sendMessage(new TextMessage("{\"type\":\"transferHost\",\"id\":\"" + id
+			session.sendMessage(BoardChannel.frame("{\"type\":\"transferHost\",\"id\":\"" + id
 				+ "\",\"key\":\"k-old\",\"host\":\"WsXfer2\",\"newKey\":\"k-new\"}"));
 			JsonNode ack = awaitWhere(messages,
 				m -> "transferred".equals(type(m)) && id.equals(m.path("id").asText()), "transferred ack");
@@ -178,14 +175,14 @@ class PartyWebSocketTest {
 					d -> id.equals(d.path("id").asText()) && "WsXfer2".equals(d.path("host").asText())),
 				"updated delta with new host");
 
-			session.sendMessage(new TextMessage("{\"type\":\"update\",\"id\":\"" + id
+			session.sendMessage(BoardChannel.frame("{\"type\":\"update\",\"id\":\"" + id
 				+ "\",\"key\":\"k-old\",\"patch\":{\"description\":\"stale\"}}"));
 			awaitWhere(messages,
 				m -> "error".equals(type(m)) && id.equals(m.path("id").asText())
 					&& "forbidden".equals(m.path("detail").asText()),
 				"forbidden for the old key");
 
-			session.sendMessage(new TextMessage("{\"type\":\"update\",\"id\":\"" + id
+			session.sendMessage(BoardChannel.frame("{\"type\":\"update\",\"id\":\"" + id
 				+ "\",\"key\":\"k-new\",\"patch\":{\"description\":\"new-host-desc\"}}"));
 			awaitWhere(messages,
 				m -> "batch".equals(type(m)) && anyMatch(m.path("updated"),
@@ -202,18 +199,18 @@ class PartyWebSocketTest {
 		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
 		WebSocketSession session = connect(messages);
 		try {
-			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-code\",\"request\":"
+			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-code\",\"request\":"
 				+ "{\"activity\":\"toa\",\"host\":\"WsPriv\",\"capacity\":2,\"passphrase\":\"pp\","
 				+ "\"privateParty\":true}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
 			String code = hosted.path("party").path("inviteCode").asText();
 			assertThat(code).isNotBlank();
 
-			session.sendMessage(new TextMessage("{\"type\":\"getByCode\",\"code\":\"" + code + "\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"getByCode\",\"code\":\"" + code + "\"}"));
 			JsonNode found = awaitWhere(messages, m -> "byCode".equals(type(m)), "byCode hit");
 			assertThat(found.path("party").path("host").asText()).isEqualTo("WsPriv");
 
-			session.sendMessage(new TextMessage("{\"type\":\"getByCode\",\"code\":\"ZZZZZZ\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"getByCode\",\"code\":\"ZZZZZZ\"}"));
 			JsonNode miss = awaitWhere(messages,
 				m -> "byCode".equals(type(m)) && "ZZZZZZ".equals(m.path("id").asText()), "byCode miss");
 			assertThat(miss.has("party")).isFalse();
@@ -228,15 +225,15 @@ class PartyWebSocketTest {
 		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
 		WebSocketSession session = connect(messages);
 		try {
-			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-host\",\"request\":"
+			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-host\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsByHost\",\"capacity\":3,\"passphrase\":\"pp\"}}"));
 			awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
 
-			session.sendMessage(new TextMessage("{\"type\":\"getByHost\",\"host\":\"WsByHost\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"getByHost\",\"host\":\"WsByHost\"}"));
 			JsonNode found = awaitWhere(messages, m -> "byHost".equals(type(m)), "byHost hit");
 			assertThat(found.path("party").path("host").asText()).isEqualTo("WsByHost");
 
-			session.sendMessage(new TextMessage("{\"type\":\"getByHost\",\"host\":\"NobodyHere\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"getByHost\",\"host\":\"NobodyHere\"}"));
 			JsonNode miss = awaitWhere(messages,
 				m -> "byHost".equals(type(m)) && "NobodyHere".equals(m.path("id").asText()), "byHost miss");
 			assertThat(miss.has("party")).isFalse();
@@ -247,14 +244,7 @@ class PartyWebSocketTest {
 	}
 
 	private WebSocketSession connect(BlockingQueue<JsonNode> messages) throws Exception {
-		return new StandardWebSocketClient().execute(
-			new TextWebSocketHandler() {
-				@Override
-				protected void handleTextMessage(WebSocketSession s, TextMessage m) throws Exception {
-					messages.add(mapper.readTree(m.getPayload()));
-				}
-			},
-			"ws://localhost:" + socketServer.boundPort() + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
+		return BoardChannel.connect(socketServer.boundPort(), mapper, messages);
 	}
 
 	private static String type(JsonNode msg) {

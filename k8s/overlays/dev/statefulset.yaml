@@ -1,4 +1,4 @@
-# Dev runs the API as a StatefulSet rather than a Deployment, because Party V2's node-hint routing needs
+# Dev runs the API as a StatefulSet rather than a Deployment, because the live party's node-hint routing needs
 # each pod to be individually addressable (PARTY_V2_MIGRATION.md §3.2, R1).
 #
 # A Deployment can't provide that: its pods have randomly suffixed names and carry no per-pod label, so
@@ -6,7 +6,7 @@
 # automatic `statefulset.kubernetes.io/pod-name` label, which is exactly what the per-pod Services in
 # pod-services.yaml select on.
 #
-# The pod name is also the nodeId: it is injected below as APP_PARTY_V2_NODE_ID, stamped into
+# The pod name is also the nodeId: it is injected below as APP_PARTY_NODE_ID, stamped into
 # pv2:owner:{room}, returned in redirect frames, and travels back as /n/{nodeId}/api/ws.
 apiVersion: apps/v1
 kind: StatefulSet
@@ -49,9 +49,7 @@ spec:
           ports:
             - name: http
               containerPort: 8080
-            # The Party V2 live socket when Netty serves it. Declared whichever transport is selected: a
-            # container port nothing listens on is inert, and keeping it here means the Services and the
-            # ingress paths below do not have to move when the transport does.
+            # Every WebSocket, served by Netty: the ad board and the live party share one connection.
             - name: live
               containerPort: 8081
             - name: management
@@ -82,7 +80,7 @@ spec:
             # whether or not anything had happened.
             - name: APP_WS_RECONCILE_INTERVAL_MS
               value: "30000"
-            - name: APP_PARTY_V2_NODE_ID
+            - name: APP_PARTY_NODE_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
@@ -91,7 +89,7 @@ spec:
             # granularity: a gap of 1 exists almost always, and at a threshold of 1 roughly half of all
             # hosts get redirected purely for being on the marginally heavier node. Each redirect costs the
             # host a full reconnect, so it stops being free long before it stops being correct.
-            - name: APP_PARTY_V2_REBALANCE_THRESHOLD
+            - name: APP_PARTY_REBALANCE_THRESHOLD
               value: "10"
           envFrom:
             - secretRef:

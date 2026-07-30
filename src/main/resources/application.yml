@@ -26,7 +26,7 @@ spring:
     default-property-inclusion: always
   task:
     scheduling:
-      # Spring defaults this to a single thread, which every @Scheduled job then shares. Party V2's
+      # Spring defaults this to a single thread, which every @Scheduled job then shares. The party's
       # ownership renewal runs every 10s and its reclaim scan every 30s, and both walk hundreds of rooms
       # doing a Redis round trip each — so on one thread the scan delays the renewal. Miss the 30s lock TTL
       # and the room is taken by another node, which is a real handover for every member of every party
@@ -66,10 +66,11 @@ app:
     enabled: true
     reconcile-interval-ms: 5000
     touch-interval-ms: 5000
-  party-v2:
+  socket:
     # Every WebSocket is served by Netty on this port; REST stays on server.port. Tomcat's send path was
     # roughly half this service's CPU, which is why the sockets moved off it (PARTY_V2_OPTIMIZATION.md §6.5.3).
-    port: ${APP_PARTY_V2_PORT:8081}
+    port: ${APP_SOCKET_PORT:8081}
+  party:
     # How long a room with nothing urgent pending may hold its live updates. The aggregation window
     # (aggregate-ms, 300) still governs anything a sender marked urgent — a vital that moved down — so
     # combat is unaffected and the banking/travelling that fills most of a session costs one round a

@@ -1,17 +1,13 @@
 package net.osparty.api.v2;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import net.osparty.api.transport.PartySession;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketSession;
 
 /**
  * Covers what {@link PartyV2Heartbeat} actually calls, rather than what {@link PartyV2Manager} can do.
@@ -25,19 +21,15 @@ class PartyV2HeartbeatTest {
 	private final ObjectMapper mapper = new ObjectMapper();
 
 	@Test
-	void theScheduledRenewalAlsoSweepsGhosts() throws Exception {
+	void theScheduledRenewalAlsoSweepsGhosts() {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		// Zero-length silence window: every seated member counts as gone the moment the sweep looks.
 		PartyV2Manager manager = new PartyV2Manager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyV2Bus(),
 			new LocalNodeLoadRegistry(), -1L);
-		PartyV2Handler handler = new PartyV2Handler(new PartyV2FrameHandler(manager, mapper));
+		PartyV2FrameHandler handler = new PartyV2FrameHandler(manager, mapper);
 
-		List<String> out = new ArrayList<>();
-		WebSocketSession host = session("host", out);
-		handler.afterConnectionEstablished(host);
-		handler.handleTextMessage(host, new TextMessage(
-			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+		hostARoom(handler);
 		assertThat(manager.roomCount()).isEqualTo(1);
 
 		new PartyV2Heartbeat(manager).renewOwned();
@@ -47,18 +39,14 @@ class PartyV2HeartbeatTest {
 	}
 
 	@Test
-	void theScheduledRenewalLeavesALiveRoomAlone() throws Exception {
+	void theScheduledRenewalLeavesALiveRoomAlone() {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		PartyV2Manager manager = new PartyV2Manager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyV2Bus(),
 			new LocalNodeLoadRegistry(), 90_000L);
-		PartyV2Handler handler = new PartyV2Handler(new PartyV2FrameHandler(manager, mapper));
+		PartyV2FrameHandler handler = new PartyV2FrameHandler(manager, mapper);
 
-		List<String> out = new ArrayList<>();
-		WebSocketSession host = session("host", out);
-		handler.afterConnectionEstablished(host);
-		handler.handleTextMessage(host, new TextMessage(
-			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+		hostARoom(handler);
 
 		new PartyV2Heartbeat(manager).renewOwned();
 
@@ -66,19 +54,50 @@ class PartyV2HeartbeatTest {
 		assertThat(manager.roomCount()).isEqualTo(1);
 	}
 
-	private static WebSocketSession session(String id, List<String> out) {
-		WebSocketSession session = mock(WebSocketSession.class);
-		when(session.getId()).thenReturn(id);
-		when(session.isOpen()).thenReturn(true);
-		try {
-			doAnswer(inv -> {
-				out.add(((TextMessage) inv.getArgument(0)).getPayload());
-				return null;
-			}).when(session).sendMessage(any());
+	private static void hostARoom(PartyV2FrameHandler handler) {
+		PartySession host = new CollectingSession("host");
+		handler.onOpen(host);
+		handler.onMessage(host.id(),
+			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"
+				.getBytes(StandardCharsets.UTF_8));
+	}
+
+	/** A connection with no transport under it. What it received does not matter here, only that it is open. */
+	private static final class CollectingSession implements PartySession {
+		private final String id;
+		private final List<String> out = new ArrayList<>();
+
+		CollectingSession(String id) {
+			this.id = id;
 		}
-		catch (Exception e) {
-			throw new RuntimeException(e);
+
+		@Override
+		public String id() {
+			return id;
 		}
-		return session;
+
+		@Override
+		public boolean isOpen() {
+			return true;
+		}
+
+		@Override
+		public void send(byte[] frame) {
+			out.add(new String(frame, StandardCharsets.UTF_8));
+		}
+
+		@Override
+		public void sendText(String json) {
+			out.add(json);
+		}
+
+		@Override
+		public void close() {
+		}
+
+		@Override
+		public boolean nodeHinted() {
+			return false;
+		}
 	}
 }

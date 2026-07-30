@@ -3,19 +3,17 @@ package net.osparty.api.v2;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
  * This node's identity for Party V2 ownership + node-hint routing (PARTY_V2_MIGRATION.md §3.2/§4.1).
  *
  * <p>The {@code nodeId} is the routing key: it is stamped into {@code pv2:owner:{room}} on claim, returned in
- * {@code redirect} frames, and travels in the {@code /n/{nodeId}/api/v2/ws/party} URL so the gateway can
+ * {@code redirect} frames, and travels in the {@code /n/{nodeId}/api/ws} URL so the gateway can
  * forward a joiner to the owning pod. Injected from {@code app.party-v2.node-id} / {@code POD_NAME} when
  * present (stable across restarts of the same pod), otherwise a random per-process id.
  */
 @Component
-@ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class NodeIdentity {
 	private final String nodeId;
 

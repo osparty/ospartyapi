@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.ActiveProfiles;
@@ -49,10 +48,13 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 	// The global circuit breaker is a single shared per-minute bucket in Redis, so a developer
 	// machine running the whole suite against one instance can exhaust it before this class starts.
 	// Raised out of the way here; ReportRateLimiterTest is where that ceiling is actually tested.
-	"app.reports.global-per-minute=1000000"})
+	"app.reports.global-per-minute=1000000",
+	// Every WebSocket is served by Netty on its own port, not by the servlet container's. Zero takes an
+	// ephemeral one so the whole suite can run without colliding on 8081.
+	"app.party-v2.port=0"})
 class AdReportSocketTest {
-	@LocalServerPort
-	private int port;
+	@Autowired
+	private net.osparty.api.v2.netty.NettyPartyV2Server socketServer;
 
 	@Autowired
 	private ObjectMapper mapper;
@@ -301,7 +303,7 @@ class AdReportSocketTest {
 					messages.add(mapper.readTree(m.getPayload()));
 				}
 			},
-			"ws://localhost:" + port + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
+			"ws://localhost:" + socketServer.boundPort() + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
 	}
 
 	private static void send(WebSocketSession session, String json) throws Exception {

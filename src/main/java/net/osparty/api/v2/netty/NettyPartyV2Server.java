@@ -21,24 +21,21 @@ import net.osparty.api.v2.PartyV2FrameHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
 /**
- * Serves every WebSocket this service has from Netty, on its own port, when
- * {@code app.party-v2.transport=netty}.
+ * Serves every WebSocket this service has from Netty, on its own port.
  *
  * <p><b>Why a second server at all.</b> Profiling put roughly half of this service's CPU inside Tomcat's
  * WebSocket send — a synchronized write path plus a per-session decorator, entered once per recipient per
- * frame (PARTY_V2_OPTIMIZATION.md §6.5.3). Nothing above the transport had to change to try the
- * alternative: rooms, ownership, placement and the protocol all sit behind {@code PartySession},
- * {@link PartyV2FrameHandler} and the ad board's own transport-neutral entry points, so this class only
- * carries bytes. REST stays on the servlet container's port, which is why this is a second server rather
- * than a migration.
+ * frame (PARTY_V2_OPTIMIZATION.md §6.5.3). Nothing above the transport had to change to move off it: rooms,
+ * ownership, placement and the protocol all sit behind {@code PartySession}, {@link PartyV2FrameHandler}
+ * and the ad board's own transport-neutral entry points, so this class only carries bytes. REST stays on
+ * the servlet container's port, which is why this is a second server rather than a migration.
  *
- * <p>Three endpoints: the live party, the ad board, and the merged one that carries both over a single
- * connection so a client in a party costs the ingress one socket instead of two.
+ * <p>Two endpoints: the ad board, and the merged one carrying both protocols over a single connection so a
+ * client in a party costs the ingress one socket instead of two.
  *
  * <p><b>Shutdown order matters.</b> {@code PartyV2Heartbeat} drains owned rooms at
  * {@code Integer.MAX_VALUE}, and Spring stops the highest phase first — so this must sit below it, or the
@@ -46,7 +43,6 @@ import org.springframework.stereotype.Component;
  * place, that {@code @PreDestroy} made before the heartbeat became a {@link SmartLifecycle}.
  */
 @Component
-@ConditionalOnProperty(name = "app.party-v2.transport", havingValue = "netty")
 public class NettyPartyV2Server implements SmartLifecycle {
 	private static final Logger log = LoggerFactory.getLogger(NettyPartyV2Server.class);
 

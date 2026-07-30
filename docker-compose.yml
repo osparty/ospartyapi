@@ -44,10 +44,6 @@ services:
       POSTGRES_URL: jdbc:postgresql://postgres:5432/osparty
       POSTGRES_USER: osparty
       POSTGRES_PASSWORD: osparty
-      APP_PARTY_V2_ENABLED: "true"
-      # `tomcat` (default) serves the live socket on 8080 with everything else; `netty` serves it on 8081
-      # instead. Both are in the image, so comparing them locally is this one variable.
-      APP_PARTY_V2_TRANSPORT: "${APP_PARTY_V2_TRANSPORT:-tomcat}"
       DISCORD_SERVICE_URL: "${DISCORD_SERVICE_URL:-}"
       DISCORD_INTERNAL_TOKEN: "${DISCORD_INTERNAL_TOKEN:-}"
       DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID:-}"
@@ -56,9 +52,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
+      # REST.
       - "8080:8080"
-      # The Netty transport's port. Published unconditionally: nothing listens on it under `tomcat`, and a
-      # published port with no listener costs nothing.
+      # Every WebSocket. Locally there is no ingress to unify the two, so a client pointed at 8080 will
+      # reach the capabilities probe and then fail to open a socket — point it here for the socket.
       - "8081:8081"
     expose:
       - "9090"

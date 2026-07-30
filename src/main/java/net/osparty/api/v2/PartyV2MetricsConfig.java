@@ -3,20 +3,18 @@ package net.osparty.api.v2;
 import io.micrometer.core.instrument.FunctionCounter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.binder.MeterBinder;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Party V2 metrics (PARTY_V2_MIGRATION.md §9). Separate from the V1 {@code MetricsConfig} so nothing here
- * loads unless {@code app.party-v2.enabled=true}.
+ * Live-party metrics (PARTY_V2_MIGRATION.md §9). Separate from the ad board's {@code MetricsConfig} because
+ * the two answer different questions and are read on different dashboards.
  *
- * <p>Live state is server-side in V2, so {@code rooms.owned} / {@code members.connected} are the inputs for
- * the RAM capacity planning §16 R6 calls for; {@code redirects} and {@code failovers} show how often node
- * affinity sends a client elsewhere and how often ownership actually moves.
+ * <p>Rooms live on the node that owns them, so {@code rooms.owned} / {@code members.connected} are the
+ * inputs for the RAM capacity planning §16 R6 calls for; {@code redirects} and {@code failovers} show how
+ * often node affinity sends a client elsewhere and how often ownership actually moves.
  */
 @Configuration
-@ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class PartyV2MetricsConfig {
 
 	@Bean

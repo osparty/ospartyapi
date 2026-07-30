@@ -14,15 +14,16 @@ import java.net.URI;
  * Answers anything that is not one of this server's WebSocket endpoints, so the handler behind it can accept
  * every path it is given, and works out which protocol a path asks for.
  *
- * <p>Three endpoints are served, each optionally behind a {@code /n/{nodeId}} segment that pins the
- * connection to one pod. No single prefix covers that shape, which is why the check is here rather than in
+ * <p>Two endpoints are served, each optionally behind a {@code /n/{nodeId}} segment that pins the connection
+ * to one pod. No single prefix covers that shape, which is why the check is here rather than in
  * {@code WebSocketServerProtocolHandler}'s own path matching. Everything else gets a 404: this port carries
  * sockets and nothing else, and the ingress is what puts it behind a hostname.
+ *
+ * <p>The live party had its own path once. It has none now — a client in a party holds one connection
+ * carrying both protocols, and a client not in one still needs the board.
  */
 final class PartyV2PathFilter extends ChannelInboundHandlerAdapter {
-	/** The V2 live party on its own connection. */
-	private static final String LIVE_PATH = "/api/v2/ws/party";
-	/** The V1 ad board on its own connection. */
+	/** The ad board on its own connection, for a client with no live party to carry. */
 	private static final String BOARD_PATH = "/api/v1/ws/parties";
 	/** Both protocols on one connection, demultiplexed by {@link net.osparty.api.transport.Mux}. */
 	private static final String MUX_PATH = "/api/ws";
@@ -32,7 +33,6 @@ final class PartyV2PathFilter extends ChannelInboundHandlerAdapter {
 		/** Not an endpoint of this server. */
 		NONE,
 		BOARD,
-		LIVE,
 		/** Both, tagged per frame. */
 		MUX
 	}
@@ -84,8 +84,6 @@ final class PartyV2PathFilter extends ChannelInboundHandlerAdapter {
 			path = path.substring(end);
 		}
 		switch (path) {
-			case LIVE_PATH:
-				return Route.LIVE;
 			case BOARD_PATH:
 				return Route.BOARD;
 			case MUX_PATH:

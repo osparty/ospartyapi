@@ -8,7 +8,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
@@ -20,7 +19,6 @@ import org.springframework.stereotype.Component;
  * {@link PartyV2Heartbeat}; a discarded room releases its lock.
  */
 @Component
-@ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class PartyV2Manager {
 	private static final Logger log = LoggerFactory.getLogger(PartyV2Manager.class);
 

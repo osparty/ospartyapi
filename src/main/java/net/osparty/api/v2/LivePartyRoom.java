@@ -190,31 +190,21 @@ final class LivePartyRoom {
 	}
 
 	/**
-	 * Relay a member's live snapshot to every other session in the room, and forget it.
+	 * Queue a member's live update for the next flush, and forget it afterwards.
 	 *
-	 * <p>Nothing is stored: once frames carry only what changed, the last one is a fragment rather than a
+	 * <p>Nothing is stored: frames carry only what changed, so the last one is a fragment rather than a
 	 * picture, and an owner that kept it would hand that fragment to the next joiner as though it were
 	 * complete. Joiners are served by {@link #broadcastResync} instead (PARTY_V2_OPTIMIZATION.md §5.2).
-	 */
-	void updateState(long memberId, TokenBuffer live) {
-		updateState(memberId, "memberState", live, false);
-	}
-
-	/**
-	 * Queue a member's live update for the next flush.
 	 *
 	 * <p>Not sent immediately: one update owes a send to every peer, so a busy room's outbound frames grow
 	 * with the square of its size. Holding a short window and giving each member one frame with everything
 	 * that happened in it makes that linear. The window is shorter than a game tick, so this costs a fraction
 	 * of a tick of latency and a member almost never queues twice within one.
 	 *
-	 * <p>{@code outboundType} is ignored now that updates travel together — kept in the signature because the
-	 * split frames are still accepted from clients that have not caught up.
-	 *
 	 * <p>{@code urgent} is the sender's own judgement that this one should not wait out the idle window: a
 	 * vital that moved <em>down</em>, which is damage taken, prayer drained or a spec spent. See {@link #flush}.
 	 */
-	void updateState(long memberId, String outboundType, TokenBuffer live, boolean urgent) {
+	void updateState(long memberId, TokenBuffer live, boolean urgent) {
 		synchronized (lock) {
 			if (!members.containsKey(memberId) || live == null) {
 				return;

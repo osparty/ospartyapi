@@ -6,7 +6,6 @@ import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -24,7 +23,6 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @Profile("!test")
-@ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class RedisPartyV2Bus implements PartyV2Bus {
 	private static final Logger log = LoggerFactory.getLogger(RedisPartyV2Bus.class);
 

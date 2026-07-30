@@ -67,10 +67,8 @@ app:
     reconcile-interval-ms: 5000
     touch-interval-ms: 5000
   party-v2:
-    # Which server carries the live socket: `tomcat` (the servlet container, alongside everything else on
-    # server.port) or `netty` (its own port, below). Tomcat's send path is roughly half this service's CPU,
-    # so both ship in the same image and the comparison is a config flip rather than a deploy.
-    transport: ${APP_PARTY_V2_TRANSPORT:tomcat}
+    # Every WebSocket is served by Netty on this port; REST stays on server.port. Tomcat's send path was
+    # roughly half this service's CPU, which is why the sockets moved off it (PARTY_V2_OPTIMIZATION.md §6.5.3).
     port: ${APP_PARTY_V2_PORT:8081}
     # How long a room with nothing urgent pending may hold its live updates. The aggregation window
     # (aggregate-ms, 300) still governs anything a sender marked urgent — a vital that moved down — so

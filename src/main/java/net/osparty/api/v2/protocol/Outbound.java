@@ -84,23 +84,6 @@ public record Outbound(
 		return new Builder("meta").meta(meta).build();
 	}
 
-	/** A peer's live snapshot, relayed verbatim ({@code state} is the opaque payload they sent). */
-	public static Outbound memberState(long memberId, TokenBuffer state) {
-		return new Builder("memberState").memberId(memberId).state(state).build();
-	}
-
-	/**
-	 * Part of a peer's live state, relayed verbatim under the type the sender chose.
-	 *
-	 * <p>A live update is split by how often it changes — vitals every tick, items on a swap, profile almost
-	 * never — and each part travels as its own type so a receiver that predates the split ignores it rather
-	 * than mistaking a fragment for a whole snapshot (PARTY_V2_OPTIMIZATION.md §8). The room does not know
-	 * or care what distinguishes them; {@code type} is passed through and the payload is never read.
-	 */
-	public static Outbound memberState(long memberId, String type, TokenBuffer state) {
-		return new Builder(type).memberId(memberId).state(state).build();
-	}
-
 	/**
 	 * Everyone re-send your full live state: someone has just been seated and has no picture of the room.
 	 *
@@ -139,7 +122,7 @@ public record Outbound(
 		return new Builder("error").detail(detail).build();
 	}
 
-	/** Reconnect to the owning node: the client re-dials {@code /n/{nodeId}/api/v2/ws/party} (§3.2/§8). */
+	/** Reconnect to the owning node: the client re-dials {@code /n/{nodeId}/api/ws} (§3.2/§8). */
 	public static Outbound redirect(String nodeId) {
 		return new Builder("redirect").nodeId(nodeId).build();
 	}

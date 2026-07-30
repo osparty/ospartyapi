@@ -19,7 +19,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.ActiveProfiles;
@@ -43,12 +42,15 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 	"app.ws.reconcile-interval-ms=150",
 	"app.bans.refresh-ms=100",
 	"app.bans.filter-get-by-host=true",
-	"app.bans.filter-get-by-code=true"})
+	"app.bans.filter-get-by-code=true",
+	// Every WebSocket is served by Netty on its own port, not by the servlet container's. Zero takes an
+	// ephemeral one so the whole suite can run without colliding on 8081.
+	"app.party-v2.port=0"})
 class AdShadowbanSocketTest {
 	private static final long RECONCILE_MS = 150;
 
-	@LocalServerPort
-	private int port;
+	@Autowired
+	private net.osparty.api.v2.netty.NettyPartyV2Server socketServer;
 
 	@Autowired
 	private ObjectMapper mapper;
@@ -333,7 +335,7 @@ class AdShadowbanSocketTest {
 					messages.add(mapper.readTree(m.getPayload()));
 				}
 			},
-			"ws://localhost:" + port + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
+			"ws://localhost:" + socketServer.boundPort() + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
 	}
 
 	/** Subscribes and returns the snapshot frame that subscribing produces. */

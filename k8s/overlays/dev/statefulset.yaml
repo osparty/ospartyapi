@@ -7,7 +7,7 @@
 # pod-services.yaml select on.
 #
 # The pod name is also the nodeId: it is injected below as APP_PARTY_V2_NODE_ID, stamped into
-# pv2:owner:{room}, returned in redirect frames, and travels back as /n/{nodeId}/api/v2/ws/party.
+# pv2:owner:{room}, returned in redirect frames, and travels back as /n/{nodeId}/api/ws.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -82,14 +82,6 @@ spec:
             # whether or not anything had happened.
             - name: APP_WS_RECONCILE_INTERVAL_MS
               value: "30000"
-            - name: APP_PARTY_V2_ENABLED
-              value: "true"
-            # Which server carries the live socket. Tomcat's send path measured as roughly half this
-            # service's CPU, so dev runs Netty and prod stays on the default until the comparison here says
-            # otherwise. Flipping this back to "tomcat" also needs the two /api/v2/ws/party ingress paths in
-            # kustomization.yaml pointed back at the `http` port — the transport moves the port with it.
-            - name: APP_PARTY_V2_TRANSPORT
-              value: "netty"
             - name: APP_PARTY_V2_NODE_ID
               valueFrom:
                 fieldRef:

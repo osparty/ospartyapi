@@ -10,28 +10,6 @@ images:
   - name: ghcr.io/osparty/osparty-api
     newTag: latest
 patches:
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: osparty-api
-      spec:
-        template:
-          spec:
-            containers:
-              - name: api
-                env:
-                  - name: DISCORD_SERVICE_URL
-                    value: http://osparty-discord:8090
-
-  # The StatefulSet takes the Deployment's place; both would otherwise fight over the same pod labels.
-  # See statefulset.yaml for why node-hint routing cannot be served by a Deployment.
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: osparty-api
-      $patch: delete
   # The round-robin Service needs the live port too, for the un-hinted form of the merged socket: a client
   # not yet in a party has no node to prefer and should land wherever the gateway sends it.
   - patch: |-
@@ -54,12 +32,11 @@ patches:
   # gives the longest matching prefix priority, so the /n/ paths win over the bare ones, and the bare
   # socket paths win over /.
   #
-  # Every WebSocket is served by Netty on `live`; REST stays on Tomcat's `http`. Putting the transport
-  # back on Tomcat means these paths point at a port nothing is listening on, which is exactly the
-  # rollback: clients see refused upgrades and fall back to the legacy endpoint themselves.
+  # Every WebSocket is served by Netty on `live`; REST stays on Tomcat's `http`.
   #
-  # /api/v1/ws/parties is listed so the ad board is served by Netty as well — one server for every
-  # socket. It is node-agnostic, so it goes to the round-robin Service.
+  # /api/v1/ws/parties is the ad board on its own connection, for clients that predate the merged socket.
+  # It is node-agnostic, so it goes to the round-robin Service. Retire it once
+  # osparty_ws_connections{endpoint="board"} reads zero.
   - patch: |-
       apiVersion: networking.k8s.io/v1
       kind: Ingress
@@ -92,34 +69,6 @@ patches:
                       port:
                         name: live
                 - path: /api/ws
-                  pathType: Prefix
-                  backend:
-                    service:
-                      name: osparty-api
-                      port:
-                        name: live
-                - path: /n/osparty-api-0/api/v2/ws/party
-                  pathType: Prefix
-                  backend:
-                    service:
-                      name: osparty-api-n0
-                      port:
-                        name: live
-                - path: /n/osparty-api-1/api/v2/ws/party
-                  pathType: Prefix
-                  backend:
-                    service:
-                      name: osparty-api-n1
-                      port:
-                        name: live
-                - path: /n/osparty-api-2/api/v2/ws/party
-                  pathType: Prefix
-                  backend:
-                    service:
-                      name: osparty-api-n2
-                      port:
-                        name: live
-                - path: /api/v2/ws/party
                   pathType: Prefix
                   backend:
                     service:

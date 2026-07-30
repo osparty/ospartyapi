@@ -1,6 +1,5 @@
 package net.osparty.api.v2;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -34,7 +33,6 @@ import org.springframework.stereotype.Component;
  * itself takes only that room's own lock, so rooms stay independent.
  */
 @Component
-@ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class PartyV2Aggregator {
 	private final PartyV2Manager manager;
 	private final long idleMs;

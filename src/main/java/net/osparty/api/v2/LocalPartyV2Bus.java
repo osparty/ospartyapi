@@ -1,6 +1,5 @@
 package net.osparty.api.v2;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -14,7 +13,6 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @Profile("test")
-@ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class LocalPartyV2Bus implements PartyV2Bus {
 	private volatile Listener listener;
 

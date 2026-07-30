@@ -1,7 +1,6 @@
 package net.osparty.api.v2;
 
 import java.util.Optional;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -11,7 +10,6 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @Profile("test")
-@ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class LocalNodeLoadRegistry implements NodeLoadRegistry {
 	@Override
 	public void publish(int members) {

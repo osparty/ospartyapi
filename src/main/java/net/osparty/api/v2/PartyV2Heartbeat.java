@@ -3,7 +3,6 @@ package net.osparty.api.v2;
 import java.util.ArrayList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -26,7 +25,6 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @Profile("!test")
-@ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class PartyV2Heartbeat implements SmartLifecycle {
 	private static final Logger log = LoggerFactory.getLogger(PartyV2Heartbeat.class);
 

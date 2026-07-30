@@ -35,8 +35,8 @@ spec:
     - name: http
       port: 8080
       targetPort: http
-    # The Party V2 live socket, when Netty serves it (app.party-v2.transport=netty). The node-hinted
-    # ingress path targets this port, so a joiner still reaches the exact pod that owns its party.
+    # Every WebSocket, served by Netty. The node-hinted ingress path targets this port, so a joiner
+    # reaches the exact pod that owns its party.
     - name: live
       port: 8081
       targetPort: live

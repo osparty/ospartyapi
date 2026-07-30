@@ -31,7 +31,7 @@ import org.springframework.web.socket.handler.AbstractWebSocketHandler;
  * internal to the room layer.
  */
 class NettyPartyV2ServerTest {
-	/** No channel tag: a single-protocol socket, where every frame is already this collector's. */
+	/** No channel tag: the ad board on its own connection, where every frame is already the board's. */
 	private static final byte UNTAGGED = 0;
 	private static final long MEMBER_TIMEOUT_MS = 90_000L;
 	private static final long WAIT_MS = 5_000;
@@ -70,20 +70,20 @@ class NettyPartyV2ServerTest {
 
 	@Test
 	void hostJoinRelayAndLeaveOverRealSockets() throws Exception {
-		Collector hostOut = new Collector();
-		WebSocketSession host = connect("/api/v2/ws/party", hostOut);
-		host.sendMessage(new TextMessage(
+		Collector hostOut = new Collector(Mux.LIVE);
+		WebSocketSession host = connect("/api/ws", hostOut);
+		host.sendMessage(tagged(Mux.LIVE,
 			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 		assertThat(hostOut.await("welcome").get("status").asText()).isEqualTo("HOST");
 
-		Collector memberOut = new Collector();
-		WebSocketSession member = connect("/api/v2/ws/party", memberOut);
-		member.sendMessage(new TextMessage("{\"t\":\"join\",\"room\":\"r\",\"invited\":true}"));
+		Collector memberOut = new Collector(Mux.LIVE);
+		WebSocketSession member = connect("/api/ws", memberOut);
+		member.sendMessage(tagged(Mux.LIVE, "{\"t\":\"join\",\"room\":\"r\",\"invited\":true}"));
 		assertThat(memberOut.await("welcome").get("status").asText()).isEqualTo("MEMBER");
 
 		// A live update reaching its peer is the whole job of this transport. The frame has to arrive before
 		// the flush can carry it, so the flush is driven inside the wait rather than once before it.
-		host.sendMessage(new TextMessage("{\"t\":\"update\",\"s\":{\"currentHp\":42}}"));
+		host.sendMessage(tagged(Mux.LIVE, "{\"t\":\"update\",\"s\":{\"currentHp\":42}}"));
 		JsonNode relayed = waitFor(() -> {
 			manager.flushRooms();
 			return memberOut.find("mu");
@@ -98,14 +98,21 @@ class NettyPartyV2ServerTest {
 	/** The node-hint form is a different path to the same endpoint, and the client is told where it landed. */
 	@Test
 	void theNodeHintedPathServesTheSameEndpoint() throws Exception {
-		Collector out = new Collector();
-		WebSocketSession host = connect("/n/node-a/api/v2/ws/party", out);
-		host.sendMessage(new TextMessage(
+		Collector out = new Collector(Mux.LIVE);
+		WebSocketSession host = connect("/n/node-a/api/ws", out);
+		host.sendMessage(tagged(Mux.LIVE,
 			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
 
 		JsonNode welcome = out.await("welcome");
 		assertThat(welcome.get("status").asText()).isEqualTo("HOST");
 		assertThat(welcome.get("nodeId").asText()).isEqualTo("node-a");
+	}
+
+	/** The live party had an endpoint of its own once. It is carried on the merged connection now. */
+	@Test
+	void theRetiredLivePathIsRefused() {
+		assertThatThrownBy(() -> connect("/api/v2/ws/party", new Collector(Mux.LIVE)))
+			.isInstanceOf(Exception.class);
 	}
 
 	/** This port carries the WebSocket endpoints and nothing else; REST stays on the servlet one. */
@@ -147,18 +154,18 @@ class NettyPartyV2ServerTest {
 	 */
 	@Test
 	void openConnectionsAreCountedPerEndpoint() throws Exception {
-		assertThat(openOn("live")).isZero();
+		assertThat(openOn("board")).isZero();
 		assertThat(openOn("mux")).isZero();
 
-		WebSocketSession live = connect("/api/v2/ws/party", new Collector());
+		// No board is wired up in this test, so this connection opens no session — but the endpoint it
+		// arrived on is still counted, which is exactly what the gauge is for.
+		WebSocketSession board = connect("/api/v1/ws/parties", new Collector());
 		WebSocketSession merged = connect("/api/ws", new Collector(Mux.LIVE));
-		waitForCount("live", 1);
+		waitForCount("board", 1);
 		waitForCount("mux", 1);
-		// The board endpoint is served by the same handler and must stay at zero while nobody uses it.
-		assertThat(openOn("board")).isZero();
 
-		live.close(CloseStatus.NORMAL);
-		waitForCount("live", 0);
+		board.close(CloseStatus.NORMAL);
+		waitForCount("board", 0);
 		// Closing one endpoint's connection leaves the other's alone.
 		assertThat(openOn("mux")).isEqualTo(1);
 		merged.close(CloseStatus.NORMAL);

@@ -14,8 +14,6 @@ import net.osparty.api.service.DiscordLinkService;
 import net.osparty.api.service.PartyFactory;
 import net.osparty.api.service.ReportRateLimiter;
 import net.osparty.api.service.VoiceChannelService;
-import net.osparty.api.web.config.ClientAddressHandshakeInterceptor;
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -26,20 +24,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.web.socket.BinaryMessage;
-import org.springframework.web.socket.CloseStatus;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 @Component
 @ConditionalOnProperty(name = "app.ws.enabled", havingValue = "true", matchIfMissing = true)
-public class PartyBroadcaster extends TextWebSocketHandler {
+public class PartyBroadcaster {
 	private static final Logger log = LoggerFactory.getLogger(PartyBroadcaster.class);
 
-	private static final int SEND_TIME_LIMIT_MS = 10_000;
-	private static final int SEND_BUFFER_LIMIT = 512 * 1024;
 	private static final PartyUpdate TTL_TOUCH = new PartyUpdate();
 
 	private final PartyRepository store;
@@ -130,19 +120,10 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		return subscribers.size();
 	}
 
-	@Override
-	public void afterConnectionEstablished(WebSocketSession session) {
-		WebSocketSession guarded = new ConcurrentWebSocketSessionDecorator(
-			session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT);
-		// Behind the seam from here on: the ad board no longer knows what carries its bytes, which is what
-		// lets it move onto the Netty transport and, eventually, share one connection with the live party.
-		onOpen(new net.osparty.api.transport.SpringPartySession(guarded),
-			(String) session.getAttributes().get(ClientAddressHandshakeInterceptor.CLIENT_IP_ATTRIBUTE));
-	}
-
 	/**
-	 * A client arrived, whatever carried it here. The servlet container reaches this through
-	 * {@link #afterConnectionEstablished}; the Netty server calls it directly.
+	 * A client arrived. The board knows nothing about what carries its bytes — {@code clientIp} is handed in
+	 * because the transport is the only thing that can see the peer address, and the report rate limiter
+	 * needs it.
 	 */
 	public void onOpen(net.osparty.api.transport.PartySession session, String clientIp) {
 		Subscriber sub = new Subscriber(session, clientIp);
@@ -152,12 +133,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		send(sub, Outbound.presence(version.get(), lastPresence >= 0 ? lastPresence : subscribers.size()));
 	}
 
-	@Override
-	protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-		onMessage(session.getId(), message.getPayload());
-	}
-
-	/** One inbound frame, addressed by session id so neither transport has to hand over its own object. */
+	/** One inbound frame, addressed by session id so the transport never hands over its own object. */
 	public void onMessage(String sessionId, String payload) {
 		Subscriber sub = subscribers.get(sessionId);
 		if (sub == null) {
@@ -857,12 +833,7 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 		}
 	}
 
-	@Override
-	public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-		onClose(session.getId(), String.valueOf(status));
-	}
-
-	/** The connection went away, whichever transport was carrying it. */
+	/** The connection went away. */
 	public void onClose(String sessionId, String status) {
 		forgetIdentity(subscribers.remove(sessionId));
 		unbind(sessionId);
@@ -898,16 +869,6 @@ public class PartyBroadcaster extends TextWebSocketHandler {
 				send(sub, Outbound.gone(version.get(), entry.getValue()));
 				unbind(entry.getKey());
 			}
-		}
-	}
-
-	@Override
-	public void handleTransportError(WebSocketSession session, Throwable exception) {
-		forgetIdentity(subscribers.remove(session.getId()));
-		try {
-			session.close(CloseStatus.SERVER_ERROR);
-		}
-		catch (IOException ignored) {
 		}
 	}
 

@@ -36,7 +36,8 @@ import org.springframework.stereotype.Service;
  *   <li><b>Global circuit breaker</b> — above a per-minute ceiling, reports are still recorded but
  *       not forwarded. The audit trail stays complete while the channel stays readable.</li>
  *   <li><b>Per-IP ceiling</b> — the only semi-real identity available, and self-disabling when the
- *       ingress does not give us one (see {@code ClientAddressHandshakeInterceptor}).</li>
+ *       ingress does not give us one. The address comes from the transport, which is the only layer
+ *       that can see it (see {@code PartyV2NettyHandler#clientIp}).</li>
  * </ol>
  *
  * <p>Every counter lives in Redis so the limits hold across all replicas, and every one of them

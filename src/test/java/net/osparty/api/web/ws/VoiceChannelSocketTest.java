@@ -16,7 +16,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
@@ -27,10 +26,14 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@TestPropertySource(properties = "app.ws.reconcile-interval-ms=150")
+@TestPropertySource(properties = {
+	"app.ws.reconcile-interval-ms=150",
+	// Every WebSocket is served by Netty on its own port, not by the servlet container's. Zero takes an
+	// ephemeral one so the whole suite can run without colliding on 8081.
+	"app.party-v2.port=0"})
 class VoiceChannelSocketTest {
-	@LocalServerPort
-	private int port;
+	@Autowired
+	private net.osparty.api.v2.netty.NettyPartyV2Server socketServer;
 
 	@Autowired
 	private ObjectMapper mapper;
@@ -144,7 +147,7 @@ class VoiceChannelSocketTest {
 					messages.add(mapper.readTree(m.getPayload()));
 				}
 			},
-			"ws://localhost:" + port + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
+			"ws://localhost:" + socketServer.boundPort() + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
 	}
 
 	private static String type(JsonNode msg) {

@@ -59,7 +59,7 @@ final class PartyV2NettyHandler extends SimpleChannelInboundHandler<WebSocketFra
 		this.frames = frames;
 		this.board = board;
 		this.dropped = dropped;
-		for (Route route : new Route[] { Route.BOARD, Route.LIVE, Route.MUX }) {
+		for (Route route : new Route[] { Route.BOARD, Route.MUX }) {
 			AtomicInteger count = new AtomicInteger();
 			open.put(route, count);
 			if (meters != null) {
@@ -93,8 +93,8 @@ final class PartyV2NettyHandler extends SimpleChannelInboundHandler<WebSocketFra
 		Route route = PartyV2PathFilter.route(path);
 		// A protocol that is switched off leaves its half of the connection unopened rather than failing the
 		// handshake: the other half is still worth serving.
-		boolean wantsBoard = board != null && (route == Route.BOARD || route == Route.MUX);
-		boolean wantsLive = frames != null && (route == Route.LIVE || route == Route.MUX);
+		boolean wantsBoard = board != null;
+		boolean wantsLive = frames != null && route == Route.MUX;
 		boolean tagged = route == Route.MUX;
 
 		PartySession boardSession = null;

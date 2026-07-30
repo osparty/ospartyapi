@@ -1,36 +1,34 @@
 package net.osparty.api.v2;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import net.osparty.api.transport.PartySession;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketSession;
 
 /**
- * Drives {@link PartyV2Handler} end-to-end with mock sessions to cover the P1 server core: host, join
+ * Drives {@link PartyV2FrameHandler} end-to-end with fake sessions to cover the server core: host, join
  * (as a PENDING applicant), live-state relay, server-authoritative admission, and kick.
+ *
+ * <p>Against the frame handler rather than a transport, because the protocol is where all of this lives —
+ * what carries the bytes only has to call {@code onOpen}, {@code onMessage} and {@code onClose}.
  */
 class PartyV2HandlerTest {
 	/** Long enough that no test trips the silence sweep by accident; staleness is driven explicitly. */
 	private static final long MEMBER_TIMEOUT_MS = 90_000L;
 
 	private final ObjectMapper mapper = new ObjectMapper();
-	private PartyV2Handler handler;
+	private PartyV2FrameHandler handler;
 	private PartyV2Manager manager;
 	private LocalPartyV2Bus bus;
 
-	private WebSocketSession host;
-	private WebSocketSession member;
+	private FakeSession host;
+	private FakeSession member;
 	private List<String> hostOut;
 	private List<String> memberOut;
 
@@ -39,15 +37,13 @@ class PartyV2HandlerTest {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		bus = new LocalPartyV2Bus();
 		manager = new PartyV2Manager(mapper, new LocalPartyOwnershipService(node), node, bus, new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS);
-		// Driven through the servlet transport, which is the one that ships by default; the protocol itself
-		// lives in the frame handler and is the same on either.
-		handler = new PartyV2Handler(new PartyV2FrameHandler(manager, mapper));
+		handler = new PartyV2FrameHandler(manager, mapper);
 		hostOut = new ArrayList<>();
 		memberOut = new ArrayList<>();
 		host = session("host", hostOut);
 		member = session("member", memberOut);
-		handler.afterConnectionEstablished(host);
-		handler.afterConnectionEstablished(member);
+		handler.onOpen(host);
+		handler.onOpen(member);
 	}
 
 	@Test
@@ -75,7 +71,7 @@ class PartyV2HandlerTest {
 		assertThat(statusOf(hostRoster, memberId)).isEqualTo("PENDING");
 
 		// A live update from the host reaches the member on the next flush.
-		send(host, "{\"t\":\"state\",\"s\":{\"name\":\"Host\",\"world\":301,\"currentHp\":50}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"name\":\"Host\",\"world\":301,\"currentHp\":50}}");
 		manager.flushRooms();
 		JsonNode relayed = onlyUpdate(last(memberOut, "mu"));
 		assertThat(relayed).isNotNull();
@@ -112,14 +108,14 @@ class PartyV2HandlerTest {
 	@Test
 	void aJoinerIsNotReplayedStateSentBeforeItArrived() throws Exception {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
-		send(host, "{\"t\":\"state\",\"s\":{\"name\":\"Host\",\"world\":301}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"name\":\"Host\",\"world\":301}}");
 		manager.flushRooms();
 
 		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
 		assertThat(countOf(memberOut, "mu")).isZero();
 
 		// The host answers the resync and the joiner is caught up.
-		send(host, "{\"t\":\"state\",\"s\":{\"name\":\"Host\",\"world\":301}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"name\":\"Host\",\"world\":301}}");
 		manager.flushRooms();
 		assertThat(onlyUpdate(last(memberOut, "mu")).get("s").get("world").asInt()).isEqualTo(301);
 	}
@@ -135,8 +131,8 @@ class PartyV2HandlerTest {
 	@Test
 	void aWindowOfUpdatesCostsOneSendPerMember() throws Exception {
 		List<String> thirdOut = new ArrayList<>();
-		WebSocketSession third = session("third", thirdOut);
-		handler.afterConnectionEstablished(third);
+		FakeSession third = session("third", thirdOut);
+		handler.onOpen(third);
 
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":5}");
 		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
@@ -178,8 +174,8 @@ class PartyV2HandlerTest {
 	@Test
 	void resyncIsRateLimitedSoAWaveOfJoinersCostsOneRound() throws Exception {
 		List<String> thirdOut = new ArrayList<>();
-		WebSocketSession third = session("third", thirdOut);
-		handler.afterConnectionEstablished(third);
+		FakeSession third = session("third", thirdOut);
+		handler.onOpen(third);
 
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":5}");
 		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
@@ -230,18 +226,19 @@ class PartyV2HandlerTest {
 		assertThat(countOf(hostOut, "mu")).isEqualTo(echoed);
 	}
 
+	/** Several updates within one window arrive together, in the order they were sent, as one frame. */
 	@Test
-	void splitUpdatesAreStillAcceptedAndArriveTogether() throws Exception {
+	void updatesWithinOneWindowArriveTogetherInOrder() throws Exception {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
 		long hostId = last(hostOut, "welcome").get("m").asLong();
 
-		send(host, "{\"t\":\"vitals\",\"s\":{\"currentHp\":31}}");
-		send(host, "{\"t\":\"items\",\"s\":{\"inventory\":[995]}}");
-		send(host, "{\"t\":\"profile\",\"s\":{\"name\":\"Host\",\"world\":301}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"currentHp\":31}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"inventory\":[995]}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"name\":\"Host\",\"world\":301}}");
 		manager.flushRooms();
 
-		// All three land in one frame, in order, rather than three sends.
+		// One send, not three: order is preserved because updates are never merged.
 		JsonNode updates = last(memberOut, "mu").get("u");
 		assertThat(updates).hasSize(3);
 		assertThat(updates.get(0).get("s").get("currentHp").asInt()).isEqualTo(31);
@@ -310,18 +307,15 @@ class PartyV2HandlerTest {
 			}
 		};
 		PartyV2Manager manager = new PartyV2Manager(mapper, flaky, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS);
-		PartyV2Handler fenced = new PartyV2Handler(new PartyV2FrameHandler(manager, mapper));
-		fenced.afterConnectionEstablished(host);
-		fenced.afterConnectionEstablished(member);
-		fenced.handleTextMessage(host, new TextMessage(
-			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
-		fenced.handleTextMessage(member, new TextMessage(
-			"{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}"));
+		PartyV2FrameHandler fenced = new PartyV2FrameHandler(manager, mapper);
+		fenced.onOpen(host);
+		fenced.onOpen(member);
+		sendTo(fenced, host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		sendTo(fenced, member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		long memberId = last(memberOut, "welcome").get("m").asLong();
 
 		owned.set(false);
-		fenced.handleTextMessage(host, new TextMessage(
-			"{\"t\":\"command\",\"action\":\"KICK\",\"target\":" + memberId + "}"));
+		sendTo(fenced, host, "{\"t\":\"command\",\"action\":\"KICK\",\"target\":" + memberId + "}");
 
 		// The kick is refused, and everyone is told to reconnect elsewhere.
 		assertThat(last(memberOut, "kicked")).isNull();
@@ -374,13 +368,13 @@ class PartyV2HandlerTest {
 				return java.util.Set.of();
 			}
 		};
-		PartyV2Handler redirecting = new PartyV2Handler(new PartyV2FrameHandler(
-			new PartyV2Manager(mapper, foreign, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS), mapper));
+		PartyV2FrameHandler redirecting = new PartyV2FrameHandler(
+			new PartyV2Manager(mapper, foreign, node, new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS), mapper);
 		List<String> out = new ArrayList<>();
-		WebSocketSession joiner = session("joiner", out);
-		redirecting.afterConnectionEstablished(joiner);
+		FakeSession joiner = session("joiner", out);
+		redirecting.onOpen(joiner);
 
-		redirecting.handleTextMessage(joiner, new TextMessage("{\"t\":\"join\",\"room\":\"elsewhere\"}"));
+		sendTo(redirecting, joiner, "{\"t\":\"join\",\"room\":\"elsewhere\"}");
 
 		assertThat(last(out, "redirect").get("nodeId").asText()).isEqualTo("node-b");
 	}
@@ -404,13 +398,12 @@ class PartyV2HandlerTest {
 		PartyV2Manager loaded = new PartyV2Manager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyV2Bus(), load,
 			MEMBER_TIMEOUT_MS);
-		PartyV2Handler placing = new PartyV2Handler(new PartyV2FrameHandler(loaded, mapper));
+		PartyV2FrameHandler placing = new PartyV2FrameHandler(loaded, mapper);
 		List<String> out = new ArrayList<>();
-		WebSocketSession newHost = session("newHost", out);
-		placing.afterConnectionEstablished(newHost);
+		FakeSession newHost = session("newHost", out);
+		placing.onOpen(newHost);
 
-		placing.handleTextMessage(newHost, new TextMessage(
-			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+		sendTo(placing, newHost, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 
 		// Redirected rather than claimed: nothing is hosted here, and the client will re-send host there.
 		assertThat(last(out, "redirect").get("nodeId").asText()).isEqualTo("node-b");
@@ -421,26 +414,23 @@ class PartyV2HandlerTest {
 		// Once the room exists here, load no longer decides: a host re-sending its frame after a reconnect
 		// must land back on its own room rather than being bounced to whichever node is lightest today.
 		lighter.set(null);
-		placing.handleTextMessage(newHost, new TextMessage(
-			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+		sendTo(placing, newHost, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		assertThat(last(out, "welcome").get("status").asText()).isEqualTo("HOST");
 		assertThat(loaded.roomCount()).isEqualTo(1);
 
 		lighter.set("node-b");
 		out.clear();
-		placing.handleTextMessage(newHost, new TextMessage(
-			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
+		sendTo(placing, newHost, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		assertThat(last(out, "redirect")).isNull();
 		assertThat(loaded.rebalanceCount()).isEqualTo(1);
 
 		// A host that arrived on the node-hint path was sent here on purpose. Re-placing it would let two
 		// nodes with slightly different load snapshots bounce the same client between them.
 		List<String> hintedOut = new ArrayList<>();
-		WebSocketSession hinted = session("hinted", hintedOut);
-		when(hinted.getUri()).thenReturn(java.net.URI.create("/n/node-a/api/v2/ws/party"));
-		placing.afterConnectionEstablished(hinted);
-		placing.handleTextMessage(hinted, new TextMessage(
-			"{\"t\":\"host\",\"room\":\"r2\",\"hostName\":\"Other\",\"capacity\":3}"));
+		FakeSession hinted = session("hinted", hintedOut);
+		hinted.nodeHinted = true;
+		placing.onOpen(hinted);
+		sendTo(placing, hinted, "{\"t\":\"host\",\"room\":\"r2\",\"hostName\":\"Other\",\"capacity\":3}");
 
 		assertThat(last(hintedOut, "redirect")).isNull();
 		assertThat(last(hintedOut, "welcome").get("status").asText()).isEqualTo("HOST");
@@ -452,9 +442,9 @@ class PartyV2HandlerTest {
 		long memberId = hostWithAdmittedMember();
 		assertThat(manager.connectedMembers()).isEqualTo(2);
 
-		// The member's socket dies without afterConnectionClosed ever firing. Sends to it are silently
+		// The member's socket dies without the close callback ever firing. Sends to it are silently
 		// skipped, so nothing else in the system would ever notice it had gone.
-		when(member.isOpen()).thenReturn(false);
+		member.close();
 		manager.pruneRoom("r");
 
 		assertThat(manager.connectedMembers()).isEqualTo(1);
@@ -466,7 +456,7 @@ class PartyV2HandlerTest {
 
 		// When the host goes the same way the room goes with it, releasing its ownership lock instead of
 		// being renewed forever.
-		when(host.isOpen()).thenReturn(false);
+		host.close();
 		manager.pruneRoom("r");
 		assertThat(manager.roomCount()).isZero();
 		assertThat(manager.prunedCount()).isEqualTo(2);
@@ -481,13 +471,11 @@ class PartyV2HandlerTest {
 			// -1 rather than 0: with a zero timeout a member stamped in the same millisecond as the sweep is
 			// not yet stale, which makes the assertion depend on the clock. Negative means "everything is".
 			new NodeIdentity("node-a", true), new LocalPartyV2Bus(), new LocalNodeLoadRegistry(), -1L);
-		PartyV2Handler sweeping = new PartyV2Handler(new PartyV2FrameHandler(impatient, mapper));
-		sweeping.afterConnectionEstablished(host);
-		sweeping.afterConnectionEstablished(member);
-		sweeping.handleTextMessage(host, new TextMessage(
-			"{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}"));
-		sweeping.handleTextMessage(member, new TextMessage(
-			"{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}"));
+		PartyV2FrameHandler sweeping = new PartyV2FrameHandler(impatient, mapper);
+		sweeping.onOpen(host);
+		sweeping.onOpen(member);
+		sendTo(sweeping, host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		sendTo(sweeping, member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		assertThat(impatient.connectedMembers()).isEqualTo(2);
 
 		// Both sessions still report open — only silence gives them away.
@@ -582,8 +570,8 @@ class PartyV2HandlerTest {
 
 		// A later joiner gets the current settings in its seating snapshot.
 		List<String> lateOut = new ArrayList<>();
-		WebSocketSession late = session("late", lateOut);
-		handler.afterConnectionEstablished(late);
+		FakeSession late = session("late", lateOut);
+		handler.onOpen(late);
 		send(late, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Late\",\"invited\":true}");
 		assertThat(last(lateOut, "meta").get("meta").get("lootRule").asText()).isEqualTo("FFA");
 	}
@@ -636,19 +624,16 @@ class PartyV2HandlerTest {
 		// Seated between the host and a healthy member, so the fan-out still has someone to visit after the
 		// removal — which is exactly when the iterator noticed and threw.
 		List<String> deadOut = new ArrayList<>();
-		WebSocketSession dead = session("dead", deadOut);
-		handler.afterConnectionEstablished(dead);
+		FakeSession dead = session("dead", deadOut);
+		handler.onOpen(dead);
 		send(dead, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Dead\",\"invited\":true}");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		long memberId = last(memberOut, "welcome").get("m").asLong();
 
 		// The peer's connection is gone: writing to it fails, and the container closes it on our thread.
-		doAnswer(inv -> {
-			handler.afterConnectionClosed(dead, org.springframework.web.socket.CloseStatus.SESSION_NOT_RELIABLE);
-			throw new java.io.IOException("broken pipe");
-		}).when(dead).sendMessage(any());
+		dead.onSend = () -> handler.onClose(dead.id(), "broken pipe");
 
-		send(host, "{\"t\":\"state\",\"s\":{\"name\":\"Host\",\"world\":301}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"name\":\"Host\",\"world\":301}}");
 
 		// The healthy member still got the frame, and the room dropped only the dead peer.
 		manager.flushRooms();
@@ -663,21 +648,18 @@ class PartyV2HandlerTest {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":6}");
 
 		List<String> deadOut = new ArrayList<>();
-		WebSocketSession dead = session("dead", deadOut);
+		FakeSession dead = session("dead", deadOut);
 		List<String> leaverOut = new ArrayList<>();
-		WebSocketSession leaver = session("leaver", leaverOut);
-		handler.afterConnectionEstablished(dead);
-		handler.afterConnectionEstablished(leaver);
+		FakeSession leaver = session("leaver", leaverOut);
+		handler.onOpen(dead);
+		handler.onOpen(leaver);
 		// Seated so the healthy member comes after the dead one in the fan-out, which is when it mattered.
 		send(dead, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Dead\",\"invited\":true}");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		send(leaver, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Leaver\",\"invited\":true}");
 		long leaverId = last(leaverOut, "welcome").get("m").asLong();
 
-		doAnswer(inv -> {
-			handler.afterConnectionClosed(dead, org.springframework.web.socket.CloseStatus.SESSION_NOT_RELIABLE);
-			throw new java.io.IOException("broken pipe");
-		}).when(dead).sendMessage(any());
+		dead.onSend = () -> handler.onClose(dead.id(), "broken pipe");
 
 		send(leaver, "{\"t\":\"leave\"}");
 
@@ -690,7 +672,7 @@ class PartyV2HandlerTest {
 	void hostLeavingClosesTheRoomForMembers() throws Exception {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
-		handler.afterConnectionClosed(host, org.springframework.web.socket.CloseStatus.NORMAL);
+		handler.onClose(host.id(), "NORMAL");
 
 		JsonNode roster = last(memberOut, "roster");
 		assertThat(roster.get("closed").asBoolean()).isTrue();
@@ -853,8 +835,13 @@ class PartyV2HandlerTest {
 		assertThat(last(memberOut, "error").get("detail").asText()).isEqualTo("no room");
 	}
 
-	private void send(WebSocketSession session, String json) throws Exception {
-		handler.handleTextMessage(session, new TextMessage(json));
+	private void send(FakeSession session, String json) {
+		sendTo(handler, session, json);
+	}
+
+	/** For the tests that stand up a frame handler of their own over a differently-wired manager. */
+	private static void sendTo(PartyV2FrameHandler target, FakeSession session, String json) {
+		target.onMessage(session.id(), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
 	}
 
 	private JsonNode last(List<String> out, String type) throws Exception {
@@ -914,24 +901,68 @@ class PartyV2HandlerTest {
 		return null;
 	}
 
-	private static WebSocketSession session(String id, List<String> out) {
-		WebSocketSession session = mock(WebSocketSession.class);
-		when(session.getId()).thenReturn(id);
-		when(session.isOpen()).thenReturn(true);
-		try {
-			doAnswer(inv -> {
-				// Frames go out as binary (UTF-8 JSON), so they are read back the same way.
-				java.nio.ByteBuffer payload = ((org.springframework.web.socket.BinaryMessage)
-					inv.getArgument(0)).getPayload();
-				byte[] bytes = new byte[payload.remaining()];
-				payload.get(bytes);
-				out.add(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
-				return null;
-			}).when(session).sendMessage(any());
+	private static FakeSession session(String id, List<String> out) {
+		return new FakeSession(id, out);
+	}
+
+	/**
+	 * A connection with no transport under it: frames are collected as strings, and the two things a test
+	 * needs to drive — a socket that has quietly died, and one that closes itself while being written to —
+	 * are fields rather than stubs.
+	 */
+	private static final class FakeSession implements PartySession {
+		private final String id;
+		private final List<String> out;
+		private volatile boolean open = true;
+		private volatile boolean nodeHinted;
+		/**
+		 * Runs instead of recording the frame, for the tests that model a peer whose connection breaks
+		 * during someone else's fan-out and is removed from the room by the close callback re-entrantly.
+		 */
+		private volatile Runnable onSend;
+
+		FakeSession(String id, List<String> out) {
+			this.id = id;
+			this.out = out;
 		}
-		catch (Exception e) {
-			throw new RuntimeException(e);
+
+		@Override
+		public String id() {
+			return id;
 		}
-		return session;
+
+		@Override
+		public boolean isOpen() {
+			return open;
+		}
+
+		@Override
+		public void send(byte[] frame) {
+			Runnable hook = onSend;
+			if (hook != null) {
+				// Deliberately no throw: the PartySession contract says an ordinary send failure must not
+				// unwind through another member's fan-out, so a transport swallows it. What is under test
+				// is the re-entrant removal, not the exception.
+				hook.run();
+				return;
+			}
+			// Frames go out as binary (UTF-8 JSON), so they are read back the same way.
+			out.add(new String(frame, java.nio.charset.StandardCharsets.UTF_8));
+		}
+
+		@Override
+		public void sendText(String json) {
+			out.add(json);
+		}
+
+		@Override
+		public void close() {
+			open = false;
+		}
+
+		@Override
+		public boolean nodeHinted() {
+			return nodeHinted;
+		}
 	}
 }

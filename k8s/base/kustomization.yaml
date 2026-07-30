@@ -1,7 +1,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+# No workload here: both overlays run the API as a StatefulSet, because node-hint routing needs pods that
+# a Service can address individually (PARTY_V2_MIGRATION.md R1). The base carried a Deployment until each
+# overlay deleted it again, which rendered a workload with identical pod labels on every build — two
+# controllers' worth of selector for one set of pods, one `$patch: delete` away from fighting over them.
 resources:
-  - api-deployment.yaml
   - api-service.yaml
   - redis.yaml
   - postgres.yaml

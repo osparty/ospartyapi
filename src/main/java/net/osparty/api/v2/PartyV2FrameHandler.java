@@ -9,22 +9,17 @@ import net.osparty.api.v2.protocol.Inbound;
 import net.osparty.api.v2.protocol.Outbound;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * The Party V2 protocol, with no transport in it. Decodes {@link Inbound} frames and drives the in-memory
+ * The live-party protocol, with no transport in it. Decodes {@link Inbound} frames and drives the in-memory
  * {@link PartyV2Manager}; the roster is server-authoritative (PARTY_V2_MIGRATION.md §3.1/§8).
  *
  * <p>Everything a connection means to this service lives here, behind {@link PartySession}: which room it is
- * in, which member id it was assigned, what it claims to be called. What actually carries the bytes — the
- * servlet container or the Netty server — is chosen by {@code app.party-v2.transport} and knows nothing
- * about any of it beyond calling {@link #onOpen}, {@link #onMessage} and {@link #onClose}.
- *
- * <p>Gated OFF by default ({@code app.party-v2.enabled}), so V1 is unaffected.
+ * in, which member id it was assigned, what it claims to be called. What actually carries the bytes knows
+ * nothing about any of it beyond calling {@link #onOpen}, {@link #onMessage} and {@link #onClose}.
  */
 @Component
-@ConditionalOnProperty(name = "app.party-v2.enabled", havingValue = "true")
 public class PartyV2FrameHandler {
 	private static final Logger log = LoggerFactory.getLogger(PartyV2FrameHandler.class);
 
@@ -89,25 +84,9 @@ public class PartyV2FrameHandler {
 			case "join":
 				handleJoin(ctx, in);
 				break;
-			case "state":
-				withRoom(ctx, room -> room.updateState(ctx.memberId, in.state()));
-				break;
-			// A live update carrying whichever parts changed. Its own type rather than `state` because the
-			// payload is partial, and a client from before the split must ignore it rather than read it as
-			// a whole snapshot.
+			// A live update carrying whichever parts changed.
 			case "update":
-				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberUpdate", in.state(), urgent(in)));
-				break;
-			// The parts as separate frames. Superseded by `update` — coalescing them costs the same bytes
-			// and a third fewer sends — but still accepted for clients that have not caught up.
-			case "vitals":
-				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberVitals", in.state(), urgent(in)));
-				break;
-			case "items":
-				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberItems", in.state(), urgent(in)));
-				break;
-			case "profile":
-				withRoom(ctx, room -> room.updateState(ctx.memberId, "memberProfile", in.state(), urgent(in)));
+				withRoom(ctx, room -> room.updateState(ctx.memberId, in.state(), urgent(in)));
 				break;
 			case "heartbeat":
 				// The touch() above already fed the ghost sweep; this only tells the peers, whose own

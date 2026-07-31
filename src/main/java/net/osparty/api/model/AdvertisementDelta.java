@@ -9,6 +9,12 @@ public record AdvertisementDelta(
 	String id,
 	String activity,
 	String host,
+	/**
+	 * Travels with {@code host}, and for the same reason a whole advertisement carries it: a transfer
+	 * rewrites the host without touching the member list, so a client that infers the hash from member
+	 * zero gets the outgoing host. Absent unless the hash actually changed.
+	 */
+	Long hostAccountHash,
 	Integer size,
 	List<Member> members,
 	String world,
@@ -38,6 +44,8 @@ public record AdvertisementDelta(
 
 	public static AdvertisementDelta diff(Advertisement prev, Advertisement cur) {
 		String host = Objects.equals(prev.getHost(), cur.getHost()) ? null : cur.getHost();
+		Long hostAccountHash =
+			prev.getHostAccountHash() != cur.getHostAccountHash() ? cur.getHostAccountHash() : null;
 		Integer size = prev.getSize() != cur.getSize() ? cur.getSize() : null;
 		List<Member> members = Objects.equals(prev.getMembers(), cur.getMembers()) ? null : cur.getMembers();
 		String world = Objects.equals(prev.getWorld(), cur.getWorld()) ? null : cur.getWorld();
@@ -63,14 +71,15 @@ public record AdvertisementDelta(
 		Boolean teacher = prev.isTeacher() != cur.isTeacher() ? cur.isTeacher() : null;
 		String node = Objects.equals(prev.getNode(), cur.getNode()) ? null : cur.getNode();
 
-		if (host == null && size == null && members == null && world == null && layout == null && neededRoles == null
+		if (host == null && hostAccountHash == null && size == null && members == null && world == null
+			&& layout == null && neededRoles == null
 			&& description == null && capacity == null && lootRule == null && ironmanOnly == null && privateAd == null
 			&& minKillCount == null && minHardModeKillCount == null && invocation == null && hardMode == null
 			&& coxScale == null && requiredRoles == null && hostRole == null && learner == null && teacher == null
 			&& node == null) {
 			return null;
 		}
-		return new AdvertisementDelta(cur.getId(), cur.getActivity(), host, size, members, world, layout, neededRoles, description,
+		return new AdvertisementDelta(cur.getId(), cur.getActivity(), host, hostAccountHash, size, members, world, layout, neededRoles, description,
 			capacity, lootRule, ironmanOnly, privateAd, minKillCount, minHardModeKillCount, invocation, hardMode,
 			coxScale, requiredRoles, hostRole, learner, teacher, node);
 	}

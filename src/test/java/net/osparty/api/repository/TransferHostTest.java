@@ -60,6 +60,47 @@ class TransferHostTest {
 		assertEquals("NewHost", delta.host());
 	}
 
+	/**
+	 * The member list is deliberately left alone across the transfer, which is what makes member zero
+	 * the wrong answer: without the hash on the delta a client reading it back from the roster keeps
+	 * matching blocks and favourites against the host that just handed the party over.
+	 */
+	@Test
+	void diffCarriesHostAccountHashWhenTheHostChanges() {
+		Advertisement prev = new Advertisement();
+		prev.setId("p1");
+		prev.setActivity("cox");
+		prev.setHost("OldHost");
+		prev.setHostAccountHash(1L);
+		prev.setMembers(List.of(new Member("OldHost", 1L)));
+		Advertisement cur = new Advertisement();
+		cur.setId("p1");
+		cur.setActivity("cox");
+		cur.setHost("NewHost");
+		cur.setHostAccountHash(2L);
+		cur.setMembers(List.of(new Member("OldHost", 1L)));
+
+		AdvertisementDelta delta = AdvertisementDelta.diff(prev, cur);
+		assertNotNull(delta);
+		assertEquals(2L, delta.hostAccountHash());
+	}
+
+	@Test
+	void diffOmitsHostAccountHashWhenUnchanged() {
+		Advertisement prev = new Advertisement();
+		prev.setId("p1");
+		prev.setHost("OldHost");
+		prev.setHostAccountHash(7L);
+		Advertisement cur = new Advertisement();
+		cur.setId("p1");
+		cur.setHost("NewHost");
+		cur.setHostAccountHash(7L);
+
+		AdvertisementDelta delta = AdvertisementDelta.diff(prev, cur);
+		assertNotNull(delta);
+		assertNull(delta.hostAccountHash());
+	}
+
 	@Test
 	void diffNullWhenHostUnchanged() {
 		Advertisement prev = new Advertisement();

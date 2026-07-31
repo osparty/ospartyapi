@@ -91,7 +91,7 @@ class AdReportSocketTest {
 	/**
 	 * Clears any rate-limiter state left in Redis by a previous run, when there is a Redis to clear.
 	 *
-	 * <p>Needed because {@code FakePartyRepository}'s id sequence restarts with the JVM, so party ids
+	 * <p>Needed because {@code FakeAdvertisementRepository}'s id sequence restarts with the JVM, so ad ids
 	 * repeat from run to run — while the limiter's per-party keys, correctly, do not. Without this a
 	 * passing run leaves behind "already notified about party 1001" and fails the next one.
 	 *

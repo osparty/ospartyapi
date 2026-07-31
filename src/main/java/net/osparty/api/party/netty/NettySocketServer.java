@@ -93,7 +93,7 @@ public class NettySocketServer implements SmartLifecycle {
 		workers = new NioEventLoopGroup();
 		NettySocketHandler handler = new NettySocketHandler(frames, board, dropped, meters);
 		WebSocketServerProtocolConfig ws = WebSocketServerProtocolConfig.newBuilder()
-			// The path is checked by SocketPathFilter, which has to see it anyway to reject anything else
+			// The path is checked by SocketPathHandler, which has to see it anyway to reject anything else
 			// and to decide which protocols the connection carries. No single prefix covers the three
 			// endpoints plus their node-hinted /n/{nodeId} forms.
 			.websocketPath("/")
@@ -113,7 +113,7 @@ public class NettySocketServer implements SmartLifecycle {
 					channel.pipeline()
 						.addLast(new HttpServerCodec())
 						.addLast(new HttpObjectAggregator(MAX_HTTP_BYTES))
-						.addLast(new SocketPathFilter())
+						.addLast(new SocketPathHandler())
 						.addLast(new WebSocketServerProtocolHandler(ws))
 						// Clients do not fragment, but a fragmented frame that arrived unassembled would be
 						// silently dropped rather than parsed, which is a bad way to find out.

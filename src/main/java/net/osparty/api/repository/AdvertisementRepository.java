@@ -10,7 +10,7 @@ import java.util.Optional;
 public interface AdvertisementRepository {
 	List<Advertisement> list(String activity);
 
-	int partyCount();
+	int advertisementCount();
 
 	Optional<Advertisement> findById(String id);
 

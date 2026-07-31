@@ -20,14 +20,14 @@ import java.util.function.BiConsumer;
  */
 public interface BoardChangeBus {
 	/**
-	 * Announce that {@code partyId} was created, updated or removed. Never throws.
+	 * Announce that {@code adId} was created, updated or removed. Never throws.
 	 *
 	 * <p>{@code seq} is the revision the change was written at, so that every node records the same one.
 	 * A removal has no advertisement left to carry it, so the node that noticed allocates it and everyone
 	 * else takes the number rather than inventing their own — otherwise the same disappearance would be
 	 * ordered differently on each node and a resuming client could miss it on one and not another.
 	 */
-	void publish(String partyId, long seq);
+	void publish(String adId, long seq);
 
 	/** Called on every node, including the one that published, with the id and revision that changed. */
 	void setListener(BiConsumer<String, Long> listener);

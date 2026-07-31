@@ -39,7 +39,7 @@ public class PartyHeartbeat implements SmartLifecycle {
 	}
 
 	@Scheduled(fixedRate = 10_000)
-	void renewOwned() {
+	void renewAndSweepOwnedRooms() {
 		// Copy the ids: draining a lost room mutates the live room map.
 		for (String room : new ArrayList<>(manager.ownedRoomIds())) {
 			if (!manager.renew(room)) {

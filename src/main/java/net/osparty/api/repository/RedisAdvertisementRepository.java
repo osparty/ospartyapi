@@ -90,7 +90,7 @@ public class RedisAdvertisementRepository implements AdvertisementRepository {
 	}
 
 	@Override
-	public int partyCount() {
+	public int advertisementCount() {
 		Long size = redis.opsForSet().size(INDEX_KEY);
 		return size == null ? 0 : size.intValue();
 	}

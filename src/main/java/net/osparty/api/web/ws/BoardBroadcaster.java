@@ -54,7 +54,7 @@ public class BoardBroadcaster {
 	private final io.micrometer.core.instrument.Counter reportsReceived;
 	private final io.micrometer.core.instrument.Counter reportsNotified;
 	private final Map<String, Subscriber> subscribers = new ConcurrentHashMap<>();
-	private final Map<String, String> hostedBy = new ConcurrentHashMap<>();
+	private final Map<String, String> hostedAdBySession = new ConcurrentHashMap<>();
 	private final Map<String, String> ownerSession = new ConcurrentHashMap<>();
 	// Self-asserted identity indexes so an invite can be routed to a specific online client.
 	private final Map<Long, String> sessionByAccount = new ConcurrentHashMap<>();
@@ -111,7 +111,7 @@ public class BoardBroadcaster {
 			.register(meterRegistry);
 		// Cross-node invite delivery calls back here to reach a target connected to this instance.
 		inviteBus.setLocalDelivery(this::deliverInviteLocally);
-		Gauge.builder("parties.active", store, AdvertisementRepository::partyCount)
+		Gauge.builder("parties.active", store, AdvertisementRepository::advertisementCount)
 				.description("Current number of active parties")
 				.register(meterRegistry);
 	}
@@ -802,7 +802,7 @@ public class BoardBroadcaster {
 	}
 
 	private boolean authorizeWrite(Subscriber sub, String id, String key) {
-		if (id.equals(hostedBy.get(sub.session.id()))) {
+		if (id.equals(hostedAdBySession.get(sub.session.id()))) {
 			return true;
 		}
 		Authorization auth = store.authorize(id, key);
@@ -819,15 +819,15 @@ public class BoardBroadcaster {
 	}
 
 	private void bind(String sessionId, String adId) {
-		hostedBy.put(sessionId, adId);
+		hostedAdBySession.put(sessionId, adId);
 		String previous = ownerSession.put(adId, sessionId);
 		if (previous != null && !previous.equals(sessionId)) {
-			hostedBy.remove(previous, adId);
+			hostedAdBySession.remove(previous, adId);
 		}
 	}
 
 	private void unbind(String sessionId) {
-		String adId = hostedBy.remove(sessionId);
+		String adId = hostedAdBySession.remove(sessionId);
 		if (adId != null) {
 			ownerSession.remove(adId, sessionId);
 		}
@@ -843,7 +843,7 @@ public class BoardBroadcaster {
 
 	@Scheduled(fixedDelayString = "${app.ws.presence-interval-ms:5000}")
 	public void broadcastPresence() {
-		int online = presence.record(subscribers.size());
+		int online = presence.recordAndTotal(subscribers.size());
 		if (online == lastPresence) {
 			return;
 		}
@@ -857,14 +857,14 @@ public class BoardBroadcaster {
 	}
 
 	@Scheduled(fixedDelayString = "${app.ws.touch-interval-ms:5000}")
-	public void touchOwnedParties() {
-		for (Map.Entry<String, String> entry : hostedBy.entrySet()) {
+	public void touchOwnedAds() {
+		for (Map.Entry<String, String> entry : hostedAdBySession.entrySet()) {
 			Subscriber sub = subscribers.get(entry.getKey());
 			if (sub == null || !sub.session.isOpen()) {
 				continue;
 			}
 			if (store.update(entry.getValue(), TTL_TOUCH).isEmpty()) {
-				log.info("WS touch: party {} is gone; notifying host session {}",
+				log.info("WS touch: ad {} is gone; notifying host session {}",
 					entry.getValue(), entry.getKey());
 				send(sub, Outbound.gone(version.get(), entry.getValue()));
 				unbind(entry.getKey());
@@ -913,7 +913,7 @@ public class BoardBroadcaster {
 		Board current = board;
 		// A client that still holds a board only needs what it missed. That is what makes a reconnect
 		// cheap — and a rolling deploy, which today re-sends the entire board to every client at once.
-		if (since != null && current != null && !hostedBy.containsKey(sub.session.id())
+		if (since != null && current != null && !hostedAdBySession.containsKey(sub.session.id())
 			&& !current.showsOwnHidden(sub, this)) {
 			Frame resume = current.resume(sub.activity, since, this);
 			if (resume != null) {
@@ -921,7 +921,7 @@ public class BoardBroadcaster {
 				return;
 			}
 		}
-		if (current != null && !hostedBy.containsKey(sub.session.id())
+		if (current != null && !hostedAdBySession.containsKey(sub.session.id())
 			&& !current.showsOwnHidden(sub, this)) {
 			Frame frame = current.frame(sub.activity, this);
 			if (frame != null) {
@@ -936,14 +936,14 @@ public class BoardBroadcaster {
 				list.add(ad);
 			}
 		}
-		log.debug("WS snapshot -> {} ({} of {} parties)", sub.session.id(), list.size(), all.size());
+		log.debug("WS snapshot -> {} ({} of {} ads)", sub.session.id(), list.size(), all.size());
 		send(sub, Outbound.snapshot(version.get(), list, headSeq(list)));
 	}
 
 	/** The highest revision among a list of ads — what a client resumes from after a full board. */
-	private static Long headSeq(List<Advertisement> parties) {
+	private static Long headSeq(List<Advertisement> ads) {
 		long head = 0;
-		for (Advertisement ad : parties) {
+		for (Advertisement ad : ads) {
 			head = Math.max(head, ad.getSeq());
 		}
 		return head > 0 ? head : null;
@@ -1062,7 +1062,7 @@ public class BoardBroadcaster {
 	 * Whether this advertisement belongs to this subscriber.
 	 *
 	 * <p>Checked three ways because no single one is reliable at every moment of a session:
-	 * {@code hostedBy} is only bound once the client has sent {@code host} or {@code resume}, and
+	 * {@code hostedAdBySession} is only bound once the client has sent {@code host} or {@code resume}, and
 	 * {@code identify} is optional and may arrive after {@code subscribe}. The plugin looks its own
 	 * ad up before either is guaranteed -- on the rejoin-after-restart path, and on every heartbeat
 	 * from the Party tab, where a null answer makes it disband the party and tell the user so. A
@@ -1072,7 +1072,7 @@ public class BoardBroadcaster {
 		if (ad == null) {
 			return false;
 		}
-		if (ad.getId().equals(hostedBy.get(sub.session.id()))) {
+		if (ad.getId().equals(hostedAdBySession.get(sub.session.id()))) {
 			return true;
 		}
 		if (sub.accountHash != null && ad.getHostAccountHash() != 0
@@ -1118,7 +1118,7 @@ public class BoardBroadcaster {
 			}
 			String suppress = null;
 			if (hiddenIds != null) {
-				String own = hostedBy.get(sub.session.id());
+				String own = hostedAdBySession.get(sub.session.id());
 				if (own != null && hiddenIds.contains(own)) {
 					suppress = own;
 				}
@@ -1167,14 +1167,14 @@ public class BoardBroadcaster {
 		}
 	}
 
-	private static List<Advertisement> filterCreated(List<Advertisement> parties, String activity) {
+	private static List<Advertisement> filterCreated(List<Advertisement> ads, String activity) {
 		if (activity == null) {
-			return parties;
+			return ads;
 		}
 		List<Advertisement> out = new java.util.ArrayList<>();
-		for (Advertisement p : parties) {
-			if (activity.equals(p.getActivity())) {
-				out.add(p);
+		for (Advertisement ad : ads) {
+			if (activity.equals(ad.getActivity())) {
+				out.add(ad);
 			}
 		}
 		return out;

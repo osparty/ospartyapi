@@ -22,7 +22,7 @@ public class LocalNodeLoadRegistry implements NodeLoadRegistry {
 	}
 
 	@Override
-	public Optional<String> preferredHost(int selfMembers) {
+	public Optional<String> preferredNode(int selfMembers) {
 		return Optional.empty();
 	}
 }

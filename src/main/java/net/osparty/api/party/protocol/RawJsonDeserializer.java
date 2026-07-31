@@ -20,7 +20,7 @@ import java.io.IOException;
  * <p>Only for values the server does not read. Anything it needs to inspect or compare — the ad meta, which
  * is diffed against the previous one — stays a {@code JsonNode}.
  */
-public final class RawJson extends JsonDeserializer<TokenBuffer> {
+public final class RawJsonDeserializer extends JsonDeserializer<TokenBuffer> {
 	@Override
 	public TokenBuffer deserialize(JsonParser parser, DeserializationContext context) throws IOException {
 		TokenBuffer buffer = new TokenBuffer(parser);

@@ -40,15 +40,15 @@ public class PartyFrameHandler {
 
 	public void onOpen(SocketSession session) {
 		contexts.put(session.id(), new Ctx(session));
-		log.info("Party WSconnected: session={}", session.id());
+		log.info("Party WS connected: session={}", session.id());
 	}
 
-	public void onClose(String sessionId, String status) {
+	public void onClose(String sessionId, String reason) {
 		Ctx ctx = contexts.remove(sessionId);
 		if (ctx != null) {
 			handleLeave(ctx);
 		}
-		log.info("Party WSclosed: session={} status={}", sessionId, status);
+		log.info("Party WS closed: session={} reason={}", sessionId, reason);
 	}
 
 	/**
@@ -86,7 +86,7 @@ public class PartyFrameHandler {
 				break;
 			// A live update carrying whichever parts changed.
 			case "update":
-				withRoom(ctx, room -> room.updateState(ctx.memberId, in.state(), urgent(in)));
+				withRoom(ctx, room -> room.queueUpdate(ctx.memberId, in.state(), urgent(in)));
 				break;
 			case "heartbeat":
 				// The touch() above already fed the ghost sweep; this only tells the peers, whose own

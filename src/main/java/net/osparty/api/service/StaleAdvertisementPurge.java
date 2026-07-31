@@ -36,12 +36,12 @@ public class StaleAdvertisementPurge {
 	public void purge() {
 		long now = System.currentTimeMillis();
 		long cutoff = now - maxAgeMs;
-		for (Advertisement party : store.list(null)) {
-			if (party.getCreatedAt() > 0 && party.getCreatedAt() < cutoff) {
-				store.delete(party.getId());
-				log.info("Purged stale party {} ({}, host {}) after {} minutes",
-					party.getId(), party.getActivity(), party.getHost(),
-					(now - party.getCreatedAt()) / 60_000);
+		for (Advertisement ad : store.list(null)) {
+			if (ad.getCreatedAt() > 0 && ad.getCreatedAt() < cutoff) {
+				store.delete(ad.getId());
+				log.info("Purged stale ad {} ({}, host {}) after {} minutes",
+					ad.getId(), ad.getActivity(), ad.getHost(),
+					(now - ad.getCreatedAt()) / 60_000);
 				stalePartiesPurged.increment();
 			}
 		}

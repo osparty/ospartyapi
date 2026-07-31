@@ -26,5 +26,5 @@ public interface NodeLoadRegistry {
 	 * @param selfMembers this node's current member count, passed in rather than read back from the shared
 	 *     view because it is the one figure that is always current.
 	 */
-	Optional<String> preferredHost(int selfMembers);
+	Optional<String> preferredNode(int selfMembers);
 }

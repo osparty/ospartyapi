@@ -32,7 +32,7 @@ class PartyHeartbeatTest {
 		hostARoom(handler);
 		assertThat(manager.roomCount()).isEqualTo(1);
 
-		new PartyHeartbeat(manager).renewOwned();
+		new PartyHeartbeat(manager).renewAndSweepOwnedRooms();
 
 		assertThat(manager.prunedCount()).isEqualTo(1);
 		assertThat(manager.roomCount()).isZero();
@@ -48,7 +48,7 @@ class PartyHeartbeatTest {
 
 		hostARoom(handler);
 
-		new PartyHeartbeat(manager).renewOwned();
+		new PartyHeartbeat(manager).renewAndSweepOwnedRooms();
 
 		assertThat(manager.prunedCount()).isZero();
 		assertThat(manager.roomCount()).isEqualTo(1);

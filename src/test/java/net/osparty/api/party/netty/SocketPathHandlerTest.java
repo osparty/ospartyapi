@@ -9,28 +9,28 @@ import org.junit.jupiter.api.Test;
  * the endpoint has an optional variable segment in front of it — so the check is hand-written and worth
  * pinning down.
  */
-class SocketPathFilterTest {
+class SocketPathHandlerTest {
 	@Test
 	void bothFormsOfTheEndpointAreAccepted() {
-		assertThat(SocketPathFilter.accepts("/api/ws")).isTrue();
+		assertThat(SocketPathHandler.accepts("/api/ws")).isTrue();
 		// A query string is not used, but a client that adds one must not be turned away for it.
-		assertThat(SocketPathFilter.accepts("/api/ws?v=1")).isTrue();
+		assertThat(SocketPathHandler.accepts("/api/ws?v=1")).isTrue();
 		// The node hint pins the connection to the pod that owns the caller's party.
-		assertThat(SocketPathFilter.accepts("/n/osparty-api-1/api/ws")).isTrue();
+		assertThat(SocketPathHandler.accepts("/n/osparty-api-1/api/ws")).isTrue();
 	}
 
 	@Test
 	void anythingElseIsRefused() {
 		// The two single-protocol endpoints are gone: both protocols share one connection now.
-		assertThat(SocketPathFilter.accepts("/api/v1/ws/parties")).isFalse();
-		assertThat(SocketPathFilter.accepts("/api/v2/ws/party")).isFalse();
-		assertThat(SocketPathFilter.accepts("/n/osparty-api-0/api/v2/ws/party")).isFalse();
+		assertThat(SocketPathHandler.accepts("/api/v1/ws/parties")).isFalse();
+		assertThat(SocketPathHandler.accepts("/api/v2/ws/party")).isFalse();
+		assertThat(SocketPathHandler.accepts("/n/osparty-api-0/api/v2/ws/party")).isFalse();
 
-		assertThat(SocketPathFilter.accepts("/n//api/ws")).isFalse();
+		assertThat(SocketPathHandler.accepts("/n//api/ws")).isFalse();
 		// One segment of node id, not a path of them.
-		assertThat(SocketPathFilter.accepts("/n/a/b/api/ws")).isFalse();
-		assertThat(SocketPathFilter.accepts("/api/ws/extra")).isFalse();
-		assertThat(SocketPathFilter.accepts("/")).isFalse();
-		assertThat(SocketPathFilter.accepts(null)).isFalse();
+		assertThat(SocketPathHandler.accepts("/n/a/b/api/ws")).isFalse();
+		assertThat(SocketPathHandler.accepts("/api/ws/extra")).isFalse();
+		assertThat(SocketPathHandler.accepts("/")).isFalse();
+		assertThat(SocketPathHandler.accepts(null)).isFalse();
 	}
 }

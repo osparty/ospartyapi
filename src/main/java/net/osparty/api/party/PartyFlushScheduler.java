@@ -33,11 +33,11 @@ import org.springframework.stereotype.Component;
  * itself takes only that room's own lock, so rooms stay independent.
  */
 @Component
-public class PartyAggregator {
+public class PartyFlushScheduler {
 	private final PartyManager manager;
 	private final long idleMs;
 
-	public PartyAggregator(PartyManager manager,
+	public PartyFlushScheduler(PartyManager manager,
 		@org.springframework.beans.factory.annotation.Value("${app.party.aggregate-idle-ms:1000}")
 		long idleMs) {
 		this.manager = manager;

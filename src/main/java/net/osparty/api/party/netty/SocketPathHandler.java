@@ -23,7 +23,7 @@ import java.net.URI;
  * demultiplexed per frame by {@link net.osparty.api.transport.Mux}, so a client costs the ingress a single
  * socket whether or not it is in a party.
  */
-final class SocketPathFilter extends ChannelInboundHandlerAdapter {
+final class SocketPathHandler extends ChannelInboundHandlerAdapter {
 	/** Both protocols on one connection, demultiplexed by {@link net.osparty.api.transport.Mux}. */
 	private static final String PATH = "/api/ws";
 

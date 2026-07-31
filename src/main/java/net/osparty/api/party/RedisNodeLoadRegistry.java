@@ -107,7 +107,7 @@ public class RedisNodeLoadRegistry implements NodeLoadRegistry {
 	}
 
 	@Override
-	public Optional<String> preferredHost(int selfMembers) {
+	public Optional<String> preferredNode(int selfMembers) {
 		Map<String, Integer> snapshot = peers;
 		if (snapshot.isEmpty()) {
 			// Single node, or we have not completed a heartbeat yet: host here.

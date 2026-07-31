@@ -35,7 +35,7 @@ public record Inbound(
 	Boolean learner,
 	Boolean teacher,
 	Boolean invited,
-	@JsonProperty("s") @JsonDeserialize(using = RawJson.class) TokenBuffer state,
+	@JsonProperty("s") @JsonDeserialize(using = RawJsonDeserializer.class) TokenBuffer state,
 	@JsonProperty("g") Boolean urgent,
 	Integer x,
 	Integer y,

@@ -32,7 +32,7 @@ public class FakeAdvertisementRepository implements AdvertisementRepository {
 	}
 
 	@Override
-	public int partyCount() {
+	public int advertisementCount() {
 		return parties.size();
 	}
 	

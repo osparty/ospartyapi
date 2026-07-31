@@ -16,7 +16,7 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 
 /**
- * Redis-backed Partyownership (PARTY_V2_MIGRATION.md §10). Ownership is a {@code SET NX EX} lock at
+ * Redis-backed party ownership (PARTY_V2_MIGRATION.md §10). Ownership is a {@code SET NX EX} lock at
  * {@code pv2:owner:{room}} holding this node's id; the winner also writes the {@code pv2:party:{room}} hash.
  * Renew/release are guarded by a compare-and-act Lua script so a node only ever touches a lock it still
  * holds — that is the fence against split-brain (§16 R5). The lock's TTL is the failover trigger: when an

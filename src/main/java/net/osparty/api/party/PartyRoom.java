@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory;
 /**
  * One party's live state, held entirely in RAM on the owner node. Identity and roster are
  * server-authoritative here (this class assigns status, admits/kicks and enforces capacity); live member
- * snapshots ({@link MemberState#live}) are stored and relayed opaquely. All mutation goes through the
+ * snapshots ({@link RoomMember#live}) are stored and relayed opaquely. All mutation goes through the
  * per-room {@code lock}, so parties are independent — activity in one room never blocks another
  * (PARTY_V2_MIGRATION.md §11.1).
  *
@@ -33,7 +33,7 @@ final class PartyRoom {
 	private final ObjectMapper mapper;
 	private final Object lock = new Object();
 
-	private final Map<Long, MemberState> members = new LinkedHashMap<>();
+	private final Map<Long, RoomMember> members = new LinkedHashMap<>();
 	private final Map<Long, SocketSession> sessions = new LinkedHashMap<>();
 	/**
 	 * When each member was last heard from. Liveness cannot be read off the socket: a half-open connection
@@ -87,14 +87,14 @@ final class PartyRoom {
 			this.hostName = name;
 			this.capacity = capacity;
 			this.locked = locked;
-			MemberState host = new MemberState(memberId, name, accountHash, MemberState.Status.HOST);
+			RoomMember host = new RoomMember(memberId, name, accountHash, RoomMember.Status.HOST);
 			host.role = role;
 			host.learner = learner;
 			host.teacher = teacher;
 			members.put(memberId, host);
 			sessions.put(memberId, session);
 			lastSeen.put(memberId, System.currentTimeMillis());
-			send(session, Outbound.welcome(memberId, MemberState.Status.HOST.name(), nodeId));
+			send(session, Outbound.welcome(memberId, RoomMember.Status.HOST.name(), nodeId));
 			sendSnapshotTo(session);
 			broadcastRoster();
 			broadcastResync(memberId);
@@ -108,9 +108,9 @@ final class PartyRoom {
 	void seatApplicant(long memberId, SocketSession session, String name, long accountHash,
 		String role, boolean learner, boolean teacher, boolean invited) {
 		synchronized (lock) {
-			MemberState.Status status = (invited && canAdmit())
-				? MemberState.Status.MEMBER : MemberState.Status.PENDING;
-			MemberState member = new MemberState(memberId, name, accountHash, status);
+			RoomMember.Status status = (invited && canAdmit())
+				? RoomMember.Status.MEMBER : RoomMember.Status.PENDING;
+			RoomMember member = new RoomMember(memberId, name, accountHash, status);
 			member.role = role;
 			member.learner = learner;
 			member.teacher = teacher;
@@ -132,7 +132,7 @@ final class PartyRoom {
 	 */
 	void identify(long memberId, String name, long accountHash) {
 		synchronized (lock) {
-			MemberState member = members.get(memberId);
+			RoomMember member = members.get(memberId);
 			if (member == null) {
 				return;
 			}
@@ -160,11 +160,11 @@ final class PartyRoom {
 			if (actorMemberId != hostMemberId) {
 				return false;
 			}
-			MemberState target = members.get(targetMemberId);
-			if (target == null || target.status != MemberState.Status.PENDING || !canAdmit()) {
+			RoomMember target = members.get(targetMemberId);
+			if (target == null || target.status != RoomMember.Status.PENDING || !canAdmit()) {
 				return false;
 			}
-			target.status = MemberState.Status.MEMBER;
+			target.status = RoomMember.Status.MEMBER;
 			broadcastRoster();
 			return true;
 		}
@@ -204,7 +204,7 @@ final class PartyRoom {
 	 * <p>{@code urgent} is the sender's own judgement that this one should not wait out the idle window: a
 	 * vital that moved <em>down</em>, which is damage taken, prayer drained or a spec spent. See {@link #flush}.
 	 */
-	void updateState(long memberId, TokenBuffer live, boolean urgent) {
+	void queueUpdate(long memberId, TokenBuffer live, boolean urgent) {
 		synchronized (lock) {
 			if (!members.containsKey(memberId) || live == null) {
 				return;
@@ -381,7 +381,7 @@ final class PartyRoom {
 			if (!fromHost && !("ACCEPT".equals(kind) && targetMemberId == hostMemberId)) {
 				return;
 			}
-			MemberState target = members.get(targetMemberId);
+			RoomMember target = members.get(targetMemberId);
 			if (target == null) {
 				return;
 			}
@@ -396,14 +396,14 @@ final class PartyRoom {
 	}
 
 	/** Move HOST status to {@code target}; the old host stays a member or leaves. Call under lock. */
-	private void applyHostHandover(long oldHostMemberId, MemberState target, boolean hostStays) {
-		MemberState oldHost = members.get(oldHostMemberId);
-		target.status = MemberState.Status.HOST;
+	private void applyHostHandover(long oldHostMemberId, RoomMember target, boolean hostStays) {
+		RoomMember oldHost = members.get(oldHostMemberId);
+		target.status = RoomMember.Status.HOST;
 		hostMemberId = target.memberId;
 		hostName = target.name;
 		if (oldHost != null) {
 			if (hostStays) {
-				oldHost.status = MemberState.Status.MEMBER;
+				oldHost.status = RoomMember.Status.MEMBER;
 			}
 			else {
 				members.remove(oldHostMemberId);
@@ -481,7 +481,7 @@ final class PartyRoom {
 	}
 
 	/**
-	 * The outcome of a {@link #pruneClosed} sweep: how many ghosts were dropped, and whether that leaves
+	 * The outcome of a {@link #pruneDead} sweep: how many ghosts were dropped, and whether that leaves
 	 * the room to be discarded.
 	 */
 	record Prune(int removed, boolean discard) {
@@ -502,7 +502,7 @@ final class PartyRoom {
 	 *
 	 * @return what the sweep did.
 	 */
-	Prune pruneClosed(long silentAfterMs) {
+	Prune pruneDead(long silentAfterMs) {
 		List<Long> gone = new ArrayList<>();
 		synchronized (lock) {
 			long now = System.currentTimeMillis();
@@ -559,8 +559,8 @@ final class PartyRoom {
 
 	/** Whether {@code memberId} is seated and past admission (host or member, not a pending applicant). */
 	private boolean isAdmitted(long memberId) {
-		MemberState member = members.get(memberId);
-		return member != null && member.status != MemberState.Status.PENDING;
+		RoomMember member = members.get(memberId);
+		return member != null && member.status != RoomMember.Status.PENDING;
 	}
 
 	/** Whether another applicant can be admitted (host + admitted < capacity, or uncapped). */
@@ -569,8 +569,8 @@ final class PartyRoom {
 			return true;
 		}
 		int admitted = 0;
-		for (MemberState m : members.values()) {
-			if (m.status != MemberState.Status.PENDING) {
+		for (RoomMember m : members.values()) {
+			if (m.status != RoomMember.Status.PENDING) {
 				admitted++;
 			}
 		}
@@ -579,7 +579,7 @@ final class PartyRoom {
 
 	private List<Outbound.RosterEntry> roster() {
 		List<Outbound.RosterEntry> out = new ArrayList<>(members.size());
-		for (MemberState m : members.values()) {
+		for (RoomMember m : members.values()) {
 			out.add(m.toRosterEntry());
 		}
 		return out;

@@ -61,11 +61,11 @@ public class BanService {
 	 * joining an innocent host's party silently shadowbans that innocent host -- a griefing vector
 	 * dressed up as moderation.
 	 */
-	public boolean isHidden(Advertisement party) {
-		if (party == null) {
+	public boolean isHidden(Advertisement ad) {
+		if (ad == null) {
 			return false;
 		}
-		return isBanned(party.getHost(), party.getHostAccountHash());
+		return isBanned(ad.getHost(), ad.getHostAccountHash());
 	}
 
 	/** Whether this subject is banned by name or by account hash. Either match is enough. */

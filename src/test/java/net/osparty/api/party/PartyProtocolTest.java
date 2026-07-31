@@ -391,7 +391,7 @@ class PartyProtocolTest {
 			public void retire() {
 			}
 
-			public java.util.Optional<String> preferredHost(int selfMembers) {
+			public java.util.Optional<String> preferredNode(int selfMembers) {
 				return java.util.Optional.ofNullable(lighter.get());
 			}
 		};

@@ -121,7 +121,7 @@ public class PartyManager {
 		if (ownership.lookup(id).isPresent() || ownership.handoverPending(id)) {
 			return Optional.empty();
 		}
-		return load.preferredHost(connectedMembers());
+		return load.preferredNode(connectedMembers());
 	}
 
 	/** Publish this node's load for placement, and refresh its view of its peers'. Called on the heartbeat. */
@@ -169,7 +169,7 @@ public class PartyManager {
 		if (room == null) {
 			return;
 		}
-		PartyRoom.Prune prune = room.pruneClosed(memberTimeoutMs);
+		PartyRoom.Prune prune = room.pruneDead(memberTimeoutMs);
 		if (prune.removed() == 0) {
 			return;
 		}
@@ -182,7 +182,7 @@ public class PartyManager {
 	}
 
 	/**
-	 * Send every owned room the live updates it collected this window (see {@link PartyAggregator}).
+	 * Send every owned room the live updates it collected this window (see {@link PartyFlushScheduler}).
 	 *
 	 * <p>Walks all rooms rather than tracking which have something pending: the check is an empty-list read
 	 * under the room's own lock, and a set of dirty rooms would need maintaining on the hottest path in the

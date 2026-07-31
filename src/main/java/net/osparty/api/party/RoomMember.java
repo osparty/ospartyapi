@@ -12,7 +12,7 @@ import net.osparty.api.party.protocol.Outbound;
  * here (PARTY_V2_OPTIMIZATION.md §5.2). Storing the last snapshot was wrong the moment frames stopped being
  * complete — the owner would have been replaying a fragment while believing it a full picture.
  */
-final class MemberState {
+final class RoomMember {
 	enum Status { HOST, MEMBER, PENDING }
 
 	final long memberId;
@@ -24,7 +24,7 @@ final class MemberState {
 	volatile boolean teacher;
 	volatile boolean invited;
 
-	MemberState(long memberId, String name, long accountHash, Status status) {
+	RoomMember(long memberId, String name, long accountHash, Status status) {
 		this.memberId = memberId;
 		this.name = name;
 		this.accountHash = accountHash;

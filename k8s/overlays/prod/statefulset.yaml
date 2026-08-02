@@ -84,7 +84,7 @@ spec:
             - name: APP_WS_RECONCILE_INTERVAL_MS
               value: "30000"
             - name: APP_PARTY_V2_ENABLED
-              value: "true"
+              value: "false"
             # Netty carries every WebSocket on port 8081; REST stays on Tomcat's 8080. Flipping this back
             # to "tomcat" is the rollback for Party V2 — /api/ws stops existing, clients see refused
             # upgrades and fall back to /api/v1/ws/parties on their own. The ingress paths below keep

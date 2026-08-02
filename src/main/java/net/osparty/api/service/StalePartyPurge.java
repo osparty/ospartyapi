@@ -23,7 +23,7 @@ public class StalePartyPurge {
 	private final long maxAgeMs;
 	private final Counter stalePartiesPurged;
 	public StalePartyPurge(PartyRepository store,
-		@Value("${app.ads.stale-purge-age-ms:7200000}") long maxAgeMs,
+		@Value("${app.ads.stale-purge-age-ms:31536000000}") long maxAgeMs,
 		MeterRegistry meterRegistry) {
 		this.store = store;
 		this.maxAgeMs = maxAgeMs;

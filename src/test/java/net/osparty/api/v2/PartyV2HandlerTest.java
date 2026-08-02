@@ -79,7 +79,7 @@ class PartyV2HandlerTest {
 		manager.flushRooms();
 		JsonNode relayed = onlyUpdate(last(memberOut, "mu"));
 		assertThat(relayed).isNotNull();
-		assertThat(relayed.get("m").asLong()).isEqualTo(hostId);
+		assertThat(relayed.get("memberId").asLong()).isEqualTo(hostId);
 		assertThat(relayed.get("s").get("world").asInt()).isEqualTo(301);
 
 		// Host admits the applicant -> server-authoritative status flips to MEMBER for everyone.
@@ -157,7 +157,7 @@ class PartyV2HandlerTest {
 		assertThat(hostFrame).hasSize(2);
 		long hostId = last(hostOut, "welcome").get("m").asLong();
 		for (JsonNode update : hostFrame) {
-			assertThat(update.get("m").asLong()).isNotEqualTo(hostId);
+			assertThat(update.get("memberId").asLong()).isNotEqualTo(hostId);
 		}
 	}
 
@@ -223,7 +223,7 @@ class PartyV2HandlerTest {
 		manager.flushRooms();
 
 		JsonNode relayed = onlyUpdate(last(memberOut, "mu"));
-		assertThat(relayed.get("m").asLong()).isEqualTo(hostId);
+		assertThat(relayed.get("memberId").asLong()).isEqualTo(hostId);
 		assertThat(relayed.get("s").get("currentHp").asInt()).isEqualTo(31);
 		assertThat(relayed.get("s").get("inventory")).hasSize(1);
 		// A sender is never handed back its own update.
@@ -247,7 +247,9 @@ class PartyV2HandlerTest {
 		assertThat(updates.get(0).get("s").get("currentHp").asInt()).isEqualTo(31);
 		assertThat(updates.get(1).get("s").get("inventory")).hasSize(1);
 		assertThat(updates.get(2).get("s").get("world").asInt()).isEqualTo(301);
-		assertThat(updates.get(0).get("m").asLong()).isEqualTo(hostId);
+		// The shipped plugin reads this key by its long name; an "m" here strands every peer's state.
+		assertThat(updates.get(0).get("memberId").asLong()).isEqualTo(hostId);
+		assertThat(updates.get(0).has("m")).isFalse();
 	}
 
 	@Test

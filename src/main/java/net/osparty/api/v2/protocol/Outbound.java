@@ -212,9 +212,18 @@ public record Outbound(
 		return new Builder(MEMBER_UPDATES).updates(updates).build();
 	}
 
-	/** One member's live update inside a {@code memberUpdates} frame. */
+	/**
+	 * One member's live update inside a {@code memberUpdates} frame.
+	 *
+	 * <p>{@code memberId} keeps its long name while every other key on this frame is shortened, because the
+	 * shipped plugin reads it by that name: its {@code MemberUpdate.memberId} carries no wire-name
+	 * annotation, so an {@code m} here deserialises to 0 and every peer's live state lands under one id that
+	 * belongs to nobody. The visible cost of that is a host who never sees an applicant, since an applicant
+	 * is only surfaced once their live state has arrived. Renaming this is the whole fix, and it has to
+	 * happen here: the clients that get it wrong are already installed.
+	 */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
-	public record MemberUpdate(@JsonProperty("m") long memberId, @JsonProperty("s") TokenBuffer state) {
+	public record MemberUpdate(long memberId, @JsonProperty("s") TokenBuffer state) {
 	}
 
 	/** One member in the roster frame. {@code status} is HOST / MEMBER / PENDING. */

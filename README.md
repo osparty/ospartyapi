@@ -74,7 +74,7 @@ client → {"type":"update","id":"7","key":"<uuid>","patch":{ …AdvertisementUp
 client → {"type":"resume","id":"7","key":"<uuid>"}    // reclaim the ad after a reconnect
 server → {"type":"gone","id":"7"}                     //   …if the grace window already lapsed
 client → {"type":"unhost","id":"7","key":"<uuid>"}    // disband (also tears down any voice channel)
-client → {"type":"transferHost","id":"7","key":"<uuid>","host":"NewHost","newKey":"<uuid2>"}
+client → {"type":"transferHost","id":"7","key":"<uuid>","host":"NewHost","hostAccountType":"IRONMAN","newKey":"<uuid2>"}
 server → {"type":"transferred","id":"7"}              // ad handed over, re-keyed to newKey
 server → {"type":"error","id":"7","detail":"…"}       // directed: a write was rejected
 ```
@@ -90,7 +90,9 @@ created/reclaimed the ad (the bound *owner session*) **or** it carries the corre
 `key`. Otherwise: `error` `"forbidden"`; on a missing ad, `error` `"gone"`.
 `transferHost` re-keys the credential to `newKey` so the old host's key stops
 working, and unbinds the old session — the new host adopts the ad by `resume`ing
-with `newKey`.
+with `newKey`. It also re-stamps what the board shows about *who* runs the ad:
+`hostAccountHash` (looked up from the members) and `hostAccountType` (sent with
+the frame; an absent one is stored as `NORMAL`, never left as the old host's).
 
 **The socket is the keep-alive.** While a hosting session is open the server
 refreshes that ad's TTL every `app.ws.touch-interval-ms`; there is no periodic

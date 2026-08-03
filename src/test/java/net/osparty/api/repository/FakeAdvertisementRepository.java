@@ -111,13 +111,15 @@ public class FakeAdvertisementRepository implements AdvertisementRepository {
 	}
 
 	@Override
-	public Optional<Advertisement> transferHost(String id, String newHost, String newKey) {
+	public Optional<Advertisement> transferHost(String id, String newHost, String newHostAccountType, String newKey) {
 		Advertisement party = parties.get(id);
 		if (party == null) {
 			return Optional.empty();
 		}
 		party.setHost(newHost);
 		party.setHostAccountHash(AdvertisementFactory.accountHashOf(party, newHost));
+		party.setHostAccountType(newHostAccountType == null || newHostAccountType.isBlank()
+			? "NORMAL" : newHostAccountType);
 		party.setSeq(nextRevision());
 		hostKeys.put(id, newKey);
 		return Optional.of(party);

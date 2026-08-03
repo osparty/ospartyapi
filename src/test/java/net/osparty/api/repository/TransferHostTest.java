@@ -26,10 +26,11 @@ class TransferHostTest {
 		String id = party.getId();
 		assertEquals(Authorization.OK, repo.authorize(id, "k-old"));
 
-		Advertisement updated = repo.transferHost(id, "NewHost", "k-new").orElseThrow();
+		Advertisement updated = repo.transferHost(id, "NewHost", "IRONMAN", "k-new").orElseThrow();
 
 		assertEquals(id, updated.getId());
 		assertEquals("NewHost", updated.getHost());
+		assertEquals("IRONMAN", updated.getHostAccountType());
 		assertEquals(Authorization.FORBIDDEN, repo.authorize(id, "k-old"));
 		assertEquals(Authorization.OK, repo.authorize(id, "k-new"));
 		assertTrue(repo.findByHost("NewHost").isPresent());
@@ -39,7 +40,22 @@ class TransferHostTest {
 	@Test
 	void transferHostOnMissingAdvertisementReturnsEmpty() {
 		FakeAdvertisementRepository repo = new FakeAdvertisementRepository();
-		assertTrue(repo.transferHost("nope", "NewHost", "k-new").isEmpty());
+		assertTrue(repo.transferHost("nope", "NewHost", "NORMAL", "k-new").isEmpty());
+	}
+
+	/**
+	 * An unknown account type is stored as NORMAL, not left absent: the old host's badge has to go, and a
+	 * cleared field is indistinguishable from an unchanged one on the delta a resuming client receives.
+	 */
+	@Test
+	void transferHostWithoutAnAccountTypeClearsTheOutgoingHostsBadge() {
+		FakeAdvertisementRepository repo = new FakeAdvertisementRepository();
+		Advertisement party = repo.create(request("OldHost"), "k-old");
+		party.setHostAccountType("HARDCORE_IRONMAN");
+
+		Advertisement updated = repo.transferHost(party.getId(), "NewHost", null, "k-new").orElseThrow();
+
+		assertEquals("NORMAL", updated.getHostAccountType());
 	}
 
 	@Test
@@ -83,6 +99,25 @@ class TransferHostTest {
 		AdvertisementDelta delta = AdvertisementDelta.diff(prev, cur);
 		assertNotNull(delta);
 		assertEquals(2L, delta.hostAccountHash());
+	}
+
+	/** Same story as the hash for the badge beside the name: it is stamped on the ad, not read off a member. */
+	@Test
+	void diffCarriesHostAccountTypeWhenTheHostChanges() {
+		Advertisement prev = new Advertisement();
+		prev.setId("p1");
+		prev.setActivity("cox");
+		prev.setHost("OldHost");
+		prev.setHostAccountType("IRONMAN");
+		Advertisement cur = new Advertisement();
+		cur.setId("p1");
+		cur.setActivity("cox");
+		cur.setHost("NewHost");
+		cur.setHostAccountType("NORMAL");
+
+		AdvertisementDelta delta = AdvertisementDelta.diff(prev, cur);
+		assertNotNull(delta);
+		assertEquals("NORMAL", delta.hostAccountType());
 	}
 
 	@Test

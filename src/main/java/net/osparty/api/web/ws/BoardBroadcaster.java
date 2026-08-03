@@ -356,7 +356,7 @@ public class BoardBroadcaster {
 		if (!authorizeWrite(sub, id, in.key())) {
 			return;
 		}
-		Optional<Advertisement> ad = store.transferHost(id, in.host(), in.newKey());
+		Optional<Advertisement> ad = store.transferHost(id, in.host(), in.hostAccountType(), in.newKey());
 		if (ad.isEmpty()) {
 			sendError(sub, id, "gone");
 			unbind(sub.session.id());
@@ -1321,6 +1321,8 @@ public class BoardBroadcaster {
 
 	record Inbound(String type, String activity, AdvertisementRequest request, AdvertisementUpdate patch, String id, String key,
 		String code, String host, Long accountHash, Boolean visible, String newKey, String name, String target,
+		/** Sent with {@code transferHost}: the incoming host's account type, which re-stamps the ad's badge. */
+		String hostAccountType,
 		/** Sent with {@code subscribe}: this client can read gzipped binary frames. Absent means it cannot. */
 		Boolean compress,
 		/**

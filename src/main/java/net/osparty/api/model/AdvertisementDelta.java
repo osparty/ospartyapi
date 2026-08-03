@@ -15,6 +15,8 @@ public record AdvertisementDelta(
 	 * zero gets the outgoing host. Absent unless the hash actually changed.
 	 */
 	Long hostAccountHash,
+	/** Travels with {@code host} for the same reason as the hash: the badge belongs to whoever runs the ad. */
+	String hostAccountType,
 	Integer size,
 	List<Member> members,
 	String world,
@@ -46,6 +48,8 @@ public record AdvertisementDelta(
 		String host = Objects.equals(prev.getHost(), cur.getHost()) ? null : cur.getHost();
 		Long hostAccountHash =
 			prev.getHostAccountHash() != cur.getHostAccountHash() ? cur.getHostAccountHash() : null;
+		String hostAccountType = Objects.equals(prev.getHostAccountType(), cur.getHostAccountType())
+			? null : cur.getHostAccountType();
 		Integer size = prev.getSize() != cur.getSize() ? cur.getSize() : null;
 		List<Member> members = Objects.equals(prev.getMembers(), cur.getMembers()) ? null : cur.getMembers();
 		String world = Objects.equals(prev.getWorld(), cur.getWorld()) ? null : cur.getWorld();
@@ -71,7 +75,8 @@ public record AdvertisementDelta(
 		Boolean teacher = prev.isTeacher() != cur.isTeacher() ? cur.isTeacher() : null;
 		String node = Objects.equals(prev.getNode(), cur.getNode()) ? null : cur.getNode();
 
-		if (host == null && hostAccountHash == null && size == null && members == null && world == null
+		if (host == null && hostAccountHash == null && hostAccountType == null
+			&& size == null && members == null && world == null
 			&& layout == null && neededRoles == null
 			&& description == null && capacity == null && lootRule == null && ironmanOnly == null && privateAd == null
 			&& minKillCount == null && minHardModeKillCount == null && invocation == null && hardMode == null
@@ -79,7 +84,8 @@ public record AdvertisementDelta(
 			&& node == null) {
 			return null;
 		}
-		return new AdvertisementDelta(cur.getId(), cur.getActivity(), host, hostAccountHash, size, members, world, layout, neededRoles, description,
+		return new AdvertisementDelta(cur.getId(), cur.getActivity(), host, hostAccountHash, hostAccountType,
+			size, members, world, layout, neededRoles, description,
 			capacity, lootRule, ironmanOnly, privateAd, minKillCount, minHardModeKillCount, invocation, hardMode,
 			coxScale, requiredRoles, hostRole, learner, teacher, node);
 	}

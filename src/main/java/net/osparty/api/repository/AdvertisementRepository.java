@@ -42,7 +42,13 @@ public interface AdvertisementRepository {
 	 */
 	long nextRevision();
 
-	Optional<Advertisement> transferHost(String id, String newHost, String newKey);
+	/**
+	 * Reassign the ad to {@code newHost} in place, re-keying its credential to {@code newKey}.
+	 * {@code newHostAccountType} re-stamps the badge shown beside the host on the board; a null or
+	 * blank one is stored as {@code NORMAL} rather than left absent, so the change is expressible as a
+	 * delta and never leaves the outgoing host's badge behind.
+	 */
+	Optional<Advertisement> transferHost(String id, String newHost, String newHostAccountType, String newKey);
 
 	Optional<Advertisement> attachVoiceChannel(String id, String channelId, String inviteUrl);
 

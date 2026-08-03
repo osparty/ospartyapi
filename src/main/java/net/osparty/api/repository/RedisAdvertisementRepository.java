@@ -203,7 +203,7 @@ public class RedisAdvertisementRepository implements AdvertisementRepository {
 	}
 
 	@Override
-	public Optional<Advertisement> transferHost(String id, String newHost, String newKey) {
+	public Optional<Advertisement> transferHost(String id, String newHost, String newHostAccountType, String newKey) {
 		String key = AD_KEY + id;
 		Advertisement ad = read(key);
 		if (ad == null) {
@@ -216,6 +216,11 @@ public class RedisAdvertisementRepository implements AdvertisementRepository {
 		// host is not an admitted member with a known hash. Leaving the old host's hash in place
 		// would attribute the ad -- and any ban on it -- to someone who no longer runs it.
 		ad.setHostAccountHash(AdvertisementFactory.accountHashOf(ad, newHost));
+		// Same reasoning for the badge beside the name: an ironman's helm left on an ad a normal account
+		// now runs reads as a claim about the new host. Stored as NORMAL rather than cleared, so the
+		// change survives the diff a resuming client is sent.
+		ad.setHostAccountType(newHostAccountType == null || newHostAccountType.isBlank()
+			? "NORMAL" : newHostAccountType);
 		ad.setSeq(nextRevision());
 		String json = write(ad);
 		redis.executePipelined(new SessionCallback<Object>() {

@@ -1,8 +1,10 @@
 package net.osparty.api.model;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import java.util.List;
 import lombok.Data;
 
+/** A host's patch to its own ad. Inbound only, so the 1.0.50 field name is an alias rather than a property. */
 @Data
 public class AdvertisementUpdate {
 	private Integer size;
@@ -14,6 +16,7 @@ public class AdvertisementUpdate {
 	private Integer capacity;
 	private String lootRule;
 	private Boolean ironmanOnly;
+	@JsonAlias("privateParty")
 	private Boolean privateAd;
 	private Integer minKillCount;
 	private Integer minHardModeKillCount;

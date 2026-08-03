@@ -17,6 +17,7 @@ feed used by the bot — there is no REST party CRUD.
 | Surface | Path | Used by |
 |---------|------|---------|
 | **WebSocket** (all party traffic) | `/api/ws`, or `/n/{nodeId}/api/ws` to reach the pod owning a live party (`wss://` behind TLS). Served by Netty on `app.socket.port`, not by Tomcat on `server.port` | the plugin |
+| WebSocket, ad board alone | `/api/v1/ws/parties` — untagged, no live party. Held open for plugin 1.0.50 only (below) | plugin 1.0.50 falling back |
 | Discord OAuth return | `GET /api/v1/discord/link/callback` | the user's browser |
 | Internal badge feed | `POST` / `PUT /internal/badges` | the `osparty-discord` bot |
 | Ad moderation | `POST /internal/bans`, `/internal/bans/unban`, `/internal/reports/{id}/dismiss` | the `osparty-discord` bot |
@@ -27,6 +28,26 @@ compared against `app.discord.internal-token`); a missing/wrong token is `401`.
 Note it **fails closed**: with no token configured, every `/internal/*` call is
 rejected rather than waved through.
 The Discord callback renders a small HTML result page.
+
+### Held open for plugin 1.0.50
+
+1.0.50 is what the RuneLite hub serves while 1.0.51 waits on review, and the
+server updates on its own schedule while the plugin does not — so this release
+answers to the names that one knows as well as the current ones:
+
+| Kept | Current | Why it cannot just be dropped |
+|------|---------|-------------------------------|
+| `GET /api/v1/capabilities` → `{"partyV2":true,"mergedSocket":true}` | — | 1.0.50 probes it at startup and reads *any* failure as "older than the live party". A 404 here sends it down the fallback below for everything |
+| `WS /api/v1/ws/parties` — the ad board alone, **untagged** text frames both ways | `/api/ws`, both protocols, `Mux`-tagged | 1.0.50 falls back here on its own initiative, after the merged socket has failed it enough times to look deliberate. Nothing answering means a bad connection becomes a client that cannot search until it restarts |
+| `parties`, `party` in board frames | `ads`, `ad` | 1.0.50 deserialises with Gson, which drops a name it does not know silently: an empty search list and lookups that never resolve |
+| `privateParty` on ads, deltas, host requests and patches | `privateAd` | Same silence, but worse: an ad hosted as private from 1.0.50 would go public |
+
+Both names ride every frame that carries either, and both are accepted inbound.
+`osparty_ws_connections{endpoint="board"}` counts who is still on the old path —
+when it reaches zero and stays there, delete `CapabilitiesController`,
+`Route.BOARD` and `NettySocketSession.UNTAGGED`, the field aliases, and the tests
+named for 1.0.50. The live party's own old path (`/api/v2/ws/party`) is **not**
+kept: no released plugin ever dialled it.
 
 ## WebSocket protocol
 
@@ -383,7 +404,8 @@ Manager) pointed at host port `8080`. Two things matter for the live push:
 - **Enable WebSocket support** on the proxy so the `/api/ws` upgrade is forwarded
   (to the socket port, not the REST one); otherwise clients can't connect at all.
   `/n/{nodeId}/api/ws` must route to that specific pod — see the per-pod Services
-  in `k8s/`.
+  in `k8s/`. `/api/v1/ws/parties` goes to the socket port too, and needs no node
+  hint; it is plugin 1.0.50's fallback and Tomcat cannot serve it.
 - Keep the idle read timeout comfortably above the client's ping (the plugin pings
   every 20s), so upgraded connections aren't cut. Then point the plugin's `API
   base URL` at `https://party.example.com`.

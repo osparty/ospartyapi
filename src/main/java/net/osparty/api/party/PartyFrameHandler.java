@@ -65,11 +65,22 @@ public class PartyFrameHandler {
 			in = mapper.readValue(payload, Inbound.class);
 		}
 		catch (Exception e) {
+			// Silence here is what makes a version mismatch look like a client that simply went quiet: the
+			// frame is dropped, the sender is told nothing, and neither end has any record of it.
+			if (ctx.firstTime("<unparseable>")) {
+				log.warn("Party frame unparseable: session={} member={} room={} error={} frame={}",
+					sessionId, ctx.memberId, ctx.roomId, e.toString(), preview(payload));
+			}
 			return;
 		}
 		if (in.type() == null) {
+			if (ctx.firstTime("<untyped>")) {
+				log.warn("Party frame carries no type: session={} member={} frame={}",
+					sessionId, ctx.memberId, preview(payload));
+			}
 			return;
 		}
+		log.debug("Party <- {} {} member={} room={}", sessionId, in.type(), ctx.memberId, ctx.roomId);
 		if (ctx.roomId != null) {
 			// Any frame at all counts as proof of life; the sweep has nothing else to go on.
 			manager.touch(ctx.roomId, ctx.memberId);
@@ -157,8 +168,24 @@ public class PartyFrameHandler {
 				handleLeave(ctx);
 				break;
 			default:
+				// A name this build has no case for. Between plugin versions that is the shape a protocol
+				// difference takes, and dropping it without a word is why one looks like the other going idle.
+				if (ctx.firstTime(in.type())) {
+					log.warn("Party frame of unknown type: session={} member={} room={} type={}",
+						sessionId, ctx.memberId, ctx.roomId, in.type());
+				}
 				break;
 		}
+	}
+
+	/** The first of a frame, for a log line about one that could not be handled. */
+	private static String preview(byte[] payload) {
+		if (payload == null) {
+			return "<none>";
+		}
+		int length = Math.min(payload.length, 300);
+		String text = new String(payload, 0, length, java.nio.charset.StandardCharsets.UTF_8);
+		return payload.length > length ? text + "…(" + payload.length + "B)" : text;
 	}
 
 	/**
@@ -394,9 +421,20 @@ public class PartyFrameHandler {
 		volatile long accountHash;
 		volatile String name;
 		volatile String roomId;
+		/**
+		 * Frame types this session has already been warned about, so a client that sends one every tick is
+		 * reported once rather than filling the log. Bounded by the number of distinct types a client can
+		 * name, which is small even when it is wrong about all of them.
+		 */
+		final java.util.Set<String> warnedTypes = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
 		Ctx(SocketSession session) {
 			this.session = session;
+		}
+
+		/** Whether this is the first time {@code type} has gone wrong on this session. */
+		boolean firstTime(String type) {
+			return warnedTypes.size() < 16 && warnedTypes.add(type);
 		}
 	}
 }

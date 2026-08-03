@@ -94,8 +94,8 @@ public class NettySocketServer implements SmartLifecycle {
 		NettySocketHandler handler = new NettySocketHandler(frames, board, dropped, meters);
 		WebSocketServerProtocolConfig ws = WebSocketServerProtocolConfig.newBuilder()
 			// The path is checked by SocketPathHandler, which has to see it anyway to reject anything else
-			// and to decide which protocols the connection carries. No single prefix covers the three
-			// endpoints plus their node-hinted /n/{nodeId} forms.
+			// and to decide which protocols the connection carries. No single prefix covers both endpoints
+			// plus the node-hinted /n/{nodeId} form.
 			.websocketPath("/")
 			.checkStartsWith(true)
 			.maxFramePayloadLength(MAX_FRAME_BYTES)

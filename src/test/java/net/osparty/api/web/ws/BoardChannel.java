@@ -9,6 +9,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 import net.osparty.api.transport.Mux;
 import org.springframework.web.socket.BinaryMessage;
+import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
@@ -24,10 +25,30 @@ final class BoardChannel {
 	private BoardChannel() {
 	}
 
+	/**
+	 * What one received frame may be, matching the server's own frame ceiling.
+	 *
+	 * <p>The JSR-356 client defaults to 8 KB and answers anything larger by closing the connection with 1009
+	 * rather than delivering it, which reads as a server that went quiet. A whole board passes that in a
+	 * suite that has hosted a few ads, so without this a test's result depends on how many ads the ones
+	 * before it left behind. The plugin has no equivalent limit — this is the harness catching up to the
+	 * server, not a constraint the wire has.
+	 */
+	private static final int MAX_FRAME_BYTES = 64 * 1024;
+
+	/** A client that will accept any frame the server is willing to send. */
+	private static StandardWebSocketClient client() {
+		jakarta.websocket.WebSocketContainer container =
+			jakarta.websocket.ContainerProvider.getWebSocketContainer();
+		container.setDefaultMaxTextMessageBufferSize(MAX_FRAME_BYTES);
+		container.setDefaultMaxBinaryMessageBufferSize(MAX_FRAME_BYTES);
+		return new StandardWebSocketClient(container);
+	}
+
 	/** Open a connection and feed every board frame it receives into {@code messages}. */
 	static WebSocketSession connect(int port, ObjectMapper mapper, BlockingQueue<JsonNode> messages)
 		throws Exception {
-		return new StandardWebSocketClient().execute(
+		return client().execute(
 			new AbstractWebSocketHandler() {
 				@Override
 				protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message)
@@ -39,6 +60,25 @@ final class BoardChannel {
 				}
 			},
 			"ws://localhost:" + port + "/api/ws").get(5, TimeUnit.SECONDS);
+	}
+
+	/**
+	 * The same, on the endpoint the board had to itself before the merge: untagged text frames both ways.
+	 *
+	 * <p>Kept for plugin 1.0.50, which falls back here when the merged socket has failed it repeatedly.
+	 * Goes with that endpoint.
+	 */
+	static WebSocketSession connectLegacy(int port, ObjectMapper mapper, BlockingQueue<JsonNode> messages)
+		throws Exception {
+		return client().execute(
+			new AbstractWebSocketHandler() {
+				@Override
+				protected void handleTextMessage(WebSocketSession session, TextMessage message)
+					throws Exception {
+					messages.add(mapper.readTree(message.getPayload()));
+				}
+			},
+			"ws://localhost:" + port + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
 	}
 
 	/** Send one board frame, tagged for its channel. */

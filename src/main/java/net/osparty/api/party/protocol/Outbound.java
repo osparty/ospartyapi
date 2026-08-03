@@ -1,5 +1,6 @@
 package net.osparty.api.party.protocol;
 
+import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -198,6 +199,22 @@ public record Outbound(
 	/** One member's live update inside a {@code memberUpdates} frame. */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	public record MemberUpdate(@JsonProperty("m") long memberId, @JsonProperty("s") TokenBuffer state) {
+		/**
+		 * The same id under the name plugin 1.0.50 reads it by.
+		 *
+		 * <p>That release annotates {@code m} on the roster row but not on this one, so it reads every update
+		 * in the frame as belonging to member 0 — an id nobody on the roster has. The peer each update
+		 * describes then never gets it, which is what leaves an applicant with no state for the host to see.
+		 *
+		 * <p>The one alias that is not free: this rides the frame fanned out to every member of every party on
+		 * every window, and it is most of what shortening the wrapper bought (PARTY_V2_OPTIMIZATION.md §5.2).
+		 * Delete it with {@link net.osparty.api.web.CapabilitiesController}, and sooner than the rest — it is
+		 * the one worth watching {@code osparty.ws.connections} for.
+		 */
+		@JsonGetter("memberId")
+		public long legacyMemberId() {
+			return memberId;
+		}
 	}
 
 	/** One member in the roster frame. {@code status} is HOST / MEMBER / PENDING. */

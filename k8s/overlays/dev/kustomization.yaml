@@ -95,6 +95,15 @@ patches:
                       name: osparty-api
                       port:
                         name: live
+                # The board's own endpoint, held open for plugin 1.0.50's fallback. No node hint: it carries
+                # discovery alone, and discovery is the same on every pod. Goes when 1.0.50 does.
+                - path: /api/v1/ws/parties
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api
+                      port:
+                        name: live
                 - path: /n/osparty-api-0
                   pathType: Prefix
                   backend:

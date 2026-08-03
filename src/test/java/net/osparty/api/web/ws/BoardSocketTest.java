@@ -243,6 +243,90 @@ class BoardSocketTest {
 		}
 	}
 
+	/**
+	 * The board as plugin 1.0.50 sees it: {@code parties}/{@code party} beside {@code ads}/{@code ad}, and
+	 * {@code privateParty} both accepted and echoed. That release is in the hub until RuneLite reviews
+	 * 1.0.51, it reads frames with Gson, and Gson drops a name it does not know without saying so — so
+	 * without the aliases it gets an empty board and every private ad reads public.
+	 *
+	 * <p>Goes with {@code CapabilitiesController} and the aliases themselves.
+	 */
+	@Test
+	void framesCarryTheNamesPlugin1050Reads() throws Exception {
+		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
+		WebSocketSession session = connect(messages);
+		try {
+			session.sendMessage(BoardChannel.frame("{\"type\":\"subscribe\"}"));
+			JsonNode snapshot = awaitWhere(messages, m -> "snapshot".equals(type(m)), "snapshot");
+			assertThat(snapshot.has("ads")).isTrue();
+			assertThat(snapshot.has("parties")).isTrue();
+
+			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-legacy\",\"request\":"
+				+ "{\"activity\":\"toa\",\"host\":\"WsLegacy\",\"capacity\":3,\"passphrase\":\"pp-legacy\","
+				+ "\"privateParty\":true}}"));
+
+			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
+			assertThat(hosted.path("ad").path("host").asText()).isEqualTo("WsLegacy");
+			assertThat(hosted.path("party").path("host").asText()).isEqualTo("WsLegacy");
+			// Sent under the old name, so it has to come back under it too, or the host's own client
+			// redraws the ad it just made as public.
+			assertThat(hosted.path("party").path("privateParty").asBoolean()).isTrue();
+			assertThat(hosted.path("ad").path("privateAd").asBoolean()).isTrue();
+
+			// The code lookup is how a joiner reaches a private ad at all, and 1.0.50 reads the answer off
+			// `party`. An unaliased byCode leaves it holding a hit it cannot see, which is indistinguishable
+			// from a miss.
+			String code = hosted.path("ad").path("inviteCode").asText();
+			session.sendMessage(BoardChannel.frame("{\"type\":\"getByCode\",\"code\":\"" + code + "\"}"));
+			JsonNode found = awaitWhere(messages, m -> "byCode".equals(type(m)), "byCode hit");
+			assertThat(found.path("ad").path("host").asText()).isEqualTo("WsLegacy");
+			assertThat(found.path("party").path("host").asText()).isEqualTo("WsLegacy");
+
+			// The board arrives as batches after the snapshot, and 1.0.50 reads those by their own names.
+			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-legacy2\",\"request\":"
+				+ "{\"activity\":\"cox\",\"host\":\"WsLegacyTwo\",\"capacity\":3,\"passphrase\":\"pp-l2\"}}"));
+			JsonNode batch = awaitWhere(messages,
+				m -> "batch".equals(type(m))
+					&& anyMatch(m.path("created"), p -> "WsLegacyTwo".equals(p.path("host").asText())),
+				"created for WsLegacyTwo");
+			assertThat(batch.has("created")).isTrue();
+		}
+		finally {
+			session.close();
+		}
+	}
+
+	/**
+	 * The board's own endpoint, untagged text both ways, still serving a whole board.
+	 *
+	 * <p>1.0.50 dials it after the merged socket has failed it enough times to look like the server stopped
+	 * serving that one. Nothing here answers it and a bad connection becomes a client that cannot search
+	 * until the user restarts the client — so the fallback has to land somewhere. Goes with 1.0.50.
+	 */
+	@Test
+	void theBoardsOwnEndpointStillServesADiscoveryOnlyClient() throws Exception {
+		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
+		WebSocketSession session = BoardChannel.connectLegacy(socketServer.boundPort(), mapper, messages);
+		try {
+			// Untagged: this endpoint predates the channel tag, so the frame is the JSON and nothing else.
+			session.sendMessage(new org.springframework.web.socket.TextMessage("{\"type\":\"subscribe\"}"));
+
+			JsonNode snapshot = awaitWhere(messages, m -> "snapshot".equals(type(m)), "snapshot");
+			assertThat(snapshot.has("ads")).isTrue();
+			assertThat(snapshot.has("parties")).isTrue();
+
+			session.sendMessage(new org.springframework.web.socket.TextMessage(
+				"{\"type\":\"host\",\"key\":\"k-oldpath\",\"request\":"
+					+ "{\"activity\":\"cox\",\"host\":\"WsOldPath\",\"capacity\":3,\"passphrase\":\"pp-old\"}}"));
+
+			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
+			assertThat(hosted.path("party").path("host").asText()).isEqualTo("WsOldPath");
+		}
+		finally {
+			session.close();
+		}
+	}
+
 	private WebSocketSession connect(BlockingQueue<JsonNode> messages) throws Exception {
 		return BoardChannel.connect(socketServer.boundPort(), mapper, messages);
 	}

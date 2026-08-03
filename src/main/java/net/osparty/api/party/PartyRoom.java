@@ -48,9 +48,6 @@ final class PartyRoom {
 	 */
 	private final Map<Long, Long> lastSeen = new java.util.concurrent.ConcurrentHashMap<>();
 
-	/** Shortest gap between resync rounds; see {@link #broadcastResync}. */
-	private static final long RESYNC_MIN_INTERVAL_MS = 3_000;
-
 	/** The two ends of a {@code memberUpdates} frame, between which pre-encoded updates are pasted. */
 	private static final byte[] UPDATES_PREFIX =
 		("{\"t\":\"" + Outbound.MEMBER_UPDATES + "\",\"u\":[")
@@ -63,7 +60,10 @@ final class PartyRoom {
 	/** Whether anything in {@link #pending} was sent as urgent, which overrides the idle window. */
 	private boolean pendingUrgent;
 	private long lastFlushAt;
-	private long lastResyncAt;
+	/** Whether someone has been seated since the last resync round, so another is owed. See {@link #flushResync}. */
+	private boolean resyncOwed;
+	/** The sole member the owed round is for, or 0 once a second one is seated into the same round. */
+	private long resyncJoiner;
 	private long hostMemberId;
 	private String hostName;
 	private int capacity;
@@ -97,7 +97,7 @@ final class PartyRoom {
 			send(session, Outbound.welcome(memberId, RoomMember.Status.HOST.name(), nodeId));
 			sendSnapshotTo(session);
 			broadcastRoster();
-			broadcastResync(memberId);
+			oweResync(memberId);
 		}
 	}
 
@@ -118,10 +118,14 @@ final class PartyRoom {
 			members.put(memberId, member);
 			sessions.put(memberId, session);
 			lastSeen.put(memberId, System.currentTimeMillis());
+			// The applicant the host is waiting to see. PENDING here and absent from the host's panel means
+			// the roster reached them and the applicant's own state did not.
+			log.info("Party seated: room={} member={} name={} status={} invited={} members={}",
+				id, memberId, name, status, invited, members.size());
 			send(session, Outbound.welcome(memberId, status.name(), nodeId));
 			sendSnapshotTo(session);
 			broadcastRoster();
-			broadcastResync(memberId);
+			oweResync(memberId);
 		}
 	}
 
@@ -194,7 +198,7 @@ final class PartyRoom {
 	 *
 	 * <p>Nothing is stored: frames carry only what changed, so the last one is a fragment rather than a
 	 * picture, and an owner that kept it would hand that fragment to the next joiner as though it were
-	 * complete. Joiners are served by {@link #broadcastResync} instead (PARTY_V2_OPTIMIZATION.md §5.2).
+	 * complete. Joiners are served by {@link #flushResync} instead (PARTY_V2_OPTIMIZATION.md §5.2).
 	 *
 	 * <p>Not sent immediately: one update owes a send to every peer, so a busy room's outbound frames grow
 	 * with the square of its size. Holding a short window and giving each member one frame with everything
@@ -271,8 +275,27 @@ final class PartyRoom {
 				if (frame != null) {
 					sendRaw(entry.getValue(), frame);
 				}
+				else if (log.isDebugEnabled()) {
+					// Nothing left once this member's own updates came out, which is ordinary in a window
+					// they were alone in — and is also what a member nobody can see looks like.
+					log.debug("Party relay: room={} -> member={} nothing (window={})",
+						id, entry.getKey(), memberIdsOf(window));
+				}
+			}
+			if (log.isDebugEnabled()) {
+				log.debug("Party relay: room={} window={} members={} recipients={}",
+					id, window.size(), memberIdsOf(window), members.size());
 			}
 		}
+	}
+
+	/** The members a window of updates is about, for a log line about who was relayed. */
+	private static String memberIdsOf(List<Outbound.MemberUpdate> window) {
+		StringBuilder ids = new StringBuilder();
+		for (Outbound.MemberUpdate update : window) {
+			ids.append(ids.length() == 0 ? "" : ",").append(update.memberId());
+		}
+		return ids.toString();
 	}
 
 	/**
@@ -592,7 +615,7 @@ final class PartyRoom {
 	/**
 	 * Give a freshly-seated member the room's own state: the roster and the host's ad meta, both of which
 	 * this node owns. Peers' live state is not here — the owner does not hold any — and arrives instead from
-	 * the {@link #broadcastResync} the peers answer on their next tick.
+	 * the {@link #flushResync} round the peers answer on their next tick.
 	 */
 	private void sendSnapshotTo(SocketSession session) {
 		send(session, Outbound.roster(hostName, capacity, locked, false, discordUrl, roster()));
@@ -602,25 +625,55 @@ final class PartyRoom {
 	}
 
 	/**
-	 * Ask the seated members to re-send their full live state for the benefit of {@code joinerMemberId}.
+	 * Note that {@code joinerMemberId} was seated holding no picture of the room, so the peers owe it their
+	 * full live state. The round itself is sent by {@link #flushResync} on the next sweep.
 	 *
-	 * <p>Rate-limited per room: several members seated in the same moment (a party re-forming, or a wave of
-	 * reconnects) would otherwise each trigger a full round from everyone. One round covers all of them,
-	 * since it is a broadcast and the answers reach every session.
+	 * <p>Deferred rather than sent here so that several members seated in the same moment (a party re-forming,
+	 * or a wave of reconnects) share one round instead of each costing a full round from everyone.
 	 *
-	 * <p>Skipped for the first member — there is nobody to answer — and the joiner is excluded because it
-	 * pushes its own state unprompted on its next tick anyway.
+	 * <p>Skipped for the first member — there is nobody to answer.
 	 */
-	private void broadcastResync(long joinerMemberId) {
+	private void oweResync(long joinerMemberId) {
 		if (members.size() < 2) {
 			return;
 		}
-		long now = System.currentTimeMillis();
-		if (now - lastResyncAt < RESYNC_MIN_INTERVAL_MS) {
-			return;
+		// A second joiner folded into the same round cancels the exemption; see flushResync.
+		resyncJoiner = resyncOwed ? 0 : joinerMemberId;
+		resyncOwed = true;
+	}
+
+	/**
+	 * Send the resync round owed to whoever has been seated since the last one: they re-send their full live
+	 * state, and the answers reach every session.
+	 *
+	 * <p>Coalescing here rather than at the seat is what makes a wave of joiners cost one round. It used to be
+	 * a rate limit at the seat instead — a round within the last few seconds suppressed the next one — and that
+	 * <em>dropped</em> the second joiner's round rather than deferring it. The suppressed round was not
+	 * redundant: the earlier one had already been answered before the second joiner was seated, so its answers
+	 * never reached them. They were left with no live state at all — every peer offline and blank — until one
+	 * of those peers happened to change, and then holding only the fragment that changed.
+	 *
+	 * <p>A lone joiner is still excused from the round it caused, since it pushes its own state unprompted on
+	 * its next tick. That only holds while it <em>is</em> alone: two joiners in one round and the first may
+	 * already have pushed before the second was seated, so excusing it is exactly what would strand the second
+	 * without it.
+	 */
+	void flushResync() {
+		synchronized (lock) {
+			if (!resyncOwed) {
+				return;
+			}
+			Long joiner = resyncJoiner == 0 ? null : resyncJoiner;
+			resyncOwed = false;
+			resyncJoiner = 0;
+			if (members.size() < 2) {
+				return;
+			}
+			// The round a joiner's whole picture of the room depends on: without the answers to this, every
+			// peer stays blank for them, and they stay blank for every peer.
+			log.info("Party resync: room={} members={} excused={}", id, members.size(), joiner);
+			broadcast(Outbound.resync(), joiner);
 		}
-		lastResyncAt = now;
-		broadcast(Outbound.resync(), joinerMemberId);
 	}
 
 	private void broadcast(Outbound frame, Long exceptMemberId) {

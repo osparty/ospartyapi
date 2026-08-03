@@ -199,6 +199,9 @@ public class PartyManager {
 		for (PartyRoom room : rooms.values()) {
 			try {
 				room.flush(idleMs);
+				// Rides the same sweep: it is what coalesces a wave of joiners into one round, and a room
+				// with nobody newly seated returns on a boolean.
+				room.flushResync();
 			}
 			catch (Exception e) {
 				// One room's bad send must not stop the rest of this node's parties from being flushed.

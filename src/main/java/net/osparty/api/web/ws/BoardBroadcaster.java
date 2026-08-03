@@ -1,5 +1,6 @@
 package net.osparty.api.web.ws;
 
+import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Gauge;
@@ -144,11 +145,22 @@ public class BoardBroadcaster {
 			in = mapper.readValue(payload, Inbound.class);
 		}
 		catch (Exception e) {
+			// A frame this build cannot read. Between plugin versions that is what a protocol difference
+			// looks like, and dropping it in silence is why it presents as a server that stopped answering.
+			if (sub.firstTime("<unparseable>")) {
+				log.warn("Board frame unparseable: session={} error={} frame={}",
+					sub.session.id(), e.toString(), preview(payload));
+			}
 			return;
 		}
 		if (in.type() == null) {
+			if (sub.firstTime("<untyped>")) {
+				log.warn("Board frame carries no type: session={} frame={}",
+					sub.session.id(), preview(payload));
+			}
 			return;
 		}
+		log.debug("WS <- {} {}", sub.session.id(), payload);
 		switch (in.type()) {
 			case "subscribe":
 				handleSubscribe(sub, in);
@@ -208,8 +220,20 @@ public class BoardBroadcaster {
 				handleReport(sub, in);
 				break;
 			default:
+				if (sub.firstTime(in.type())) {
+					log.warn("Board frame of unknown type: session={} type={}", sub.session.id(), in.type());
+				}
 				break;
 		}
+	}
+
+	/** The first of a frame, for a log line about one that could not be handled. */
+	private static String preview(String payload) {
+		if (payload == null) {
+			return "<none>";
+		}
+		return payload.length() <= 300 ? payload
+			: payload.substring(0, 300) + "…(" + payload.length() + " chars)";
 	}
 
 	private void handleSubscribe(Subscriber sub, Inbound in) {
@@ -230,18 +254,27 @@ public class BoardBroadcaster {
 	private void handleGetByCode(Subscriber sub, Inbound in) {
 		String code = in.code();
 		Advertisement ad = code == null ? null : store.findByInviteCode(code).orElse(null);
-		if (filterByCode && hiddenFromViewer(sub, ad)) {
+		boolean hidden = filterByCode && hiddenFromViewer(sub, ad);
+		if (hidden) {
 			ad = null;
 		}
+		// A miss and a suppression are the same empty answer to the client, and the code it typed is the
+		// only thing that says which. Logged at info because it is a deliberate act by a user who is now
+		// looking at a party that will not open, once per act.
+		log.info("WS getByCode: session={} code={} result={}", sub.session.id(), code,
+			ad != null ? "ad=" + ad.getId() : hidden ? "hidden" : "no such code");
 		send(sub, Outbound.byCode(version.get(), code, enriched(ad)));
 	}
 
 	private void handleGetByHost(Subscriber sub, Inbound in) {
 		String host = in.host();
 		Advertisement ad = host == null ? null : store.findByHost(host).orElse(null);
-		if (filterByHost && hiddenFromViewer(sub, ad)) {
+		boolean hidden = filterByHost && hiddenFromViewer(sub, ad);
+		if (hidden) {
 			ad = null;
 		}
+		log.info("WS getByHost: session={} host={} result={}", sub.session.id(), host,
+			ad != null ? "ad=" + ad.getId() : hidden ? "hidden" : "not hosting");
 		send(sub, Outbound.byHost(version.get(), host, enriched(ad)));
 	}
 
@@ -1312,10 +1345,20 @@ public class BoardBroadcaster {
 		volatile String name;
 		/** Advertisements reported on this connection, so each is only reported once per session. */
 		final java.util.Set<String> reportedAdIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+		/**
+		 * Frame types this session has already been warned about, so a client that sends one on every tick is
+		 * reported once rather than filling the log.
+		 */
+		final java.util.Set<String> warnedTypes = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
 		Subscriber(net.osparty.api.transport.SocketSession session, String clientIp) {
 			this.clientIp = clientIp;
 			this.session = session;
+		}
+
+		/** Whether this is the first time {@code type} has gone wrong on this session. */
+		boolean firstTime(String type) {
+			return warnedTypes.size() < 16 && warnedTypes.add(type);
 		}
 	}
 
@@ -1338,6 +1381,25 @@ public class BoardBroadcaster {
 		Boolean delivered,
 		/** Snapshot only: the revision this board is current to, which the client offers back on resume. */
 		Long seq) {
+		/**
+		 * {@code ads} and {@code ad} under the names plugin 1.0.50 reads them by. That client deserialises
+		 * with Gson, which drops a field it has no name for without complaining, so an unaliased frame costs
+		 * it an empty search list and a lookup that never resolves.
+		 *
+		 * <p>Both names ride every frame that carries either, which is cheap: {@code @JsonInclude} drops them
+		 * when null, and the only frames where they are not are the ones a client is waiting on anyway.
+		 * Goes when {@link net.osparty.api.web.CapabilitiesController} does.
+		 */
+		@JsonGetter("parties")
+		public List<Advertisement> parties() {
+			return ads;
+		}
+
+		@JsonGetter("party")
+		public Advertisement party() {
+			return ad;
+		}
+
 		static Outbound snapshot(long version, List<Advertisement> ads, Long seq) {
 			return new Outbound("snapshot", version, ads, null, null, null, null, null, null, null, null, null, null, seq);
 		}

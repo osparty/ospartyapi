@@ -91,17 +91,32 @@ class PartyProtocolTest {
 
 	/**
 	 * The owner keeps no live state, so a joiner's baseline comes from the peers, not from a replay: seating
-	 * someone asks the room to re-send. The joiner itself is skipped — it pushes its own state unprompted.
+	 * someone asks the room to re-send, on the next sweep.
 	 */
 	@Test
 	void seatingAJoinerAsksThePeersToResendTheirState() throws Exception {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		// Nobody to ask while the host is alone.
+		manager.flushRooms();
 		assertThat(countOf(hostOut, "resync")).isZero();
 
 		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
+		manager.flushRooms();
 		assertThat(countOf(hostOut, "resync")).isEqualTo(1);
+		// The joiner is excused its own round — it pushes its state unprompted.
 		assertThat(countOf(memberOut, "resync")).isZero();
+	}
+
+	/** Owed once per wave, not once per sweep: a room with nobody newly seated asks for nothing. */
+	@Test
+	void aSettledRoomAsksForNoFurtherResyncs() throws Exception {
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
+		manager.flushRooms();
+		manager.flushRooms();
+		manager.flushRooms();
+
+		assertThat(countOf(hostOut, "resync")).isEqualTo(1);
 	}
 
 	/** State sent before a joiner arrived is gone — the room never stored it. Only the resync brings it back. */
@@ -172,7 +187,7 @@ class PartyProtocolTest {
 
 	/** A party re-forming seats several members at once; that must cost one round, not one round each. */
 	@Test
-	void resyncIsRateLimitedSoAWaveOfJoinersCostsOneRound() throws Exception {
+	void aWaveOfJoinersCostsOneResyncRound() throws Exception {
 		List<String> thirdOut = new ArrayList<>();
 		FakeSession third = session("third", thirdOut);
 		handler.onOpen(third);
@@ -180,8 +195,37 @@ class PartyProtocolTest {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":5}");
 		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
 		send(third, "{\"t\":\"join\",\"room\":\"r\"}");
+		manager.flushRooms();
 
 		assertThat(countOf(hostOut, "resync")).isEqualTo(1);
+	}
+
+	/**
+	 * The second of two joiners is owed a round of its own once the first one's has already been answered.
+	 * Coalescing a wave into one round is only sound while the wave is still gathering; past that, the round
+	 * that went out is spent, and suppressing the next one strands the second joiner with no live state at
+	 * all — peers offline and blank, until one of them happens to change.
+	 */
+	@Test
+	void aJoinerSeatedAfterTheLastRoundWasAnsweredGetsOneOfItsOwn() throws Exception {
+		List<String> thirdOut = new ArrayList<>();
+		FakeSession third = session("third", thirdOut);
+		handler.onOpen(third);
+
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":5}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
+		// The first joiner's round goes out and the peers answer it, all before the second is seated.
+		manager.flushRooms();
+		send(host, "{\"t\":\"update\",\"s\":{\"name\":\"Host\",\"world\":301}}");
+		send(member, "{\"t\":\"update\",\"s\":{\"name\":\"Member\",\"world\":301}}");
+		manager.flushRooms();
+
+		send(third, "{\"t\":\"join\",\"room\":\"r\"}");
+		manager.flushRooms();
+
+		// Both peers are asked again — including the first joiner, whose own push the second one missed.
+		assertThat(countOf(hostOut, "resync")).isEqualTo(2);
+		assertThat(countOf(memberOut, "resync")).isEqualTo(1);
 	}
 
 	/**
@@ -224,6 +268,35 @@ class PartyProtocolTest {
 		assertThat(relayed.get("s").get("inventory")).hasSize(1);
 		// A sender is never handed back its own update.
 		assertThat(countOf(hostOut, "mu")).isEqualTo(echoed);
+	}
+
+	/**
+	 * Every update in the frame names its member twice: {@code m}, and {@code memberId} for plugin 1.0.50.
+	 *
+	 * <p>That release annotates the short name on the roster row but not on the update, so it reads Gson's
+	 * default of 0 for every one of them — an id no roster holds. The peer each update describes then never
+	 * receives it and stays blank, which is what leaves an applicant invisible to the host it applied to.
+	 *
+	 * <p>Asserted on the fanned-out frame, not the record: that frame is pasted together from pre-encoded
+	 * updates rather than serialised whole, so the alias has to survive the assembly. Goes with
+	 * {@code CapabilitiesController}, and the sooner the better — this frame is the hottest one there is.
+	 */
+	@Test
+	void everyUpdateNamesItsMemberUnderBothNamesForPlugin1050() throws Exception {
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		send(member, "{\"t\":\"join\",\"room\":\"r\"}");
+		long hostId = last(hostOut, "welcome").get("m").asLong();
+
+		send(host, "{\"t\":\"update\",\"s\":{\"currentHp\":31}}");
+		send(host, "{\"t\":\"update\",\"s\":{\"world\":301}}");
+		manager.flushRooms();
+
+		JsonNode updates = last(memberOut, "mu").get("u");
+		assertThat(updates).hasSize(2);
+		for (JsonNode update : updates) {
+			assertThat(update.get("m").asLong()).isEqualTo(hostId);
+			assertThat(update.get("memberId").asLong()).isEqualTo(hostId);
+		}
 	}
 
 	/** Several updates within one window arrive together, in the order they were sent, as one frame. */

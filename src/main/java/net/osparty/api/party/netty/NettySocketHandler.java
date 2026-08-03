@@ -10,26 +10,30 @@ import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import io.netty.util.AttributeKey;
 import java.nio.charset.StandardCharsets;
+import java.util.EnumMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import net.osparty.api.transport.Mux;
 import net.osparty.api.transport.SocketSession;
 import net.osparty.api.party.PartyFrameHandler;
+import net.osparty.api.party.netty.SocketPathHandler.Route;
 import net.osparty.api.web.ws.BoardBroadcaster;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Bridges one Netty channel to the two protocols it carries: the live party
- * ({@link PartyFrameHandler}) and the ad board ({@link BoardBroadcaster}).
+ * Bridges one Netty channel to whichever protocols it carries: the live party
+ * ({@link PartyFrameHandler}) and the ad board ({@link BoardBroadcaster}) together on {@code /api/ws}, or
+ * the board alone on the endpoint it used to have to itself.
  *
  * <p>Sharable: one instance serves every connection, and everything per-connection hangs off the channel.
  * The connection is built on handshake completion rather than on channel activation, because until then
- * there is no WebSocket and no request path to say whether the client named a node.
+ * there is no WebSocket and no request path to say which protocols were asked for or whether the client
+ * named a node.
  *
- * <p>Each protocol gets its own {@link SocketSession} over the shared channel, tagged so its writes are
- * distinguishable, and each inbound frame is routed by the {@link Mux} byte in front of it. Neither
- * protocol is aware of the arrangement.
+ * <p>On a merged connection each protocol gets its own {@link SocketSession} over the shared channel, tagged
+ * so its writes are distinguishable, and each inbound frame is routed by the {@link Mux} byte in front of
+ * it. Neither protocol is aware of the arrangement.
  */
 @ChannelHandler.Sharable
 final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
@@ -41,30 +45,46 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 	/** The ad board, sharing every connection with the live party so a client needs one rather than two. */
 	private final BoardBroadcaster board;
 	private final LongAdder dropped;
-	/** Open connections. One endpoint now, so one number. */
-	private final AtomicInteger open = new AtomicInteger();
+	/**
+	 * Open connections per endpoint.
+	 *
+	 * <p>What decides when the board's own endpoint can be retired. Released plugins update on their own
+	 * schedule and 1.0.50 falls back to it on its own initiative, so the only honest answer to "is anyone
+	 * still on the old one" is to count. Dropping it on a guess disconnects the users who have not updated,
+	 * and does it silently — they would simply stop being able to search.
+	 */
+	private final EnumMap<Route, AtomicInteger> open = new EnumMap<>(Route.class);
 
 	NettySocketHandler(PartyFrameHandler frames, BoardBroadcaster board, LongAdder dropped,
 		io.micrometer.core.instrument.MeterRegistry meters) {
 		this.frames = frames;
 		this.board = board;
 		this.dropped = dropped;
-		if (meters != null) {
-			io.micrometer.core.instrument.Gauge
-				.builder("osparty.ws.connections", open, AtomicInteger::get)
-				.description("Open WebSocket connections")
-				.register(meters);
+		for (Route route : new Route[] { Route.BOARD, Route.MUX }) {
+			AtomicInteger count = new AtomicInteger();
+			open.put(route, count);
+			if (meters != null) {
+				io.micrometer.core.instrument.Gauge
+					.builder("osparty.ws.connections", count, AtomicInteger::get)
+					.description("Open WebSocket connections, by the endpoint they arrived on")
+					.tag("endpoint", route.name().toLowerCase(java.util.Locale.ROOT))
+					.register(meters);
+			}
 		}
 	}
 
 	/**
-	 * The two sessions one channel carries, one per protocol. Every frame on it — in both directions —
-	 * begins with a {@link Mux} tag saying which.
+	 * The sessions one channel carries: the merged endpoint's pair, whose frames all begin with a
+	 * {@link Mux} tag, or the board alone, whose frames are untagged.
 	 *
 	 * <p>Either may be null if that protocol is switched off in this deployment. That leaves its half of the
 	 * connection unopened rather than failing the handshake, because the other half is still worth serving.
+	 *
+	 * <p>{@code tagged} comes from the path rather than from which sessions exist. A merged connection whose
+	 * other protocol is switched off is still a merged connection, and reading its frames as untagged would
+	 * feed the tag byte to a JSON parser.
 	 */
-	private record Conn(SocketSession board, SocketSession live) {
+	private record Conn(SocketSession board, SocketSession live, boolean tagged, Route route) {
 	}
 
 	@Override
@@ -74,15 +94,20 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 			return;
 		}
 		String path = complete.requestUri();
+		Route route = SocketPathHandler.route(path);
+		boolean tagged = route == Route.MUX;
 		// Not lossy: board frames are deltas, and a skipped one leaves the client quietly out of date. Live
 		// updates are, because the next one supersedes whatever was dropped.
 		SocketSession boardSession = board == null ? null
-			: new NettySocketSession(ctx.channel(), path, dropped, Mux.BOARD, false);
-		SocketSession liveSession = frames == null ? null
+			: new NettySocketSession(ctx.channel(), path, dropped,
+				tagged ? Mux.BOARD : NettySocketSession.UNTAGGED, false);
+		// The board's own endpoint carries discovery and nothing else; a live session on it would have no
+		// way to be addressed.
+		SocketSession liveSession = frames == null || !tagged ? null
 			: new NettySocketSession(ctx.channel(), path, dropped, Mux.LIVE, true);
 
-		ctx.channel().attr(CONN).set(new Conn(boardSession, liveSession));
-		open.incrementAndGet();
+		ctx.channel().attr(CONN).set(new Conn(boardSession, liveSession, tagged, route));
+		open.get(route).incrementAndGet();
 		// After the attribute is set, both of them: opening a session can send, and a send on a channel whose
 		// connection is not yet recorded would be answered by a close callback that finds nothing to clean up.
 		if (boardSession != null) {
@@ -103,6 +128,12 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 		}
 		ByteBuf content = frame.content();
 		int length = content.readableBytes();
+		if (!conn.tagged()) {
+			byte[] payload = new byte[length];
+			content.getBytes(content.readerIndex(), payload);
+			dispatch(conn.board(), false, payload);
+			return;
+		}
 		// A tag and nothing else is not a frame; a tag we do not know belongs to neither protocol.
 		if (length < 2) {
 			return;
@@ -138,7 +169,10 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 	public void channelInactive(ChannelHandlerContext ctx) throws Exception {
 		Conn conn = ctx.channel().attr(CONN).getAndSet(null);
 		if (conn != null) {
-			open.decrementAndGet();
+			AtomicInteger count = open.get(conn.route());
+			if (count != null) {
+				count.decrementAndGet();
+			}
 			if (conn.board() != null) {
 				board.onClose(conn.board().id(), "channel inactive");
 			}

@@ -1,5 +1,6 @@
 package net.osparty.api.model;
 
+import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
 import java.util.Objects;
@@ -43,6 +44,16 @@ public record AdvertisementDelta(
 	 * board already holds.
 	 */
 	String node) {
+
+	/**
+	 * {@code privateAd} under the name plugin 1.0.50 knows it by. Outbound only — a delta is never read
+	 * back — and omitted with the rest when null. Goes when
+	 * {@link net.osparty.api.web.CapabilitiesController} does.
+	 */
+	@JsonGetter("privateParty")
+	public Boolean privateParty() {
+		return privateAd;
+	}
 
 	public static AdvertisementDelta diff(Advertisement prev, Advertisement cur) {
 		String host = Objects.equals(prev.getHost(), cur.getHost()) ? null : cur.getHost();

@@ -104,17 +104,17 @@ class NettySocketServerTest {
 		assertThat(welcome.get("nodeId").asText()).isEqualTo("node-a");
 	}
 
-	/** The live party had an endpoint of its own once. It is carried on the merged connection now. */
-	/** Both protocols had an endpoint of their own once. Both are carried on the merged one now. */
+	/**
+	 * The live party had an endpoint of its own once. It is carried on the merged connection now, and no
+	 * released plugin ever dialled the old one — unlike the board's, which is still served for 1.0.50.
+	 */
 	@Test
-	void theRetiredSingleProtocolPathsAreRefused() {
+	void theRetiredLivePartyPathIsRefused() {
 		assertThatThrownBy(() -> connect("/api/v2/ws/party", new Collector(Mux.LIVE)))
-			.isInstanceOf(Exception.class);
-		assertThatThrownBy(() -> connect("/api/v1/ws/parties", new Collector(Mux.BOARD)))
 			.isInstanceOf(Exception.class);
 	}
 
-	/** This port carries the one WebSocket endpoint and nothing else; REST stays on the servlet one. */
+	/** This port carries WebSockets and nothing else; REST stays on the servlet one. */
 	@Test
 	void anyOtherPathIsRefused() {
 		assertThatThrownBy(() -> connect("/api/v3/nope", new Collector(Mux.LIVE)))
@@ -164,8 +164,14 @@ class NettySocketServerTest {
 		waitForCount(0);
 	}
 
+	/**
+	 * Merged connections only. The gauge is tagged by the endpoint a connection arrived on — which is what
+	 * says whether anyone is still on the board's own path and therefore when it can go — so an untagged
+	 * lookup would pick whichever series Micrometer happened to register first.
+	 */
 	private int open() {
-		io.micrometer.core.instrument.Gauge gauge = meters.find("osparty.ws.connections").gauge();
+		io.micrometer.core.instrument.Gauge gauge =
+			meters.find("osparty.ws.connections").tag("endpoint", "mux").gauge();
 		return gauge == null ? -1 : (int) gauge.value();
 	}
 

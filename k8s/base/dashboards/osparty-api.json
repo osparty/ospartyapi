@@ -434,7 +434,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Socket connections by pod",
+      "title": "Socket connections by pod and endpoint",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -462,8 +462,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (pod) (osparty_ws_connections{namespace=\"osparty\",application=\"osrs-party-api\"})",
-          "legendFormat": "{{pod}}"
+          "expr": "sum by (pod, endpoint) (osparty_ws_connections{namespace=\"osparty\",application=\"osrs-party-api\"})",
+          "legendFormat": "{{pod}} {{endpoint}}"
         }
       ]
     },

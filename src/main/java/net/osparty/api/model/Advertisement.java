@@ -1,5 +1,7 @@
 package net.osparty.api.model;
 
+import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonSetter;
 import java.util.List;
 import lombok.Data;
 
@@ -12,7 +14,8 @@ import lombok.Data;
  *
  * <p>Field names here are the wire — no {@code @JsonProperty} anywhere, so Jackson serialises by field name
  * and the plugin reads them straight back. {@code privateAd} was {@code privateParty}; the plugin's own
- * model has to match it or the flag silently reads false on every ad.
+ * model has to match it or the flag silently reads false on every ad — hence the alias below, for as long
+ * as a plugin that predates the rename is still in the hub.
  */
 @Data
 public class Advertisement {
@@ -75,6 +78,24 @@ public class Advertisement {
 	private boolean teacher;
 	private String discordChannelId;
 	private String discordInviteUrl;
+
+	/**
+	 * {@code privateAd} under the name plugin 1.0.50 knows it by, in both directions.
+	 *
+	 * <p>A getter and a setter rather than a {@code @JsonAlias}, because this class is also how an ad is
+	 * stored: it goes to Redis through the same mapper, so whatever the wire emits has to be readable back.
+	 *
+	 * <p>Goes when {@link net.osparty.api.web.CapabilitiesController} does.
+	 */
+	@JsonGetter("privateParty")
+	public boolean isPrivateParty() {
+		return privateAd;
+	}
+
+	@JsonSetter("privateParty")
+	public void setPrivateParty(boolean privateParty) {
+		this.privateAd = privateParty;
+	}
 
 	public static Advertisement copyOf(Advertisement src) {
 		Advertisement c = new Advertisement();

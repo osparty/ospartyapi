@@ -32,9 +32,10 @@ patches:
   # gives the longest matching prefix priority, so the /n/ paths win over the bare ones, and the bare
   # socket paths win over /.
   #
-  # One WebSocket endpoint, served by Netty on `live`; REST stays on Tomcat's `http`. The single-protocol
-  # paths the board and the live party used to have are gone — a client below plugin 1.0.49 cannot reach
-  # this service at all after this, which is the deliberate cutover, not an oversight.
+  # Every WebSocket is served by Netty on `live`; REST stays on Tomcat's `http`. The live party's own old
+  # path is gone — nothing ever dialled it — but the board's is still routed, because plugin 1.0.50 falls
+  # back to it and Tomcat no longer speaks WebSocket at all, so letting it drop through to `/` would fail
+  # the upgrade rather than serve it. It needs no node hint: discovery is the same on every pod.
   - patch: |-
       apiVersion: networking.k8s.io/v1
       kind: Ingress
@@ -67,6 +68,13 @@ patches:
                       port:
                         name: live
                 - path: /api/ws
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api
+                      port:
+                        name: live
+                - path: /api/v1/ws/parties
                   pathType: Prefix
                   backend:
                     service:

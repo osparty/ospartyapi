@@ -31,6 +31,12 @@ dependencies {
     implementation 'org.liquibase:liquibase-core'
     runtimeOnly 'org.postgresql:postgresql'
 
+    // The Party V2 live socket can be served by Netty instead of the servlet container: the send path is
+    // where this service spends its CPU, and Tomcat's is the expensive one. Netty itself is already on the
+    // classpath under the Redis client — only the HTTP/WebSocket codec has to be asked for, and the Spring
+    // Boot BOM pins it to the same version.
+    implementation 'io.netty:netty-codec-http'
+
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'io.micrometer:micrometer-registry-prometheus'
 

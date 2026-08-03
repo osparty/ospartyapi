@@ -3,7 +3,7 @@ package net.osparty.api.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import net.osparty.api.model.Member;
-import net.osparty.api.model.Party;
+import net.osparty.api.model.Advertisement;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -21,21 +21,21 @@ class DiscordBadgeServiceTest {
 
 	@Test
 	void enrichSkipsRedisWhenNoMemberHasAccountHash() {
-		Party p = new Party();
+		Advertisement p = new Advertisement();
 		p.setId("p1");
 		p.setMembers(List.of(new Member("Legacy", 0L)));
-		List<Party> in = List.of(p);
+		List<Advertisement> in = List.of(p);
 
-		assertSame(in, service().enrichParties(in));
+		assertSame(in, service().enrichAds(in));
 	}
 
 	@Test
 	void enrichDegradesToNoBadgesWhenRedisUnavailable() {
-		Party p = new Party();
+		Advertisement p = new Advertisement();
 		p.setId("p1");
 		p.setMembers(List.of(new Member("Host", 42L)));
-		List<Party> in = List.of(p);
+		List<Advertisement> in = List.of(p);
 
-		assertSame(in, service().enrichParties(in));
+		assertSame(in, service().enrichAds(in));
 	}
 }

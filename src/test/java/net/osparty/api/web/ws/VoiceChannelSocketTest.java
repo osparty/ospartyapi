@@ -10,27 +10,27 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
-import net.osparty.api.model.Party;
+import net.osparty.api.model.Advertisement;
 import net.osparty.api.service.VoiceChannelService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@TestPropertySource(properties = "app.ws.reconcile-interval-ms=150")
+@TestPropertySource(properties = {
+	"app.ws.reconcile-interval-ms=150",
+	// Every WebSocket is served by Netty on its own port, not by the servlet container's. Zero takes an
+	// ephemeral one so the whole suite can run without colliding on 8081.
+	"app.socket.port=0"})
 class VoiceChannelSocketTest {
-	@LocalServerPort
-	private int port;
+	@Autowired
+	private net.osparty.api.party.netty.NettySocketServer socketServer;
 
 	@Autowired
 	private ObjectMapper mapper;
@@ -53,16 +53,16 @@ class VoiceChannelSocketTest {
 		int creates;
 
 		@Override
-		public void rename(String channelId, Party party) {
+		public void rename(String channelId, Advertisement ad) {
 			renamed.set(channelId);
 		}
 
 		@Override
-		public synchronized Optional<VoiceChannelInfo> createForParty(Party party,
+		public synchronized Optional<VoiceChannelInfo> createForParty(Advertisement ad,
 			java.util.Collection<String> allowedDiscordIds) {
 			creates++;
-			return Optional.of(new VoiceChannelInfo("chan-" + party.getId(),
-				"https://discord.gg/stub-" + party.getId()));
+			return Optional.of(new VoiceChannelInfo("chan-" + ad.getId(),
+				"https://discord.gg/stub-" + ad.getId()));
 		}
 
 		@Override
@@ -90,18 +90,18 @@ class VoiceChannelSocketTest {
 		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
 		WebSocketSession session = connect(messages);
 		try {
-			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-voice\",\"request\":"
+			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-voice\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"WsVoice\",\"capacity\":3,\"passphrase\":\"pp-voice\"}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
-			String id = hosted.path("party").path("id").asText();
+			String id = hosted.path("ad").path("id").asText();
 
-			session.sendMessage(new TextMessage("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
 			JsonNode reply = awaitWhere(messages, m -> "voiceChannel".equals(type(m)), "voiceChannel reply");
 			assertThat(reply.path("id").asText()).isEqualTo(id);
 			assertThat(reply.path("url").asText()).isEqualTo("https://discord.gg/stub-" + id);
 			assertThat(voice.creates).isEqualTo(1);
 
-			session.sendMessage(new TextMessage("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
 			JsonNode again = awaitWhere(messages, m -> "voiceChannel".equals(type(m)), "voiceChannel reply (2)");
 			assertThat(again.path("url").asText()).isEqualTo("https://discord.gg/stub-" + id);
 			assertThat(voice.creates).isEqualTo(1);
@@ -117,15 +117,15 @@ class VoiceChannelSocketTest {
 		BlockingQueue<JsonNode> messages = new LinkedBlockingQueue<>();
 		WebSocketSession session = connect(messages);
 		try {
-			session.sendMessage(new TextMessage("{\"type\":\"host\",\"key\":\"k-xfer\",\"request\":"
+			session.sendMessage(BoardChannel.frame("{\"type\":\"host\",\"key\":\"k-xfer\",\"request\":"
 				+ "{\"activity\":\"cox\",\"host\":\"OldHost\",\"capacity\":3,\"passphrase\":\"pp-xfer\"}}"));
 			JsonNode hosted = awaitWhere(messages, m -> "hosted".equals(type(m)), "hosted ack");
-			String id = hosted.path("party").path("id").asText();
+			String id = hosted.path("ad").path("id").asText();
 
-			session.sendMessage(new TextMessage("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
+			session.sendMessage(BoardChannel.frame("{\"type\":\"createVoiceChannel\",\"id\":\"" + id + "\"}"));
 			awaitWhere(messages, m -> "voiceChannel".equals(type(m)), "voiceChannel reply");
 
-			session.sendMessage(new TextMessage("{\"type\":\"transferHost\",\"id\":\"" + id + "\","
+			session.sendMessage(BoardChannel.frame("{\"type\":\"transferHost\",\"id\":\"" + id + "\","
 				+ "\"host\":\"NewHost\",\"key\":\"k-xfer\",\"newKey\":\"k-new\"}"));
 			awaitWhere(messages, m -> "transferred".equals(type(m)), "transferred ack");
 
@@ -137,14 +137,7 @@ class VoiceChannelSocketTest {
 	}
 
 	private WebSocketSession connect(BlockingQueue<JsonNode> messages) throws Exception {
-		return new StandardWebSocketClient().execute(
-			new TextWebSocketHandler() {
-				@Override
-				protected void handleTextMessage(WebSocketSession s, TextMessage m) throws Exception {
-					messages.add(mapper.readTree(m.getPayload()));
-				}
-			},
-			"ws://localhost:" + port + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
+		return BoardChannel.connect(socketServer.boundPort(), mapper, messages);
 	}
 
 	private static String type(JsonNode msg) {

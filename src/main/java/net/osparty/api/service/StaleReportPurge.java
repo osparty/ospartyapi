@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * Drops reports nobody ever acted on, so {@code ad_report} stays bounded by moderation activity
- * rather than by abuse volume. Mirrors {@link StalePartyPurge}.
+ * rather than by abuse volume. Mirrors {@link StaleAdvertisementPurge}.
  *
  * <p>Only {@code PENDING} rows are eligible. A report that produced a ban is what the Discord
  * Unban button resolves its subject through, so it has to outlive the ban itself; deleting one

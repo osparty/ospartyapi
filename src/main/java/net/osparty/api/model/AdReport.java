@@ -26,7 +26,7 @@ public class AdReport {
 	private Instant createdAt;
 
 	private String partyId;
-	/** Normalized via {@code PartyFactory.normalizeHost}. */
+	/** Normalized via {@code AdvertisementFactory.normalizeHost}. */
 	private String hostName;
 	private String hostNameRaw;
 	private Long hostAccountHash;

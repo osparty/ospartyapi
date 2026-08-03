@@ -49,12 +49,39 @@ services:
       DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID:-}"
       DISCORD_CLIENT_SECRET: "${DISCORD_CLIENT_SECRET:-}"
       DISCORD_REDIRECT_URI: "${DISCORD_REDIRECT_URI:-}"
+      # Frame-level tracing, for working out what a client of another version is actually sending. INFO
+      # already reports every seat, resync and lookup; DEBUG adds each inbound frame and each relay round,
+      # naming the members in it. Left at INFO because the live party's frames are the hottest thing here.
+      #
+      # With the one-origin proxy, which plugin 1.0.50 needs to reach REST and the socket at one base URL:
+      #   PARTY_LOG=DEBUG BOARD_LOG=DEBUG docker compose --profile one-origin up -d --build
+      # Then point the plugin at http://localhost:8000, not 8080. The logs are still the api service's.
+      LOGGING_LEVEL_NET_OSPARTY_API_PARTY: "${PARTY_LOG:-INFO}"
+      LOGGING_LEVEL_NET_OSPARTY_API_WEB_WS: "${BOARD_LOG:-INFO}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
+      # REST.
       - "8080:8080"
+      # Every WebSocket. Locally there is no ingress to unify the two, so a client pointed at 8080 will
+      # reach the capabilities probe and then fail to open a socket — point it here for the socket.
+      - "8081:8081"
     expose:
       - "9090"
+    restart: unless-stopped
+  # A stand-in for the production ingress, putting REST and every WebSocket on one origin at :8000.
+  # Plugin 1.0.50 needs it — its capabilities probe is REST and its socket is not, and it has one base
+  # URL for both. Opt in with `--profile one-origin`; nothing else here wants it.
+  one-origin:
+    image: nginx:1.27-alpine
+    profiles: ["one-origin"]
+    depends_on:
+      - api
+    volumes:
+      - ./dev/one-origin.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./dev/upgrade.inc:/etc/nginx/conf.d/upgrade.inc:ro
+    ports:
+      - "8000:8000"
     restart: unless-stopped
   prometheus:
     image: prom/prometheus:v2.54.1

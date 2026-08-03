@@ -1,0 +1,164 @@
+# Dev environment: a second, fully isolated copy of the API next to prod, used to exercise the live party
+# work that needs more than one pod — node-hint routing, redirect, ownership failover, drain across a
+# rolling deploy (PARTY_V2_MIGRATION.md P2/P4).
+#
+# Isolation from prod is by namespace: its own Redis (so both the ad board's `party:` keys and V2's `pv2:`
+# keys are separate), its own ingress host (testing.osparty.net), its own image tag. Prod is untouched by
+# anything deployed here.
+#
+# The API runs as a StatefulSet (see statefulset.yaml) because node-hint routing needs individually
+# addressable pods. Prod runs the same shape; this environment is where a change to it is proved first.
+#
+# Manual steps before the first deploy — the namespace needs two secrets the base expects:
+#
+#   kubectl create namespace osparty-dev
+#   # POSTGRES_DB has to match the database in POSTGRES_URL (statefulset.yaml), and the same three keys
+#   # feed both the API and the Postgres container itself -- it reads its own initdb credentials from
+#   # this secret, so it will not start without them either.
+#   kubectl -n osparty-dev create secret generic osparty-api-env \
+#     --from-literal=SPRING_DATA_REDIS_PASSWORD="$(openssl rand -hex 24)" \
+#     --from-literal=POSTGRES_DB=osparty \
+#     --from-literal=POSTGRES_USER=osparty \
+#     --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 24)"
+#   # image pull credentials, copied from prod:
+#   kubectl -n osparty get secret ghcr-pull -o yaml \
+#     | sed 's/namespace: osparty/namespace: osparty-dev/' \
+#     | kubectl apply -f -
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: osparty-dev
+resources:
+  - namespace.yaml
+  - ../../base
+  - statefulset.yaml
+  - pod-services.yaml
+images:
+  - name: ghcr.io/osparty/osparty-api
+    newTag: latest
+patches:
+  # The round-robin Service needs the live port too, for the un-hinted form of the merged socket: a client
+  # not yet in a party has no node to prefer and should land wherever the gateway sends it.
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: osparty-api
+      spec:
+        ports:
+          - name: http
+            port: 8080
+            targetPort: http
+          - name: live
+            port: 8081
+            targetPort: live
+  # Node-hint routing: /n/{podName}/... goes to that exact pod, everything else round-robins as usual.
+  # Ingress gives the longest matching prefix priority, so the /n/ paths win over /.
+  #
+  # Every WebSocket is served by Netty on its own port, so the socket paths are listed ahead of the rest
+  # and target `live` instead of `http`. They are longer than both the /n/{pod} prefixes and /, so they
+  # win outright.
+  - patch: |-
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: osparty-api
+      spec:
+        tls:
+          - hosts:
+              - testing.osparty.net
+            secretName: osparty-api-testing-tls
+        rules:
+          - host: testing.osparty.net
+            http:
+              paths:
+                # The merged endpoint: one connection carrying both the live party and the ad board, so a
+                # client in a party costs the gateway one socket rather than two. Node-hinted like the live
+                # socket, because the live half of it is what has to reach a particular pod.
+                - path: /n/osparty-api-0/api/ws
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api-n0
+                      port:
+                        name: live
+                - path: /n/osparty-api-1/api/ws
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api-n1
+                      port:
+                        name: live
+                - path: /api/ws
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api
+                      port:
+                        name: live
+                # The board's own endpoint, held open for plugin 1.0.50's fallback. No node hint: it carries
+                # discovery alone, and discovery is the same on every pod. Goes when 1.0.50 does.
+                - path: /api/v1/ws/parties
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api
+                      port:
+                        name: live
+                - path: /n/osparty-api-0
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api-n0
+                      port:
+                        name: http
+                - path: /n/osparty-api-1
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api-n1
+                      port:
+                        name: http
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: osparty-api
+                      port:
+                        name: http
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: redis
+      spec:
+        template:
+          spec:
+            containers:
+              - name: redis
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    memory: 256Mi
+  # Drop the base dashboard here: the Grafana sidecar watches all namespaces, so a second copy would fight
+  # with prod's over the same dashboard uid. Dev gets its own instead — see configMapGenerator below.
+  - patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: grafana-dashboard-osparty-api
+      $patch: delete
+# Dev's own dashboard (uid osparty-api-dev), scoped to this namespace and led by the live-party panels the
+# base dashboard has no reason to carry. Prod's queries are namespace-scoped to `osparty`, so the two
+# environments no longer land in each other's graphs — which they did while dev ran the same app name and
+# the same ServiceMonitors one namespace over.
+configMapGenerator:
+  - name: grafana-dashboard-osparty-api-dev
+    files:
+      - dashboards/osparty-api-dev.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+generatorOptions:
+  disableNameSuffixHash: true

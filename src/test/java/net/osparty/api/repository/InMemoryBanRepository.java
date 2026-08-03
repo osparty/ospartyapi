@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
 
 /**
- * Test-profile stand-in for {@link JdbcBanRepository}, mirroring {@link FakePartyRepository}. Lets
+ * Test-profile stand-in for {@link JdbcBanRepository}, mirroring {@link FakeAdvertisementRepository}. Lets
  * the WebSocket tests drive real ban state without a database, and enforces the same
  * one-active-ban-per-subject rule the partial unique indexes enforce in Postgres.
  */

@@ -10,7 +10,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
-import net.osparty.api.model.Party;
+import net.osparty.api.model.Advertisement;
 import net.osparty.api.repository.InMemoryBanRepository;
 import net.osparty.api.service.BanService;
 import net.osparty.api.service.VoiceChannelService;
@@ -19,15 +19,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 /**
  * End-to-end behaviour of the shadowban over the live socket, with two clients: {@code A} hosts the
@@ -43,12 +39,15 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 	"app.ws.reconcile-interval-ms=150",
 	"app.bans.refresh-ms=100",
 	"app.bans.filter-get-by-host=true",
-	"app.bans.filter-get-by-code=true"})
+	"app.bans.filter-get-by-code=true",
+	// Every WebSocket is served by Netty on its own port, not by the servlet container's. Zero takes an
+	// ephemeral one so the whole suite can run without colliding on 8081.
+	"app.socket.port=0"})
 class AdShadowbanSocketTest {
 	private static final long RECONCILE_MS = 150;
 
-	@LocalServerPort
-	private int port;
+	@Autowired
+	private net.osparty.api.party.netty.NettySocketServer socketServer;
 
 	@Autowired
 	private ObjectMapper mapper;
@@ -121,7 +120,7 @@ class AdShadowbanSocketTest {
 
 			send(hostSession, "{\"type\":\"getByHost\",\"host\":\"SelfLookup\"}");
 			JsonNode found = awaitWhere(a, m -> "byHost".equals(type(m)), "byHost for self");
-			assertThat(found.path("party").path("host").asText()).isEqualTo("SelfLookup");
+			assertThat(found.path("ad").path("host").asText()).isEqualTo("SelfLookup");
 		}
 		finally {
 			close(hostSession);
@@ -142,17 +141,17 @@ class AdShadowbanSocketTest {
 		try {
 			subscribe(hostSession, a);
 			JsonNode hosted = hostFrame(hostSession, a, "HiddenFromLookup", "k-lookup");
-			String code = hosted.path("party").path("inviteCode").asText();
+			String code = hosted.path("ad").path("inviteCode").asText();
 			assertThat(code).isNotBlank();
 			ban("HiddenFromLookup");
 
 			send(viewerSession, "{\"type\":\"getByHost\",\"host\":\"HiddenFromLookup\"}");
 			JsonNode byHost = awaitWhere(b, m -> "byHost".equals(type(m)), "byHost for a stranger");
-			assertThat(byHost.has("party")).isFalse();
+			assertThat(byHost.has("ad")).isFalse();
 
 			send(viewerSession, "{\"type\":\"getByCode\",\"code\":\"" + code + "\"}");
 			JsonNode byCode = awaitWhere(b, m -> "byCode".equals(type(m)), "byCode for a stranger");
-			assertThat(byCode.has("party")).isFalse();
+			assertThat(byCode.has("ad")).isFalse();
 		}
 		finally {
 			close(hostSession, viewerSession);
@@ -173,12 +172,12 @@ class AdShadowbanSocketTest {
 			WebSocketSession viewerSession = connect(b);
 			try {
 				JsonNode strangerSnapshot = subscribe(viewerSession, b);
-				assertThat(contains(strangerSnapshot.path("parties"), "id", id)).isFalse();
+				assertThat(contains(strangerSnapshot.path("ads"), "id", id)).isFalse();
 
 				// The host re-subscribing still sees their own.
 				send(hostSession, "{\"type\":\"subscribe\"}");
 				JsonNode ownSnapshot = awaitWhere(a, m -> "snapshot".equals(type(m)), "own snapshot");
-				assertThat(contains(ownSnapshot.path("parties"), "id", id)).isTrue();
+				assertThat(contains(ownSnapshot.path("ads"), "id", id)).isTrue();
 			}
 			finally {
 				close(viewerSession);
@@ -282,7 +281,7 @@ class AdShadowbanSocketTest {
 			awaitWhere(a, m -> "voiceChannel".equals(type(m)), "voice channel created");
 
 			send(hostSession, "{\"type\":\"update\",\"id\":\"" + id
-				+ "\",\"key\":\"k-priv\",\"patch\":{\"privateParty\":true}}");
+				+ "\",\"key\":\"k-priv\",\"patch\":{\"privateAd\":true}}");
 			letReconcilerRun(RECONCILE_MS * 6);
 			assertThat(voice.deleted.get()).as("voice channel must survive going private").isNull();
 		}
@@ -294,7 +293,7 @@ class AdShadowbanSocketTest {
 	/** A banned player who merely joins someone else's party must not drag that host down with them. */
 	@Test
 	void banOnANonHostMemberDoesNotHideTheParty() {
-		Party party = new Party();
+		Advertisement party = new Advertisement();
 		party.setId("p-innocent");
 		party.setHost("InnocentHost");
 		party.setHostAccountHash(1L);
@@ -309,7 +308,7 @@ class AdShadowbanSocketTest {
 
 	@Test
 	void banMatchesTheAccountHashEvenAfterARename() {
-		Party renamed = new Party();
+		Advertisement renamed = new Advertisement();
 		renamed.setId("p-renamed");
 		renamed.setHost("BrandNewName");
 		renamed.setHostAccountHash(4242L);
@@ -326,14 +325,7 @@ class AdShadowbanSocketTest {
 	}
 
 	private WebSocketSession connect(BlockingQueue<JsonNode> messages) throws Exception {
-		return new StandardWebSocketClient().execute(
-			new TextWebSocketHandler() {
-				@Override
-				protected void handleTextMessage(WebSocketSession s, TextMessage m) throws Exception {
-					messages.add(mapper.readTree(m.getPayload()));
-				}
-			},
-			"ws://localhost:" + port + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
+		return BoardChannel.connect(socketServer.boundPort(), mapper, messages);
 	}
 
 	/** Subscribes and returns the snapshot frame that subscribing produces. */
@@ -352,11 +344,11 @@ class AdShadowbanSocketTest {
 
 	private String host(WebSocketSession session, BlockingQueue<JsonNode> messages,
 		String host, String key) throws Exception {
-		return hostFrame(session, messages, host, key).path("party").path("id").asText();
+		return hostFrame(session, messages, host, key).path("ad").path("id").asText();
 	}
 
 	private static void send(WebSocketSession session, String json) throws Exception {
-		session.sendMessage(new TextMessage(json));
+		BoardChannel.send(session, json);
 	}
 
 	private static void close(WebSocketSession... sessions) throws Exception {
@@ -465,14 +457,14 @@ class AdShadowbanSocketTest {
 		final AtomicReference<String> deleted = new AtomicReference<>();
 
 		@Override
-		public Optional<VoiceChannelInfo> createForParty(Party party,
+		public Optional<VoiceChannelInfo> createForParty(Advertisement ad,
 			java.util.Collection<String> allowedDiscordIds) {
-			return Optional.of(new VoiceChannelInfo("chan-" + party.getId(),
-				"https://discord.gg/" + party.getId()));
+			return Optional.of(new VoiceChannelInfo("chan-" + ad.getId(),
+				"https://discord.gg/" + ad.getId()));
 		}
 
 		@Override
-		public void rename(String channelId, Party party) {
+		public void rename(String channelId, Advertisement ad) {
 		}
 
 		@Override

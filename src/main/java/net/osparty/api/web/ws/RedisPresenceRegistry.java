@@ -28,7 +28,7 @@ public class RedisPresenceRegistry implements PresenceRegistry {
 	}
 
 	@Override
-	public int record(int localCount) {
+	public int recordAndTotal(int localCount) {
 		try {
 			redis.opsForValue().set(NODE_PREFIX + nodeId, Integer.toString(localCount), TTL);
 			redis.opsForSet().add(NODES_KEY, nodeId);

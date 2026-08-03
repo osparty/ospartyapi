@@ -6,7 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import net.osparty.api.model.AdBan;
-import net.osparty.api.model.Party;
+import net.osparty.api.model.Advertisement;
 import net.osparty.api.repository.BanRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +36,12 @@ public class BanService {
 
 	private final BanRepository repository;
 	private volatile Snapshot snapshot = Snapshot.EMPTY;
+	/** Told when the active set actually changes, so precomputed views of the board can be rebuilt. */
+	private volatile Runnable onChange = () -> { };
+
+	public void setOnChange(Runnable onChange) {
+		this.onChange = onChange;
+	}
 
 	public BanService(BanRepository repository, MeterRegistry meterRegistry) {
 		this.repository = repository;
@@ -55,11 +61,11 @@ public class BanService {
 	 * joining an innocent host's party silently shadowbans that innocent host -- a griefing vector
 	 * dressed up as moderation.
 	 */
-	public boolean isHidden(Party party) {
-		if (party == null) {
+	public boolean isHidden(Advertisement ad) {
+		if (ad == null) {
 			return false;
 		}
-		return isBanned(party.getHost(), party.getHostAccountHash());
+		return isBanned(ad.getHost(), ad.getHostAccountHash());
 	}
 
 	/** Whether this subject is banned by name or by account hash. Either match is enough. */
@@ -71,12 +77,12 @@ public class BanService {
 		if (accountHash != 0 && current.hashes().contains(accountHash)) {
 			return true;
 		}
-		return host != null && current.names().contains(PartyFactory.normalizeHost(host));
+		return host != null && current.names().contains(AdvertisementFactory.normalizeHost(host));
 	}
 
 	public AdBan ban(String host, long accountHash, String reason, String moderatorDiscordId,
 		String moderatorDiscordName, Long sourceReportId) {
-		String normalized = host == null ? "" : PartyFactory.normalizeHost(host);
+		String normalized = host == null ? "" : AdvertisementFactory.normalizeHost(host);
 		AdBan ban = repository.ban(normalized, host, accountHash == 0 ? null : accountHash, reason,
 			moderatorDiscordId, moderatorDiscordName, sourceReportId);
 		log.info("Ad ban applied: id={} host='{}' accountHash={} by={} report={}",
@@ -87,7 +93,7 @@ public class BanService {
 
 	public List<AdBan> unban(String host, long accountHash, String reason, String moderatorDiscordId,
 		String moderatorDiscordName) {
-		String normalized = host == null ? "" : PartyFactory.normalizeHost(host);
+		String normalized = host == null ? "" : AdvertisementFactory.normalizeHost(host);
 		List<AdBan> revoked = repository.revoke(normalized, accountHash == 0 ? null : accountHash,
 			moderatorDiscordId, moderatorDiscordName, reason);
 		log.info("Ad ban revoked: host='{}' accountHash={} rows={} by={}",
@@ -114,7 +120,18 @@ public class BanService {
 					hashes.add(ban.accountHash());
 				}
 			}
+			Snapshot previous = snapshot;
 			snapshot = new Snapshot(Set.copyOf(names), Set.copyOf(hashes), System.currentTimeMillis());
+			// A ban changes which ads are on the board without changing any ad, so nothing else would
+			// notice. Anything holding a precomputed view of the board has to be told.
+			if (!previous.names().equals(snapshot.names()) || !previous.hashes().equals(snapshot.hashes())) {
+				try {
+					onChange.run();
+				}
+				catch (Exception e) {
+					log.warn("Ban change listener failed", e);
+				}
+			}
 		}
 		catch (Exception e) {
 			// Keep serving the previous snapshot. See the class javadoc: erroring toward "hide

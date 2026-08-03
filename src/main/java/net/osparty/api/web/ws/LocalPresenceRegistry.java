@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 @Profile("test")
 public class LocalPresenceRegistry implements PresenceRegistry {
 	@Override
-	public int record(int localCount) {
+	public int recordAndTotal(int localCount) {
 		return localCount;
 	}
 }

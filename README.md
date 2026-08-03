@@ -16,7 +16,8 @@ feed used by the bot — there is no REST party CRUD.
 
 | Surface | Path | Used by |
 |---------|------|---------|
-| **WebSocket** (all party traffic) | `/api/v1/ws/parties` (`wss://` behind TLS) | the plugin |
+| **WebSocket** (all party traffic) | `/api/ws`, or `/n/{nodeId}/api/ws` to reach the pod owning a live party (`wss://` behind TLS). Served by Netty on `app.socket.port`, not by Tomcat on `server.port` | the plugin |
+| WebSocket, ad board alone | `/api/v1/ws/parties` — untagged, no live party. Held open for plugin 1.0.50 only (below) | plugin 1.0.50 falling back |
 | Discord OAuth return | `GET /api/v1/discord/link/callback` | the user's browser |
 | Internal badge feed | `POST` / `PUT /internal/badges` | the `osparty-discord` bot |
 | Ad moderation | `POST /internal/bans`, `/internal/bans/unban`, `/internal/reports/{id}/dismiss` | the `osparty-discord` bot |
@@ -28,18 +29,43 @@ Note it **fails closed**: with no token configured, every `/internal/*` call is
 rejected rather than waved through.
 The Discord callback renders a small HTML result page.
 
+### Held open for plugin 1.0.50
+
+1.0.50 is what the RuneLite hub serves while 1.0.51 waits on review, and the
+server updates on its own schedule while the plugin does not — so this release
+answers to the names that one knows as well as the current ones:
+
+| Kept | Current | Why it cannot just be dropped |
+|------|---------|-------------------------------|
+| `GET /api/v1/capabilities` → `{"partyV2":true,"mergedSocket":true}` | — | 1.0.50 probes it at startup and reads *any* failure as "older than the live party". A 404 here sends it down the fallback below for everything |
+| `WS /api/v1/ws/parties` — the ad board alone, **untagged** text frames both ways | `/api/ws`, both protocols, `Mux`-tagged | 1.0.50 falls back here on its own initiative, after the merged socket has failed it enough times to look deliberate. Nothing answering means a bad connection becomes a client that cannot search until it restarts |
+| `parties`, `party` in board frames | `ads`, `ad` | 1.0.50 deserialises with Gson, which drops a name it does not know silently: an empty search list and lookups that never resolve |
+| `privateParty` on ads, deltas, host requests and patches | `privateAd` | Same silence, but worse: an ad hosted as private from 1.0.50 would go public |
+
+Both names ride every frame that carries either, and both are accepted inbound.
+`osparty_ws_connections{endpoint="board"}` counts who is still on the old path —
+when it reaches zero and stays there, delete `CapabilitiesController`,
+`Route.BOARD` and `NettySocketSession.UNTAGGED`, the field aliases, and the tests
+named for 1.0.50. The live party's own old path (`/api/v2/ws/party`) is **not**
+kept: no released plugin ever dialled it.
+
 ## WebSocket protocol
 
-A client opens one connection to `/api/v1/ws/parties`. Every message is a JSON
-object with a `type`. On connect the server immediately sends a `presence` frame;
-the client then chooses to **read** (subscribe to the live list), **write** (host
-an ad), or both over the same socket.
+A client opens one connection to `/api/ws`, which carries two unrelated protocols
+demultiplexed by a channel tag: the **advertisement board** described here
+(`Mux.BOARD`, `1`) and the **live party** relay (`Mux.LIVE`, `2`). Every frame in
+both directions is a binary message — one tag byte, then UTF-8 JSON — so the JSON
+below is the payload after the tag.
+
+On the board channel every message is a JSON object with a `type`. On connect the
+server immediately sends a `presence` frame; the client then chooses to **read**
+(subscribe to the live list), **write** (host an ad), or both over the same socket.
 
 ### Read — the live party list
 
 ```
 client → {"type":"subscribe","activity":"cox"}   // activity optional; omit for all public ads
-server → {"type":"snapshot","version":N,"parties":[ … ]}        // full list, once, on subscribe
+server → {"type":"snapshot","version":N,"ads":[ … ]}            // full list, once, on subscribe
 server → {"type":"batch","version":N,"created":[…],"updated":[…],"removed":["1000"]}  // then diffs
 ```
 
@@ -47,28 +73,29 @@ server → {"type":"batch","version":N,"created":[…],"updated":[…],"removed"
   `nex`, …); omit `activity` for every public ad. `unsubscribe` stops the feed
   (the socket stays up for hosting).
 - After the initial `snapshot`, changes arrive as **`batch`** frames: `created`
-  carries full `Party` objects, `updated` carries minimal `PartyDelta`s (only the
-  changed fields, plus `id`/`activity`), `removed` carries ids. A reconnect
+  carries full `Advertisement` objects, `updated` carries minimal
+  `AdvertisementDelta`s (only the changed fields, plus `id`/`activity`),
+  `removed` carries ids. A reconnect
   re-sends a full snapshot, so a dropped frame self-heals; clients keep a map by
   id and merge each frame. `version` is a loose ordering hint.
 
 Private ads are never in the list; look them up directly:
 
 ```
-client → {"type":"getByCode","code":"Y2Y3D9"}          server → {"type":"byCode","id":"Y2Y3D9","party":{…}|null}
-client → {"type":"getByHost","host":"Zezima"}           server → {"type":"byHost","id":"Zezima","party":{…}|null}
+client → {"type":"getByCode","code":"Y2Y3D9"}          server → {"type":"byCode","id":"Y2Y3D9","ad":{…}|null}
+client → {"type":"getByHost","host":"Zezima"}           server → {"type":"byHost","id":"Zezima","ad":{…}|null}
 ```
 
 ### Write — hosting an ad
 
 ```
-client → {"type":"host","key":"<uuid>","request":{ …PartyRequest… }}
-server → {"type":"hosted","party":{ … }}              // directed ack: server-assigned id + inviteCode
-client → {"type":"update","id":"7","key":"<uuid>","patch":{ …PartyUpdate… }}   // partial change
+client → {"type":"host","key":"<uuid>","request":{ …AdvertisementRequest… }}
+server → {"type":"hosted","ad":{ … }}                 // directed ack: server-assigned id + inviteCode
+client → {"type":"update","id":"7","key":"<uuid>","patch":{ …AdvertisementUpdate… }}   // partial change
 client → {"type":"resume","id":"7","key":"<uuid>"}    // reclaim the ad after a reconnect
 server → {"type":"gone","id":"7"}                     //   …if the grace window already lapsed
 client → {"type":"unhost","id":"7","key":"<uuid>"}    // disband (also tears down any voice channel)
-client → {"type":"transferHost","id":"7","key":"<uuid>","host":"NewHost","newKey":"<uuid2>"}
+client → {"type":"transferHost","id":"7","key":"<uuid>","host":"NewHost","hostAccountType":"IRONMAN","newKey":"<uuid2>"}
 server → {"type":"transferred","id":"7"}              // ad handed over, re-keyed to newKey
 server → {"type":"error","id":"7","detail":"…"}       // directed: a write was rejected
 ```
@@ -84,7 +111,9 @@ created/reclaimed the ad (the bound *owner session*) **or** it carries the corre
 `key`. Otherwise: `error` `"forbidden"`; on a missing ad, `error` `"gone"`.
 `transferHost` re-keys the credential to `newKey` so the old host's key stops
 working, and unbinds the old session — the new host adopts the ad by `resume`ing
-with `newKey`.
+with `newKey`. It also re-stamps what the board shows about *who* runs the ad:
+`hostAccountHash` (looked up from the members) and `hostAccountType` (sent with
+the frame; an absent one is stored as `NORMAL`, never left as the old host's).
 
 **The socket is the keep-alive.** While a hosting session is open the server
 refreshes that ad's TTL every `app.ws.touch-interval-ms`; there is no periodic
@@ -158,7 +187,7 @@ by the banned host's own client.
 
 ## Why it scales
 
-A single `PartyReconciler` diffs the ad set every `app.ws.reconcile-interval-ms`
+A single `BoardReconciler` diffs the ad set every `app.ws.reconcile-interval-ms`
 and pushes one `batch` per distinct activity scope to all subscribers, so server
 work is **constant per interval regardless of client count** (vs. every client
 re-fetching the whole list). Since the reconciler reads the shared store,
@@ -168,7 +197,7 @@ within one interval; TTL-expired ads surface as `removed`.
 
 ## Data shapes
 
-### `PartyRequest` (the `host` frame's `request`)
+### `AdvertisementRequest` (the `host` frame's `request`)
 
 ```json
 {
@@ -181,7 +210,7 @@ within one interval; TTL-expired ads surface as `removed`.
   "minKillCount": 500,
   "minHardModeKillCount": 50,
   "passphrase": "wine-of-zamorak-…",
-  "privateParty": false,
+  "privateAd": false,
   "lootRule": "SPLIT",
   "ironmanOnly": false,
   "hostAccountType": "NORMAL",
@@ -198,16 +227,16 @@ within one interval; TTL-expired ads surface as `removed`.
 `UNSPECIFIED` (default). The API stores these; the plugin filters and enforces
 them.
 
-### `PartyUpdate` (the `update` frame's `patch`)
+### `AdvertisementUpdate` (the `update` frame's `patch`)
 
 A partial diff — only the fields present are changed (nullable boxed types
 distinguish "absent" from `0`/`false`): `size`, `members`, `world`, `layout`,
 `neededRoles`, `description`, `capacity`, `lootRule`, `ironmanOnly`,
-`privateParty`, `minKillCount`, `minHardModeKillCount`, `invocation`, `hardMode`,
-`requiredRoles`, `hostRole`, `learner`, `teacher`. An `update` with an empty
-patch is a pure TTL touch.
+`privateAd`, `minKillCount`, `minHardModeKillCount`, `invocation`, `hardMode`,
+`requiredRoles`, `hostRole`, `learner`, `teacher`, `node`. An `update` with an
+empty patch is a pure TTL touch.
 
-### `Party` (in `snapshot` / `hosted` / `batch.created`)
+### `Advertisement` (in `snapshot` / `hosted` / `batch.created`)
 
 ```json
 {
@@ -226,7 +255,7 @@ patch is a pure TTL touch.
   "minKillCount": 500,
   "minHardModeKillCount": 50,
   "members": [{ "name": "Zezima", "accountHash": 123456789, "badges": ["…"] }],
-  "privateParty": false,
+  "privateAd": false,
   "inviteCode": "Y2Y3D9",
   "lootRule": "SPLIT",
   "ironmanOnly": false,
@@ -275,15 +304,19 @@ never part of the public Service.
 ./gradlew bootRun
 ```
 
-Serves on `http://localhost:8080` (matches the plugin's default `API base URL`);
-the WebSocket lives at `ws://localhost:8080/api/v1/ws/parties`. The store starts
-**empty** until a party is advertised over the socket.
+Serves REST on `http://localhost:8080` (matches the plugin's default `API base
+URL`); every WebSocket is on Netty at `ws://localhost:8081/api/ws`. The store
+starts **empty** until a party is advertised over the socket.
 
 ```sh
 # smoke test: management health, then drive the socket with a WS client (e.g. websocat)
 curl localhost:9090/actuator/health
-echo '{"type":"subscribe"}' | websocat -n1 ws://localhost:8080/api/v1/ws/parties
+# Frames are binary and tagged, so the board's 0x01 prefix has to go on the wire:
+printf '\x01{"type":"subscribe"}' | websocat -n1 -b ws://localhost:8081/api/ws
 ```
+
+For anything more than one frame, use the Go load tester (`-mode board`, `-mode
+live`, `-mode both`), which speaks both channels.
 
 ## Storage
 
@@ -368,8 +401,11 @@ Production runs behind the cluster's Traefik ingress (see **Deploy**); for a
 self-hosted compose setup, terminate TLS with any reverse proxy (e.g. Nginx Proxy
 Manager) pointed at host port `8080`. Two things matter for the live push:
 
-- **Enable WebSocket support** on the proxy so the `/api/v1/ws/parties` upgrade is
-  forwarded; otherwise clients can't get the live list at all.
+- **Enable WebSocket support** on the proxy so the `/api/ws` upgrade is forwarded
+  (to the socket port, not the REST one); otherwise clients can't connect at all.
+  `/n/{nodeId}/api/ws` must route to that specific pod — see the per-pod Services
+  in `k8s/`. `/api/v1/ws/parties` goes to the socket port too, and needs no node
+  hint; it is plugin 1.0.50's fallback and Tomcat cannot serve it.
 - Keep the idle read timeout comfortably above the client's ping (the plugin pings
   every 20s), so upgraded connections aren't cut. Then point the plugin's `API
   base URL` at `https://party.example.com`.
@@ -390,7 +426,7 @@ What's collected:
 
 - **JVM / Tomcat**: heap, GC, threads, CPU (Actuator + Micrometer).
 - **Active socket connections**: the `osparty_ws_connections_active` gauge, read
-  live off `PartyBroadcaster`'s subscriber map (see `MetricsConfig`).
+  live off `BoardBroadcaster`'s subscriber map (see `MetricsConfig`).
 - **Redis query time**: Lettuce per-command latency timers, tagged by command.
 - **Redis server load**: a `redis-exporter` sidecar (ops/sec, memory, clients,
   keyspace hit ratio).
@@ -495,15 +531,15 @@ curl -sX POST -H "X-Internal-Token: $TOKEN" http://osparty-api:8080/internal/adm
 ```
 src/main/java/net/osparty/api/
   OsrsPartyApiApplication.java        Spring Boot entry point (@EnableScheduling)
-  model/                              Party, PartyRequest, PartyUpdate, PartyDelta, Member
+  model/                              Advertisement, AdvertisementRequest/Update/Delta, Member
   repository/
-    PartyRepository.java              storage interface (+ Authorization)
-    RedisPartyRepository.java         the store: native-TTL ads (@Profile("!test"))
+    AdvertisementRepository.java      storage interface (+ Authorization)
+    RedisAdvertisementRepository.java the store: native-TTL ads (@Profile("!test"))
   service/
-    PartyFactory.java                 Party building, host normalization, invite codes, patch apply
+    AdvertisementFactory.java         ad building, host normalization, invite codes, patch apply
     DiscordLinkService.java           OAuth2 account linking (accountHash <-> Discord)
     DiscordOAuthClient.java           Discord code/token/user exchange
-    DiscordBadgeService.java          role badges: store + enrich party members at broadcast time
+    DiscordBadgeService.java          role badges: store + enrich ad members at broadcast time
     VoiceChannelService.java          interface; provisioning delegated over HTTP
     HttpVoiceChannelService.java      calls the osparty-discord service
     DisabledVoiceChannelService.java  no-op when app.discord.service-url is unset
@@ -513,13 +549,14 @@ src/main/java/net/osparty/api/
     InternalBadgeController.java      POST/PUT /internal/badges (bot -> server)
     filter/InternalTokenFilter.java   X-Internal-Token gate for /internal/*
     filter/RequestLoggingFilter.java  per-request access log (method, IP, status, latency)
-    config/WebSocketConfig.java       registers /api/v1/ws/parties
     config/MetricsConfig.java         osparty_ws_connections_active gauge
     ws/
-      PartyBroadcaster.java           WS handler: subscribe/snapshot/batch + host writes + discord/voice
-      PartyReconciler.java            scheduled diff of the ad set -> created/updated/removed batch
+      BoardBroadcaster.java           board channel: subscribe/snapshot/batch + host writes + discord/voice
+      BoardReconciler.java            scheduled diff of the ad set -> created/updated/removed batch
       PresenceRegistry.java           cluster-wide online count (Redis / Local impls)
-src/test/java/net/osparty/api/        MockMvc + WebSocket tests (FakePartyRepository, @Profile("test"))
+  party/                              the live party: PartyManager, PartyRoom, PartyFrameHandler, PartyBus
+    netty/                            NettySocketServer (the only WS transport), SocketPathFilter, Mux
+src/test/java/net/osparty/api/        MockMvc + socket tests (FakeAdvertisementRepository, @Profile("test"))
 ```
 
 > Requires JDK 25 — pinned via a Gradle toolchain, so the build fetches it if your
@@ -545,7 +582,7 @@ Two consequences worth knowing:
   `SimpleAsyncTaskScheduler`, so the reconciler, presence broadcast, TTL touch and
   the purges now run concurrently instead of queueing behind each other. The state
   they share is already concurrent (`ConcurrentHashMap`, `AtomicLong`, volatile
-  snapshots); `PartyReconciler.lastKnown` is volatile for exactly this reason.
+  snapshots); `BoardReconciler.lastKnown` is volatile for exactly this reason.
 - **The Hikari pool is now the only bound on concurrent database work**, since
   there is no request-thread pool in front of it. Hence `maximum-pool-size: 10`
   rather than 5, and a short `connection-timeout` so saturation fails fast.

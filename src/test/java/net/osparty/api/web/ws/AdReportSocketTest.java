@@ -22,15 +22,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 /**
  * Report ingress over the socket.
@@ -49,10 +45,13 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 	// The global circuit breaker is a single shared per-minute bucket in Redis, so a developer
 	// machine running the whole suite against one instance can exhaust it before this class starts.
 	// Raised out of the way here; ReportRateLimiterTest is where that ceiling is actually tested.
-	"app.reports.global-per-minute=1000000"})
+	"app.reports.global-per-minute=1000000",
+	// Every WebSocket is served by Netty on its own port, not by the servlet container's. Zero takes an
+	// ephemeral one so the whole suite can run without colliding on 8081.
+	"app.socket.port=0"})
 class AdReportSocketTest {
-	@LocalServerPort
-	private int port;
+	@Autowired
+	private net.osparty.api.party.netty.NettySocketServer socketServer;
 
 	@Autowired
 	private ObjectMapper mapper;
@@ -92,7 +91,7 @@ class AdReportSocketTest {
 	/**
 	 * Clears any rate-limiter state left in Redis by a previous run, when there is a Redis to clear.
 	 *
-	 * <p>Needed because {@code FakePartyRepository}'s id sequence restarts with the JVM, so party ids
+	 * <p>Needed because {@code FakeAdvertisementRepository}'s id sequence restarts with the JVM, so ad ids
 	 * repeat from run to run — while the limiter's per-party keys, correctly, do not. Without this a
 	 * passing run leaves behind "already notified about party 1001" and fails the next one.
 	 *
@@ -290,22 +289,15 @@ class AdReportSocketTest {
 			+ "{\"activity\":\"cox\",\"host\":\"" + host + "\",\"capacity\":3,"
 			+ "\"description\":\"" + description + "\",\"passphrase\":\"pp-" + key + "\"}}");
 		return awaitWhere(messages, m -> "hosted".equals(m.path("type").asText()), "hosted ack")
-			.path("party").path("id").asText();
+			.path("ad").path("id").asText();
 	}
 
 	private WebSocketSession connect(BlockingQueue<JsonNode> messages) throws Exception {
-		return new StandardWebSocketClient().execute(
-			new TextWebSocketHandler() {
-				@Override
-				protected void handleTextMessage(WebSocketSession s, TextMessage m) throws Exception {
-					messages.add(mapper.readTree(m.getPayload()));
-				}
-			},
-			"ws://localhost:" + port + "/api/v1/ws/parties").get(5, TimeUnit.SECONDS);
+		return BoardChannel.connect(socketServer.boundPort(), mapper, messages);
 	}
 
 	private static void send(WebSocketSession session, String json) throws Exception {
-		session.sendMessage(new TextMessage(json));
+		BoardChannel.send(session, json);
 	}
 
 	private static void close(WebSocketSession... sessions) throws Exception {

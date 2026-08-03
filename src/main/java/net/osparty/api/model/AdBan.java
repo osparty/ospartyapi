@@ -18,7 +18,7 @@ import lombok.Data;
 @Data
 public class AdBan {
 	private long id;
-	/** Normalized via {@code PartyFactory.normalizeHost}; empty when banned by account hash alone. */
+	/** Normalized via {@code AdvertisementFactory.normalizeHost}; empty when banned by account hash alone. */
 	private String hostName;
 	/** The name as advertised, for display in Discord. */
 	private String hostNameRaw;

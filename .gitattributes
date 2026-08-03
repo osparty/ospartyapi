@@ -1,0 +1,5 @@
+# The Gradle wrapper is executed by /bin/sh in the Docker build. Checked out with CRLF — which is the
+# default on Windows — its shebang becomes "#!/bin/sh\r", the kernel looks for an interpreter with a
+# carriage return in the name, and the build fails with the wonderfully unhelpful "./gradlew: not found".
+gradlew text eol=lf
+*.sh text eol=lf

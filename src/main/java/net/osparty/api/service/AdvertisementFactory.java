@@ -79,10 +79,16 @@ public final class AdvertisementFactory {
 	}
 
 	public static boolean applyUpdate(Advertisement ad, AdvertisementUpdate patch) {
+		return applyUpdate(ad, patch, System.currentTimeMillis());
+	}
+
+	/** As {@link #applyUpdate(Advertisement, AdvertisementUpdate)}, with the clock the caller is working to. */
+	public static boolean applyUpdate(Advertisement ad, AdvertisementUpdate patch, long now) {
 		if (patch == null) {
 			return false;
 		}
 		boolean changed = false;
+		boolean wasFull = isFull(ad);
 		if (patch.getSize() != null && patch.getSize() > 0 && patch.getSize() != ad.getSize()) {
 			ad.setSize(patch.getSize());
 			changed = true;
@@ -180,7 +186,20 @@ public final class AdvertisementFactory {
 			ad.setTeacher(patch.getTeacher());
 			changed = true;
 		}
+		if (wasFull && !isFull(ad)) {
+			// A party that has stopped being full is looking again, and it is looking as of now. Its clock
+			// has been running since it was created, so without this a team that filled up, raided for three
+			// hours and lost someone advertises the seat as "searching 3h" — and is dimmed as stale next to
+			// parties that have been looking for a tenth as long.
+			ad.setCreatedAt(now);
+			changed = true;
+		}
 		return changed;
+	}
+
+	/** Whether {@code ad} has no room left. An uncapped party is never full: there is always room in it. */
+	private static boolean isFull(Advertisement ad) {
+		return ad.getCapacity() > 0 && ad.getSize() >= ad.getCapacity();
 	}
 
 	private static List<Member> mergeKnownHashes(List<Member> stored, List<Member> incoming) {

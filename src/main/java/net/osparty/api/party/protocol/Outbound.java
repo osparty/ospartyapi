@@ -217,10 +217,18 @@ public record Outbound(
 		}
 	}
 
-	/** One member in the roster frame. {@code status} is HOST / MEMBER / PENDING. */
+	/**
+	 * One member in the roster frame. {@code status} is HOST / MEMBER / PENDING.
+	 *
+	 * <p>{@code offline} is the room saying this member has no connection behind it — its seat is being held
+	 * (see {@code PartyRoom#onDisconnect}). Clients otherwise have only silence to go on, and silence takes
+	 * as long to mean anything as their own timeout: a player whose client vanished sat there looking present
+	 * for twenty seconds. A client that predates the field falls back to that timeout, which is what it did
+	 * before this existed.
+	 */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	public record RosterEntry(@JsonProperty("m") long memberId, String name, long accountHash, String status, String role,
-		boolean learner, boolean teacher) {
+		boolean learner, boolean teacher, boolean offline) {
 	}
 
 	/** Builds a frame by naming only the fields it uses; everything else stays null and is omitted. */

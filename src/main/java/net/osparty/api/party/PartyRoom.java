@@ -597,6 +597,9 @@ final class PartyRoom {
 			}
 			sessions.remove(memberId);
 			log.info("Party disconnect: room={} member={} — holding its seat", id, memberId);
+			// Say so now. The peers' own answer to a member that has gone quiet is a timeout, and until it
+			// expires the party is looking at someone who is not there.
+			broadcastRoster();
 		}
 	}
 
@@ -743,7 +746,7 @@ final class PartyRoom {
 	private List<Outbound.RosterEntry> roster() {
 		List<Outbound.RosterEntry> out = new ArrayList<>(members.size());
 		for (RoomMember m : members.values()) {
-			out.add(m.toRosterEntry());
+			out.add(m.toRosterEntry(!sessions.containsKey(m.memberId)));
 		}
 		return out;
 	}

@@ -531,6 +531,30 @@ class PartyProtocolTest {
 		assertThat(manager.connectedMembers()).isEqualTo(1);
 	}
 
+	/**
+	 * A held seat is only useful if the party can see it is being held. Peers judge presence by silence
+	 * otherwise, and silence takes their whole timeout to mean anything — twenty seconds of a member who is
+	 * plainly not there still looking present.
+	 */
+	@Test
+	void aHeldSeatIsReportedOfflineAtOnce() throws Exception {
+		long memberId = hostWithAdmittedMember();
+		send(member, "{\"t\":\"hello\",\"accountHash\":222,\"name\":\"Mem\"}");
+		assertThat(offlineIn(last(hostOut, "roster"), memberId)).isFalse();
+
+		handler.onClose(member.id(), "NORMAL");
+
+		assertThat(offlineIn(last(hostOut, "roster"), memberId)).isTrue();
+
+		// And taking the seat back says so on the same frame, without waiting for their first update.
+		List<String> againOut = new ArrayList<>();
+		FakeSession again = session("member-again", againOut);
+		handler.onOpen(again);
+		send(again, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
+
+		assertThat(offlineIn(last(hostOut, "roster"), memberId)).isFalse();
+	}
+
 	/** The point of holding the seat: the same player comes back to it rather than applying all over again. */
 	@Test
 	void aMemberComingBackTakesItsOwnSeat() throws Exception {
@@ -1131,6 +1155,15 @@ class PartyProtocolTest {
 			}
 		}
 		return null;
+	}
+
+	private static boolean offlineIn(JsonNode roster, long memberId) {
+		for (JsonNode m : roster.get("members")) {
+			if (m.get("m").asLong() == memberId) {
+				return m.get("offline").asBoolean();
+			}
+		}
+		throw new AssertionError("member " + memberId + " is not on the roster");
 	}
 
 	private static FakeSession session(String id, List<String> out) {

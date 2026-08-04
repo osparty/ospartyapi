@@ -47,6 +47,19 @@ final class PartyRoom {
 	 * is the hottest path in the system.
 	 */
 	private final Map<Long, Long> lastSeen = new java.util.concurrent.ConcurrentHashMap<>();
+	/**
+	 * Accounts the host has removed from this room.
+	 *
+	 * <p>A kick is a decision about a person, and it has to outlast their connection now that seats are held
+	 * across one: a member removed while its client was away would otherwise walk straight back in on the
+	 * claim that lets an ordinary reconnect keep its admission. It only costs them the auto-admit — they can
+	 * still apply, and the host can still let them in, which clears this.
+	 *
+	 * <p>Kept for the life of the room, which ends with its host, and capped because a host holding the kick
+	 * button must not be able to grow it without bound.
+	 */
+	private final java.util.Set<Long> removedAccounts = new java.util.HashSet<>();
+	private static final int MAX_REMEMBERED_REMOVALS = 64;
 
 	/** The two ends of a {@code memberUpdates} frame, between which pre-encoded updates are pasted. */
 	private static final byte[] UPDATES_PREFIX =
@@ -79,54 +92,133 @@ final class PartyRoom {
 		this.mapper = mapper;
 	}
 
-	/** Seat the host (the member that created the room). Sends them a welcome + the initial roster. */
-	void seatHost(long memberId, SocketSession session, String name, long accountHash,
+	/**
+	 * Seat the host: the member that created the room, or the one coming back to a room that outlived its
+	 * connection. Sends them a welcome + the initial roster.
+	 *
+	 * @return the member id they were seated under — their own again when the room was still holding their
+	 *     seat, so the party a returning host takes charge of is the one it left.
+	 */
+	long seatHost(long memberId, SocketSession session, String name, long accountHash,
 		int capacity, boolean locked, String role, boolean learner, boolean teacher) {
 		synchronized (lock) {
-			this.hostMemberId = memberId;
+			RoomMember host = heldSeat(hostMemberId, session);
+			if (host != null && host.accountHash != 0 && accountHash != 0
+				&& host.accountHash != accountHash) {
+				// Somebody else claiming this room is not its host coming back. They are seated as a host of
+				// their own, exactly as they were before any of this held seats.
+				host = null;
+			}
+			boolean returning = host != null;
+			if (!returning) {
+				host = new RoomMember(memberId, name, accountHash, RoomMember.Status.HOST);
+			}
+			else {
+				host.status = RoomMember.Status.HOST;
+				host.accountHash = accountHash;
+				log.info("Party host returned: room={} member={} members={}",
+					id, host.memberId, members.size());
+			}
+			this.hostMemberId = host.memberId;
 			this.hostName = name;
 			this.capacity = capacity;
 			this.locked = locked;
-			RoomMember host = new RoomMember(memberId, name, accountHash, RoomMember.Status.HOST);
+			host.name = name;
 			host.role = role;
 			host.learner = learner;
 			host.teacher = teacher;
-			members.put(memberId, host);
-			sessions.put(memberId, session);
-			lastSeen.put(memberId, System.currentTimeMillis());
-			send(session, Outbound.welcome(memberId, RoomMember.Status.HOST.name(), nodeId));
+			seat(host, session);
+			send(session, Outbound.welcome(host.memberId, RoomMember.Status.HOST.name(), nodeId));
 			sendSnapshotTo(session);
 			broadcastRoster();
-			oweResync(memberId);
+			oweResync(host.memberId);
+			return host.memberId;
 		}
 	}
 
 	/**
 	 * Seat an applicant. Invited joiners are auto-admitted when there's room; everyone else joins PENDING
 	 * until the host admits them. Sends them a welcome + snapshot, and re-broadcasts the roster.
+	 *
+	 * <p>A member the room is still holding a seat for takes that seat back instead, keeping its id and its
+	 * admission: it never left the party, only its connection did. Recognised by account hash, the one thing
+	 * a client carries across connections — member ids are per-connection by construction.
+	 *
+	 * @return the member id they were seated under, their own again when they were returning.
 	 */
-	void seatApplicant(long memberId, SocketSession session, String name, long accountHash,
+	long seatApplicant(long memberId, SocketSession session, String name, long accountHash,
 		String role, boolean learner, boolean teacher, boolean invited) {
 		synchronized (lock) {
-			RoomMember.Status status = (invited && canAdmit())
-				? RoomMember.Status.MEMBER : RoomMember.Status.PENDING;
-			RoomMember member = new RoomMember(memberId, name, accountHash, status);
-			member.role = role;
+			RoomMember member = heldSeatOf(accountHash, session);
+			boolean returning = member != null;
+			if (!returning) {
+				RoomMember.Status status = (invited && canAdmit() && !removedAccounts.contains(accountHash))
+					? RoomMember.Status.MEMBER : RoomMember.Status.PENDING;
+				member = new RoomMember(memberId, name, accountHash, status);
+				member.invited = invited;
+			}
+			if (name != null && !name.isBlank()) {
+				// Never back to nameless: a joiner sends its name once the client knows it, and a returning
+				// one may arrive before it does.
+				member.name = name;
+			}
+			if (role != null) {
+				member.role = role;
+			}
 			member.learner = learner;
 			member.teacher = teacher;
-			member.invited = invited;
-			members.put(memberId, member);
-			sessions.put(memberId, session);
-			lastSeen.put(memberId, System.currentTimeMillis());
+			seat(member, session);
 			// The applicant the host is waiting to see. PENDING here and absent from the host's panel means
 			// the roster reached them and the applicant's own state did not.
-			log.info("Party seated: room={} member={} name={} status={} invited={} members={}",
-				id, memberId, name, status, invited, members.size());
-			send(session, Outbound.welcome(memberId, status.name(), nodeId));
+			log.info("Party seated: room={} member={} name={} status={} invited={} returning={} members={}",
+				id, member.memberId, member.name, member.status, invited, returning, members.size());
+			send(session, Outbound.welcome(member.memberId, member.status.name(), nodeId));
 			sendSnapshotTo(session);
 			broadcastRoster();
-			oweResync(memberId);
+			oweResync(member.memberId);
+			return member.memberId;
 		}
+	}
+
+	/** Put a member — new or returning — in its seat, with the connection that now speaks for it. */
+	private void seat(RoomMember member, SocketSession session) {
+		members.put(member.memberId, member);
+		sessions.put(member.memberId, session);
+		lastSeen.put(member.memberId, System.currentTimeMillis());
+	}
+
+	/**
+	 * The seat this room is still holding for {@code memberId}, or null when there is none to take back.
+	 *
+	 * <p>A seat is held whenever the connection that was speaking for it no longer is: none seated, one that
+	 * closed, or one that {@code arriving} has replaced. That last case is not an edge — a client killed
+	 * outright leaves a socket nothing has closed yet, and it is still sitting there reporting open when the
+	 * relaunched client dials back in. What it cannot be is the connection that is asking: a member
+	 * re-announcing itself on a live socket is not returning to anything.
+	 */
+	private RoomMember heldSeat(long memberId, SocketSession arriving) {
+		RoomMember member = members.get(memberId);
+		if (member == null) {
+			return null;
+		}
+		SocketSession seated = sessions.get(memberId);
+		return seated == null || !seated.id().equals(arriving.id()) ? member : null;
+	}
+
+	/** As {@link #heldSeat}, for a member that has to be recognised by account rather than by member id. */
+	private RoomMember heldSeatOf(long accountHash, SocketSession arriving) {
+		if (accountHash == 0) {
+			return null; // nothing to recognise it by; it is seated as a newcomer
+		}
+		for (RoomMember member : members.values()) {
+			if (member.accountHash == accountHash) {
+				RoomMember held = heldSeat(member.memberId, arriving);
+				if (held != null) {
+					return held;
+				}
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -168,6 +260,8 @@ final class PartyRoom {
 			if (target == null || target.status != RoomMember.Status.PENDING || !canAdmit()) {
 				return false;
 			}
+			// The host has changed its mind about anyone it removed before, so stop holding it against them.
+			removedAccounts.remove(target.accountHash);
 			target.status = RoomMember.Status.MEMBER;
 			broadcastRoster();
 			return true;
@@ -180,9 +274,14 @@ final class PartyRoom {
 			if (actorMemberId != hostMemberId || targetMemberId == hostMemberId) {
 				return;
 			}
-			if (members.remove(targetMemberId) == null) {
+			RoomMember target = members.get(targetMemberId);
+			if (target == null) {
 				return;
 			}
+			if (target.accountHash != 0 && removedAccounts.size() < MAX_REMEMBERED_REMOVALS) {
+				removedAccounts.add(target.accountHash);
+			}
+			members.remove(targetMemberId);
 			SocketSession session = sessions.remove(targetMemberId);
 			lastSeen.remove(targetMemberId);
 			if (session != null) {
@@ -481,8 +580,29 @@ final class PartyRoom {
 	}
 
 	/**
-	 * Drop a member (explicit leave or socket close). Returns true if the host left, in which case the
-	 * caller should discard the room: the party has disbanded and remaining members are told it closed.
+	 * A member's connection went away without a leave. The seat stays: a client that crashed, was closed or
+	 * logged out is usually back well inside the member timeout, and emptying the seat now is what turns a
+	 * reconnect into a stranger applying to join — and, for a host, ends the party outright while its host
+	 * is still on their way back. Only the connection is dropped; {@link #pruneDead} empties the seat if
+	 * nobody comes back for it.
+	 */
+	void onDisconnect(long memberId, SocketSession session) {
+		synchronized (lock) {
+			SocketSession seated = sessions.get(memberId);
+			if (seated == null || !seated.id().equals(session.id())) {
+				// A connection the member has already replaced. Its close arrives whenever the network gets
+				// around to noticing, which can be long after the client came back — and dropping the seat's
+				// session then would cut off the connection sitting in it.
+				return;
+			}
+			sessions.remove(memberId);
+			log.info("Party disconnect: room={} member={} — holding its seat", id, memberId);
+		}
+	}
+
+	/**
+	 * Drop a member (explicit leave). Returns true if the host left, in which case the caller should discard
+	 * the room: the party has disbanded and remaining members are told it closed.
 	 */
 	boolean onLeave(long memberId) {
 		synchronized (lock) {
@@ -514,13 +634,15 @@ final class PartyRoom {
 	}
 
 	/**
-	 * Drop members whose socket has closed without the container ever telling us.
+	 * Empty the seats of members the room has not heard from for {@code silentAfterMs} — the ones that are
+	 * really gone rather than briefly away.
 	 *
-	 * <p>Membership is otherwise only ever pruned by {@code afterConnectionClosed}. Miss that callback once
-	 * — an abrupt teardown under load, a send that fails after the session is already gone — and the member
-	 * is immortal: {@link #sendRaw} quietly skips a closed session rather than removing it, so the room
-	 * never empties, is never discarded, and its ownership lock is renewed by the heartbeat for as long as
-	 * the node lives. Every such room is a permanent leak of RAM and of a Redis key.
+	 * <p>Silence is the only honest signal, and it is the same one whichever way a member went: a socket
+	 * closed without a leave ({@link #onDisconnect}), a socket that died without the container ever telling
+	 * us, or a client still connected and no longer sending. The first is held on purpose, for as long as a
+	 * reconnect plausibly takes. The second would otherwise be immortal — {@link #sendRaw} quietly skips a
+	 * closed session rather than removing it, so the room never empties, is never discarded, and its
+	 * ownership lock is renewed by the heartbeat for as long as the node lives.
 	 *
 	 * <p>Only reports {@code discard} when it actually removed someone. A room that is merely empty may be
 	 * one that was created microseconds ago and whose host is being seated right now — discarding that
@@ -535,14 +657,15 @@ final class PartyRoom {
 		String hostSessionId = null;
 		synchronized (lock) {
 			long now = System.currentTimeMillis();
-			for (Map.Entry<Long, SocketSession> entry : sessions.entrySet()) {
-				Long seen = lastSeen.get(entry.getKey());
-				boolean silent = seen != null && now - seen > silentAfterMs;
-				if (!entry.getValue().isOpen() || silent) {
-					gone.add(entry.getKey());
-					if (entry.getKey() == hostMemberId) {
-						hostSessionId = entry.getValue().id();
-					}
+			for (Long memberId : members.keySet()) {
+				Long seen = lastSeen.get(memberId);
+				if (seen == null || now - seen <= silentAfterMs) {
+					continue;
+				}
+				gone.add(memberId);
+				if (memberId == hostMemberId) {
+					SocketSession session = sessions.get(memberId);
+					hostSessionId = session == null ? null : session.id();
 				}
 			}
 		}
@@ -571,9 +694,17 @@ final class PartyRoom {
 		}
 	}
 
+	/** Seats taken, including any this room is holding for a member whose connection went away. */
 	int memberCount() {
 		synchronized (lock) {
 			return members.size();
+		}
+	}
+
+	/** Seats with a live connection behind them — what this room actually costs the node it runs on. */
+	int connectedCount() {
+		synchronized (lock) {
+			return sessions.size();
 		}
 	}
 
@@ -714,9 +845,9 @@ final class PartyRoom {
 	 * A snapshot of the sessions to send to, rather than the live map.
 	 *
 	 * <p>A send can close its own session — a broken pipe, or a client that has already gone — and Tomcat
-	 * runs that close <em>inline on the sending thread</em>. That re-enters {@link #onLeave} and removes from
-	 * {@code sessions} midway through the fan-out. The room lock is no defence: it is the same thread, so it
-	 * simply re-enters. Iterating the map directly then dies with a {@code ConcurrentModificationException}
+	 * runs that close <em>inline on the sending thread</em>. That re-enters {@link #onDisconnect} and removes
+	 * from {@code sessions} midway through the fan-out. The room lock is no defence: it is the same thread,
+	 * so it simply re-enters. Iterating the map directly then dies with a {@code ConcurrentModificationException}
 	 * that propagates out of the frame handler and takes down the <em>sender's</em> session too — one dead
 	 * peer knocking out a healthy one, and under load that cascades.
 	 */

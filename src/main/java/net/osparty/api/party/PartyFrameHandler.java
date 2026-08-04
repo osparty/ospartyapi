@@ -46,7 +46,7 @@ public class PartyFrameHandler {
 	public void onClose(String sessionId, String reason) {
 		Ctx ctx = contexts.remove(sessionId);
 		if (ctx != null) {
-			handleLeave(ctx);
+			handleDisconnect(ctx);
 		}
 		log.info("Party WS closed: session={} reason={}", sessionId, reason);
 	}
@@ -245,7 +245,9 @@ public class PartyFrameHandler {
 		String name = in.hostName() != null ? in.hostName() : ctx.name;
 		long accountHash = in.accountHash() != null ? in.accountHash() : ctx.accountHash;
 		ctx.roomId = in.room();
-		room.seatHost(ctx.memberId, ctx.session, name, accountHash,
+		// The room answers with the seat it actually put us in: a host returning to a room that outlived its
+		// connection takes its own back, and this connection has to speak for that member from here on.
+		ctx.memberId = room.seatHost(ctx.memberId, ctx.session, name, accountHash,
 			in.capacity() == null ? 0 : in.capacity(),
 			Boolean.TRUE.equals(in.locked()), in.role(),
 			Boolean.TRUE.equals(in.learner()), Boolean.TRUE.equals(in.teacher()));
@@ -280,7 +282,8 @@ public class PartyFrameHandler {
 		}
 		ensureMemberId(ctx);
 		ctx.roomId = in.room();
-		room.seatApplicant(ctx.memberId, ctx.session,
+		// As with hosting: a member the room was still holding a seat for is seated back under its own id.
+		ctx.memberId = room.seatApplicant(ctx.memberId, ctx.session,
 			in.name() != null ? in.name() : ctx.name,
 			in.accountHash() != null ? in.accountHash() : ctx.accountHash,
 			in.role(), Boolean.TRUE.equals(in.learner()), Boolean.TRUE.equals(in.teacher()),
@@ -344,6 +347,24 @@ public class PartyFrameHandler {
 	private void leaveCurrentRoom(Ctx ctx, String newRoom) {
 		if (ctx.roomId != null && !ctx.roomId.equals(newRoom)) {
 			handleLeave(ctx);
+		}
+	}
+
+	/**
+	 * The connection went away without a leave — a crash, a closed client, a network drop. The room holds
+	 * the seat rather than emptying it (see {@link PartyRoom#onDisconnect}), so a client that comes back
+	 * inside the member timeout returns to the party it was in instead of applying to it again, and a party
+	 * whose host drops does not end the moment the host's socket does.
+	 */
+	private void handleDisconnect(Ctx ctx) {
+		String roomId = ctx.roomId;
+		if (roomId == null) {
+			return;
+		}
+		ctx.roomId = null;
+		PartyRoom room = manager.room(roomId);
+		if (room != null) {
+			room.onDisconnect(ctx.memberId, ctx.session);
 		}
 	}
 

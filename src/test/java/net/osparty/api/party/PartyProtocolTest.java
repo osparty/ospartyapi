@@ -26,6 +26,7 @@ class PartyProtocolTest {
 	private PartyFrameHandler handler;
 	private PartyManager manager;
 	private LocalPartyBus bus;
+	private List<String> adsDropped;
 
 	private FakeSession host;
 	private FakeSession member;
@@ -36,7 +37,8 @@ class PartyProtocolTest {
 	void setUp() {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		bus = new LocalPartyBus();
-		manager = new PartyManager(mapper, new LocalPartyOwnershipService(node), node, bus, new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS);
+		adsDropped = new ArrayList<>();
+		manager = new PartyManager(mapper, new LocalPartyOwnershipService(node), node, bus, new LocalNodeLoadRegistry(), adsDropped::add, MEMBER_TIMEOUT_MS);
 		handler = new PartyFrameHandler(manager, mapper);
 		hostOut = new ArrayList<>();
 		memberOut = new ArrayList<>();
@@ -379,7 +381,7 @@ class PartyProtocolTest {
 				return java.util.Set.of();
 			}
 		};
-		PartyManager manager = new PartyManager(mapper, flaky, node, new LocalPartyBus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS);
+		PartyManager manager = new PartyManager(mapper, flaky, node, new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, MEMBER_TIMEOUT_MS);
 		PartyFrameHandler fenced = new PartyFrameHandler(manager, mapper);
 		fenced.onOpen(host);
 		fenced.onOpen(member);
@@ -442,7 +444,7 @@ class PartyProtocolTest {
 			}
 		};
 		PartyFrameHandler redirecting = new PartyFrameHandler(
-			new PartyManager(mapper, foreign, node, new LocalPartyBus(), new LocalNodeLoadRegistry(), MEMBER_TIMEOUT_MS), mapper);
+			new PartyManager(mapper, foreign, node, new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, MEMBER_TIMEOUT_MS), mapper);
 		List<String> out = new ArrayList<>();
 		FakeSession joiner = session("joiner", out);
 		redirecting.onOpen(joiner);
@@ -470,7 +472,7 @@ class PartyProtocolTest {
 		};
 		PartyManager loaded = new PartyManager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyBus(), load,
-			MEMBER_TIMEOUT_MS);
+			sessionId -> { }, MEMBER_TIMEOUT_MS);
 		PartyFrameHandler placing = new PartyFrameHandler(loaded, mapper);
 		List<String> out = new ArrayList<>();
 		FakeSession newHost = session("newHost", out);
@@ -543,7 +545,8 @@ class PartyProtocolTest {
 			mapper, new LocalPartyOwnershipService(new NodeIdentity("node-a", true)),
 			// -1 rather than 0: with a zero timeout a member stamped in the same millisecond as the sweep is
 			// not yet stale, which makes the assertion depend on the clock. Negative means "everything is".
-			new NodeIdentity("node-a", true), new LocalPartyBus(), new LocalNodeLoadRegistry(), -1L);
+			new NodeIdentity("node-a", true), new LocalPartyBus(), new LocalNodeLoadRegistry(),
+			sessionId -> { }, -1L);
 		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper);
 		sweeping.onOpen(host);
 		sweeping.onOpen(member);
@@ -561,9 +564,27 @@ class PartyProtocolTest {
 	}
 
 	@Test
+	void sweepingAHostTakesItsAdvertisementWithIt() throws Exception {
+		hostWithAdmittedMember();
+
+		// Losing a member leaves the ad alone: the party is still there to join.
+		member.close();
+		manager.pruneRoom("r");
+		assertThat(adsDropped).isEmpty();
+
+		// Losing the host does not. The board renews an ad for as long as its host's connection is up, and
+		// the client this sweep exists to catch — logged out of the game, still connected — keeps that
+		// connection up indefinitely, leaving the board advertising a room that no longer exists.
+		host.close();
+		manager.pruneRoom("r");
+		assertThat(adsDropped).containsExactly("host");
+	}
+
+	@Test
 	void sweepingLeavesALiveRoomAlone() throws Exception {
 		hostWithAdmittedMember();
 		manager.pruneRoom("r");
+		assertThat(adsDropped).isEmpty();
 		// Nothing closed, so nothing removed — and no discard, which would otherwise be free to release the
 		// lock of a room created microseconds ago whose host is still being seated.
 		assertThat(manager.prunedCount()).isZero();

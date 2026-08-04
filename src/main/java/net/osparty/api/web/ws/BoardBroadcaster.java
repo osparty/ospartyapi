@@ -28,7 +28,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 @ConditionalOnProperty(name = "app.ws.enabled", havingValue = "true", matchIfMissing = true)
-public class BoardBroadcaster {
+public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	private static final Logger log = LoggerFactory.getLogger(BoardBroadcaster.class);
 
 	private static final AdvertisementUpdate TTL_TOUCH = new AdvertisementUpdate();
@@ -361,15 +361,47 @@ public class BoardBroadcaster {
 		if (!authorizeWrite(sub, id, in.key())) {
 			return;
 		}
+		log.info("WS unhost: session={} party={}", sub.session.id(), id);
+		removeHostedAd(id, sub.session.id());
+	}
+
+	/**
+	 * Take {@code id} off the board: delete it, free any voice channel it held, unbind the session that
+	 * hosted it and announce the removal.
+	 */
+	private void removeHostedAd(String id, String sessionId) {
 		Advertisement deleted = store.delete(id).orElse(null);
 		if (deleted != null && deleted.getDiscordChannelId() != null) {
 			voice.delete(deleted.getDiscordChannelId());
 		}
-		unbind(sub.session.id());
-		log.info("WS unhost: session={} party={}", sub.session.id(), id);
+		unbind(sessionId);
 		// A removal has no advertisement left to stamp, so it takes the next revision from the same
 		// sequence — which is what lets every node order it against everything else.
 		changes.publish(id, store.nextRevision());
+	}
+
+	/**
+	 * The party module swept this session's room out from under it, so its advertisement goes too.
+	 *
+	 * <p>Told rather than deduced: nothing the board can see distinguishes a host whose room is gone from
+	 * one sitting in a quiet party, and {@link #touchOwnedAds} would go on renewing the ad either way.
+	 * The {@code gone} frame is the same one a purged host receives, so a client that is merely idle folds
+	 * its hosting state on a path it already implements.
+	 */
+	@Override
+	public void dropHostedBy(String sessionId) {
+		String id = hostedAdBySession.get(sessionId);
+		if (id == null) {
+			// Already unbound: the session closed cleanly and took its binding with it, leaving the ad to
+			// expire on its own TTL as it always has.
+			return;
+		}
+		log.info("Party sweep: dropping ad {} — session {} no longer hosts a room", id, sessionId);
+		removeHostedAd(id, sessionId);
+		Subscriber sub = subscribers.get(sessionId);
+		if (sub != null) {
+			send(sub, Outbound.gone(version.get(), id));
+		}
 	}
 
 	private void handleTransferHost(Subscriber sub, Inbound in) {

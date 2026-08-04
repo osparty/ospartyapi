@@ -504,10 +504,13 @@ final class PartyRoom {
 	}
 
 	/**
-	 * The outcome of a {@link #pruneDead} sweep: how many ghosts were dropped, and whether that leaves
-	 * the room to be discarded.
+	 * The outcome of a {@link #pruneDead} sweep: how many ghosts were dropped, whether that leaves the room
+	 * to be discarded, and the session of the host if it was one of them.
+	 *
+	 * <p>{@code hostSessionId} is what lets the advertisement go with the room (see {@link HostedAds}). Null
+	 * whenever the host survived the sweep, which is every sweep that did not end the party.
 	 */
-	record Prune(int removed, boolean discard) {
+	record Prune(int removed, boolean discard, String hostSessionId) {
 	}
 
 	/**
@@ -527,6 +530,9 @@ final class PartyRoom {
 	 */
 	Prune pruneDead(long silentAfterMs) {
 		List<Long> gone = new ArrayList<>();
+		// Read while the session is still seated: onLeave drops it, and by then there is nothing left to
+		// name the connection whose advertisement outlives this room.
+		String hostSessionId = null;
 		synchronized (lock) {
 			long now = System.currentTimeMillis();
 			for (Map.Entry<Long, SocketSession> entry : sessions.entrySet()) {
@@ -534,18 +540,21 @@ final class PartyRoom {
 				boolean silent = seen != null && now - seen > silentAfterMs;
 				if (!entry.getValue().isOpen() || silent) {
 					gone.add(entry.getKey());
+					if (entry.getKey() == hostMemberId) {
+						hostSessionId = entry.getValue().id();
+					}
 				}
 			}
 		}
 		if (gone.isEmpty()) {
-			return new Prune(0, false);
+			return new Prune(0, false, null);
 		}
 		// Outside the collection loop: onLeave takes the lock itself and broadcasts, which can re-enter.
 		boolean hostLeft = false;
 		for (long memberId : gone) {
 			hostLeft |= onLeave(memberId);
 		}
-		return new Prune(gone.size(), hostLeft || isEmpty());
+		return new Prune(gone.size(), hostLeft || isEmpty(), hostSessionId);
 	}
 
 	/**

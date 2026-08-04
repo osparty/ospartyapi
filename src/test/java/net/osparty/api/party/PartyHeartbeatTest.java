@@ -26,7 +26,7 @@ class PartyHeartbeatTest {
 		// Zero-length silence window: every seated member counts as gone the moment the sweep looks.
 		PartyManager manager = new PartyManager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyBus(),
-			new LocalNodeLoadRegistry(), -1L);
+			new LocalNodeLoadRegistry(), sessionId -> { }, -1L);
 		PartyFrameHandler handler = new PartyFrameHandler(manager, mapper);
 
 		hostARoom(handler);
@@ -43,7 +43,7 @@ class PartyHeartbeatTest {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		PartyManager manager = new PartyManager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyBus(),
-			new LocalNodeLoadRegistry(), 90_000L);
+			new LocalNodeLoadRegistry(), sessionId -> { }, 90_000L);
 		PartyFrameHandler handler = new PartyFrameHandler(manager, mapper);
 
 		hostARoom(handler);

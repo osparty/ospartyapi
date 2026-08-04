@@ -27,6 +27,7 @@ public class PartyManager {
 	private final NodeIdentity node;
 	private final PartyBus bus;
 	private final NodeLoadRegistry load;
+	private final HostedAds hostedAds;
 	/**
 	 * How long a member may go without sending anything before it is treated as gone. Generous next to the
 	 * plugin's heartbeat (every five seconds when it has nothing else to say) — this is the backstop for connections
@@ -43,7 +44,7 @@ public class PartyManager {
 	private final java.util.concurrent.atomic.LongAdder pruned = new java.util.concurrent.atomic.LongAdder();
 
 	public PartyManager(ObjectMapper mapper, PartyOwnershipService ownership, NodeIdentity node,
-		PartyBus bus, NodeLoadRegistry load,
+		PartyBus bus, NodeLoadRegistry load, HostedAds hostedAds,
 		@org.springframework.beans.factory.annotation.Value("${app.party.member-timeout-ms:90000}")
 		long memberTimeoutMs) {
 		this.mapper = mapper;
@@ -51,6 +52,7 @@ public class PartyManager {
 		this.node = node;
 		this.bus = bus;
 		this.load = load;
+		this.hostedAds = hostedAds;
 		this.memberTimeoutMs = memberTimeoutMs;
 		// Control signals from other nodes act on the rooms held here, so the bus calls back into us.
 		bus.setListener(new PartyBus.Listener() {
@@ -163,6 +165,10 @@ public class PartyManager {
 	 * room forever: it never empties, so it is never discarded, so the heartbeat renews its ownership lock
 	 * for the life of the node. Sweeping on the same schedule that renews those locks means a leak can
 	 * outlive its clients by at most one heartbeat.
+	 *
+	 * <p>Sweeping away the host also takes its advertisement with it. The board would otherwise keep
+	 * renewing an ad for a party that no longer has a room to join, for as long as the host's connection
+	 * stays up — which for the client this sweep exists to catch is indefinitely (see {@link HostedAds}).
 	 */
 	void pruneRoom(String id) {
 		PartyRoom room = rooms.get(id);
@@ -178,6 +184,10 @@ public class PartyManager {
 		if (prune.discard()) {
 			log.info("Party: discarding {} — nothing left after the sweep", id);
 			discard(id);
+		}
+		if (prune.hostSessionId() != null) {
+			log.info("Party: {} lost its host to the sweep; dropping its advertisement", id);
+			hostedAds.dropHostedBy(prune.hostSessionId());
 		}
 	}
 

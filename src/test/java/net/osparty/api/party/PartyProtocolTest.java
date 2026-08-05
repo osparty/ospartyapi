@@ -25,6 +25,10 @@ class PartyProtocolTest {
 	/** The room every test here hosts in. */
 	private static final String ROOM = "r";
 
+	/** A fixed salt: these tests care that a roster carries a player id, not which one. */
+	private static final net.osparty.api.service.PlayerIdService PLAYER_IDS =
+		new net.osparty.api.service.PlayerIdService("test-salt");
+
 	private final ObjectMapper mapper = new ObjectMapper();
 	private PartyFrameHandler handler;
 	private PartyManager manager;
@@ -47,7 +51,7 @@ class PartyProtocolTest {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		bus = new LocalPartyBus();
 		adsDropped = new ArrayList<>();
-		manager = new PartyManager(mapper, new LocalPartyOwnershipService(node), node, bus, new LocalNodeLoadRegistry(), adsDropped::add, MEMBER_TIMEOUT_MS);
+		manager = new PartyManager(mapper, new LocalPartyOwnershipService(node), node, bus, new LocalNodeLoadRegistry(), adsDropped::add, MEMBER_TIMEOUT_MS, PLAYER_IDS);
 		invites = new LocalPartyAdmissionService();
 		handler = new PartyFrameHandler(manager, mapper, invites);
 		hostOut = new ArrayList<>();
@@ -391,7 +395,7 @@ class PartyProtocolTest {
 				return java.util.Set.of();
 			}
 		};
-		PartyManager manager = new PartyManager(mapper, flaky, node, new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, MEMBER_TIMEOUT_MS);
+		PartyManager manager = new PartyManager(mapper, flaky, node, new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, MEMBER_TIMEOUT_MS, PLAYER_IDS);
 		PartyFrameHandler fenced = new PartyFrameHandler(manager, mapper, invites);
 		fenced.onOpen(host);
 		fenced.onOpen(member);
@@ -455,7 +459,7 @@ class PartyProtocolTest {
 			}
 		};
 		PartyFrameHandler redirecting = new PartyFrameHandler(
-			new PartyManager(mapper, foreign, node, new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, MEMBER_TIMEOUT_MS), mapper, invites);
+			new PartyManager(mapper, foreign, node, new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, MEMBER_TIMEOUT_MS, PLAYER_IDS), mapper, invites);
 		List<String> out = new ArrayList<>();
 		FakeSession joiner = session("joiner", out);
 		redirecting.onOpen(joiner);
@@ -483,7 +487,7 @@ class PartyProtocolTest {
 		};
 		PartyManager loaded = new PartyManager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyBus(), load,
-			sessionId -> { }, MEMBER_TIMEOUT_MS);
+			sessionId -> { }, MEMBER_TIMEOUT_MS, PLAYER_IDS);
 		PartyFrameHandler placing = new PartyFrameHandler(loaded, mapper, invites);
 		List<String> out = new ArrayList<>();
 		FakeSession newHost = session("newHost", out);
@@ -679,7 +683,7 @@ class PartyProtocolTest {
 		// A timeout nothing can be fresh enough for, so the sweep sees every seat as one nobody came back to.
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		PartyManager impatient = new PartyManager(mapper, new LocalPartyOwnershipService(node), node,
-			new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, -1L);
+			new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, -1L, PLAYER_IDS);
 		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper, invites);
 		sweeping.onOpen(host);
 		sweeping.onOpen(member);
@@ -706,7 +710,7 @@ class PartyProtocolTest {
 			// -1 rather than 0: with a zero timeout a member stamped in the same millisecond as the sweep is
 			// not yet stale, which makes the assertion depend on the clock. Negative means "everything is".
 			new NodeIdentity("node-a", true), new LocalPartyBus(), new LocalNodeLoadRegistry(),
-			sessionId -> { }, -1L);
+			sessionId -> { }, -1L, PLAYER_IDS);
 		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper, invites);
 		sweeping.onOpen(host);
 		sweeping.onOpen(member);
@@ -729,7 +733,7 @@ class PartyProtocolTest {
 		// The sweep is what drops the ad, so this needs a timeout no seat can be fresh enough for.
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		PartyManager impatient = new PartyManager(mapper, new LocalPartyOwnershipService(node), node,
-			new LocalPartyBus(), new LocalNodeLoadRegistry(), adsDropped::add, -1L);
+			new LocalPartyBus(), new LocalNodeLoadRegistry(), adsDropped::add, -1L, PLAYER_IDS);
 		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper, invites);
 		sweeping.onOpen(host);
 		sendTo(sweeping, host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");

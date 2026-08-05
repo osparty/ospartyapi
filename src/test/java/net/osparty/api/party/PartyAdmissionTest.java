@@ -32,7 +32,8 @@ class PartyAdmissionTest {
 	void setUp() {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		manager = new PartyManager(mapper, new LocalPartyOwnershipService(node), node,
-			new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, 90_000L);
+			new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, 90_000L,
+			new net.osparty.api.service.PlayerIdService("test-salt"));
 		admissions = new LocalPartyAdmissionService();
 		handler = new PartyFrameHandler(manager, mapper, admissions);
 		host = new CollectingSession("host");

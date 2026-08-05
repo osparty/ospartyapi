@@ -43,7 +43,8 @@ class NettySocketServerTest {
 	void setUp() {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		manager = new PartyManager(mapper, new LocalPartyOwnershipService(node), node,
-			new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, MEMBER_TIMEOUT_MS);
+			new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, MEMBER_TIMEOUT_MS,
+			new net.osparty.api.service.PlayerIdService("test-salt"));
 		// Port 0: an ephemeral port, so the test never collides with a real run of the service.
 		// No ad board in this test: it covers the live-party path, and the board has its own suite.
 		// A real registry rather than null: the handler registers a gauge per endpoint on construction, and

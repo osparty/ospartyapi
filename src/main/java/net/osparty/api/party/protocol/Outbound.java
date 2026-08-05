@@ -225,10 +225,16 @@ public record Outbound(
 	 * as long to mean anything as their own timeout: a player whose client vanished sat there looking present
 	 * for twenty seconds. A client that predates the field falls back to that timeout, which is what it did
 	 * before this existed.
+	 *
+	 * <p>{@code playerId} is the public name for the account behind this member: stable across a rename, and
+	 * safe to show to anyone. It is what {@code accountHash} should have been on this frame all along --
+	 * the hash is the thing a client asserts to claim an identity, so putting it on a frame sent to other
+	 * people hands out the one input needed to impersonate them. Both ride the roster while clients that
+	 * only understand the hash are still connecting; the hash comes off once they are not.
 	 */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
-	public record RosterEntry(@JsonProperty("m") long memberId, String name, long accountHash, String status, String role,
-		boolean learner, boolean teacher, boolean offline) {
+	public record RosterEntry(@JsonProperty("m") long memberId, String name, long accountHash, String playerId,
+		String status, String role, boolean learner, boolean teacher, boolean offline) {
 	}
 
 	/** Builds a frame by naming only the fields it uses; everything else stays null and is omitted. */

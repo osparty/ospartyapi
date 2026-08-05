@@ -35,8 +35,8 @@ final class RoomMember {
 	 * This member as the roster reports it. {@code offline} comes from the room rather than from here: it is
 	 * a fact about the connection, and a member deliberately knows nothing about connections.
 	 */
-	Outbound.RosterEntry toRosterEntry(boolean offline) {
-		return new Outbound.RosterEntry(memberId, name, accountHash, status.name(), role, learner, teacher,
-			offline);
+	Outbound.RosterEntry toRosterEntry(boolean offline, String playerId) {
+		return new Outbound.RosterEntry(memberId, name, accountHash, playerId, status.name(), role, learner,
+			teacher, offline);
 	}
 }

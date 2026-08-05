@@ -31,6 +31,8 @@ final class PartyRoom {
 	final String nodeId;
 
 	private final ObjectMapper mapper;
+	/** Turns a member's account hash into the public id the roster carries in its place. */
+	private final net.osparty.api.service.PlayerIdService playerIds;
 	private final Object lock = new Object();
 
 	private final Map<Long, RoomMember> members = new LinkedHashMap<>();
@@ -85,11 +87,13 @@ final class PartyRoom {
 	/** The host's advertised party settings, stored and relayed verbatim (see {@link #setMeta}). */
 	private JsonNode meta;
 
-	PartyRoom(String id, String activityId, String nodeId, ObjectMapper mapper) {
+	PartyRoom(String id, String activityId, String nodeId, ObjectMapper mapper,
+		net.osparty.api.service.PlayerIdService playerIds) {
 		this.id = id;
 		this.activityId = activityId;
 		this.nodeId = nodeId;
 		this.mapper = mapper;
+		this.playerIds = playerIds;
 	}
 
 	/**
@@ -764,7 +768,7 @@ final class PartyRoom {
 	}
 
 	private Outbound.RosterEntry entryFor(RoomMember member) {
-		return member.toRosterEntry(!sessions.containsKey(member.memberId));
+		return member.toRosterEntry(!sessions.containsKey(member.memberId), playerIds.of(member.accountHash));
 	}
 
 	/**

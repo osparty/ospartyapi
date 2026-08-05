@@ -43,6 +43,12 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	private final net.osparty.api.service.BanService bans;
 	/** Announces an ad's change to every node, so nobody has to re-scan the board to find it. */
 	private final BoardChangeBus changes;
+	/**
+	 * Seats we have promised, so the live-party side can auto-admit on our record instead of on the joiner's
+	 * own say-so. Written here because this is the only place that knows both the advertisement and the room
+	 * key the party side will ask about.
+	 */
+	private final net.osparty.api.party.PartyAdmissionService admissions;
 	/** Kill switches: both lookups are reachable by the banned host's own client. */
 	private final boolean filterByHost;
 	private final boolean filterByCode;
@@ -73,6 +79,7 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		InviteBus inviteBus,
 		net.osparty.api.service.BanService bans,
 		BoardChangeBus changes,
+		net.osparty.api.party.PartyAdmissionService admissions,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-host:true}")
 		boolean filterByHost,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-code:true}")
@@ -94,6 +101,7 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		this.inviteBus = inviteBus;
 		this.bans = bans;
 		this.changes = changes;
+		this.admissions = admissions;
 		this.filterByHost = filterByHost;
 		this.filterByCode = filterByCode;
 		this.reports = reports;
@@ -469,6 +477,27 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		changes.publish(id, store.findById(id).map(Advertisement::getSeq).orElse(0L));
 	}
 
+	/**
+	 * Whether this connection may act on {@code in}'s account for the Discord/badge frames, all of which
+	 * name the account they operate on and used to act on whichever one they were given -- so one client
+	 * could read another player's Discord id, unlink them, or flip their badge.
+	 *
+	 * <p>This cannot be fixed properly here. The check that belongs in this spot is "is this connection that
+	 * account", and nothing on the socket can answer it until the connection is authenticated -- which the
+	 * clients already in the wild cannot do. So the rule is the strongest one that no existing client trips:
+	 * a connection that has said who it is has to keep saying the same thing, and one that never identified
+	 * is left alone. That closes acting on someone else's account from a session identified as your own, and
+	 * puts the rest in the log where it can be seen.
+	 */
+	private boolean actingOnOwnAccount(Subscriber sub, Inbound in, String frame) {
+		if (sub.accountHash == null || sub.accountHash.equals(in.accountHash())) {
+			return true;
+		}
+		log.warn("Refused {}: session={} identified as {} but acted on {}",
+			frame, sub.session.id(), sub.accountHash, in.accountHash());
+		return false;
+	}
+
 	private void handleStartDiscordLink(Subscriber sub, Inbound in) {
 		if (!discordLinks.isEnabled()) {
 			sendError(sub, null, "linking disabled");
@@ -476,6 +505,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		}
 		if (in.accountHash() == null || in.accountHash() == 0) {
 			sendError(sub, null, "missing accountHash");
+			return;
+		}
+		if (!actingOnOwnAccount(sub, in, "startDiscordLink")) {
+			sendError(sub, null, "not your account");
 			return;
 		}
 		String url = discordLinks.beginLink(in.accountHash());
@@ -487,6 +520,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			sendError(sub, null, "missing accountHash");
 			return;
 		}
+		if (!actingOnOwnAccount(sub, in, "unlinkDiscord")) {
+			sendError(sub, null, "not your account");
+			return;
+		}
 		discordLinks.unlink(in.accountHash());
 		log.info("Unlinked Discord for accountHash {}", in.accountHash());
 		send(sub, Outbound.discordLink(version.get(), in.accountHash(), null, null, null));
@@ -495,6 +532,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	private void handleGetDiscordLink(Subscriber sub, Inbound in) {
 		if (in.accountHash() == null || in.accountHash() == 0) {
 			sendError(sub, null, "missing accountHash");
+			return;
+		}
+		if (!actingOnOwnAccount(sub, in, "getDiscordLink")) {
+			sendError(sub, null, "not your account");
 			return;
 		}
 		DiscordLinkService.Link link = discordLinks.getByAccountHash(in.accountHash()).orElse(null);
@@ -510,6 +551,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		}
 		if (in.visible() == null) {
 			sendError(sub, null, "missing visible");
+			return;
+		}
+		if (!actingOnOwnAccount(sub, in, "setBadgeVisibility")) {
+			sendError(sub, null, "not your account");
 			return;
 		}
 		badges.setBadgesHidden(in.accountHash(), !in.visible());
@@ -583,8 +628,41 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 				sessionByName.remove(sub.name, sessionId);
 			}
 			sub.name = name;
-			sessionByName.put(name, sessionId);
+			if (mayClaimName(sub, name, sessionId)) {
+				sessionByName.put(name, sessionId);
+			}
 		}
+	}
+
+	/**
+	 * Whether this connection may become the invite destination for {@code name}.
+	 *
+	 * <p>The index used to be a plain overwrite, so claiming a name that somebody else was already connected
+	 * under redirected their invites to the claimant -- no party membership needed, and nothing the target
+	 * could notice. Identity is still self-asserted, so this cannot be settled properly until the socket is
+	 * authenticated; what it can do is stop the claim being free.
+	 *
+	 * <p>The incumbent keeps the name unless the claimant reports the same account, which is what a genuine
+	 * reconnect does -- a new session, the same player. The half-open connection problem is why this is not
+	 * simply "refuse while the incumbent is open": a client killed outright leaves a socket that still reads
+	 * as connected, and its owner has to be able to take its own name back. An incumbent that reported no
+	 * account at all is not evidence of anything and does not block the claim.
+	 */
+	private boolean mayClaimName(Subscriber sub, String name, String sessionId) {
+		String incumbentId = sessionByName.get(name);
+		if (incumbentId == null || incumbentId.equals(sessionId)) {
+			return true;
+		}
+		Subscriber incumbent = subscribers.get(incumbentId);
+		if (incumbent == null || incumbent.accountHash == null) {
+			return true;
+		}
+		if (incumbent.accountHash.equals(sub.accountHash)) {
+			return true;
+		}
+		log.info("Refused name claim: session={} name={} already held by session={} on another account",
+			sessionId, name, incumbentId);
+		return false;
 	}
 
 	/**
@@ -627,6 +705,11 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			send(sub, Outbound.inviteAck(version.get(), in.target(), true));
 			return;
 		}
+		// Promise the seat before dispatching the invite. The live-party side auto-admits on this rather than
+		// on the joiner's own `invited` flag, and the room it will ask about is keyed by the ad's passphrase
+		// -- which this is the only side to hold. Granted even if delivery then fails: an invite the target
+		// heard about by other means is still one we authorised.
+		admissions.grant(ad.getPassphrase(), target);
 		String from = (in.name() == null || in.name().isBlank()) ? ad.getHost() : in.name();
 		String frame;
 		try {
@@ -1405,6 +1488,23 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		 * Answered with the changes since, or with a whole board when it has been away too long.
 		 */
 		Long since) {
+
+		/**
+		 * Fold "no account" to null however the client spells it.
+		 *
+		 * <p>The plugin sends {@code -1} when nobody is logged in, because that is what
+		 * {@code Client.getAccountHash()} returns; this service documents {@code 0} as unknown and the checks
+		 * here are all written as {@code != 0}. Left alone, {@code -1} passes every one of them, so every
+		 * logged-out client shares a single "known" identity -- one that can be looked up in the Discord
+		 * tables, indexed for invite routing, and matched against bans.
+		 *
+		 * <p>Normalising at decode rather than at each use means a check added later cannot miss the case.
+		 */
+		Inbound {
+			if (accountHash != null && (accountHash == -1L || accountHash == 0L)) {
+				accountHash = null;
+			}
+		}
 	}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)

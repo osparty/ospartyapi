@@ -27,7 +27,7 @@ class PartyHeartbeatTest {
 		PartyManager manager = new PartyManager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyBus(),
 			new LocalNodeLoadRegistry(), sessionId -> { }, -1L);
-		PartyFrameHandler handler = new PartyFrameHandler(manager, mapper);
+		PartyFrameHandler handler = new PartyFrameHandler(manager, mapper, new LocalPartyAdmissionService());
 
 		hostARoom(handler);
 		assertThat(manager.roomCount()).isEqualTo(1);
@@ -44,7 +44,7 @@ class PartyHeartbeatTest {
 		PartyManager manager = new PartyManager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyBus(),
 			new LocalNodeLoadRegistry(), sessionId -> { }, 90_000L);
-		PartyFrameHandler handler = new PartyFrameHandler(manager, mapper);
+		PartyFrameHandler handler = new PartyFrameHandler(manager, mapper, new LocalPartyAdmissionService());
 
 		hostARoom(handler);
 

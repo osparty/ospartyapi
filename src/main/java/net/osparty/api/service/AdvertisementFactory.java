@@ -262,9 +262,18 @@ public final class AdvertisementFactory {
 		return lootRule.trim().toUpperCase();
 	}
 
+	/**
+	 * Whether {@code supplied} authorises host-only changes to an ad whose stored key is {@code stored}.
+	 *
+	 * <p>An ad with no stored key used to authorise everyone, on the reasoning that there was nothing to
+	 * check against. But the repository only ever stores non-blank keys, so a missing one does not mean
+	 * "this ad is unprotected" -- it means the write that should have saved the key did not, and the ad is
+	 * then editable and deletable by anyone who learns its id. Refusing instead costs its host the ability to
+	 * edit that one ad, which is recoverable by re-hosting; the alternative is not.
+	 */
 	public static boolean hostKeyAuthorized(String stored, String supplied) {
 		if (stored == null || stored.isBlank()) {
-			return true;
+			return false;
 		}
 		if (supplied == null) {
 			return false;

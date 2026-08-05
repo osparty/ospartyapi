@@ -34,6 +34,7 @@ class NettySocketServerTest {
 
 	private final ObjectMapper mapper = new ObjectMapper();
 	private PartyManager manager;
+	private LocalPartyAdmissionService admissions;
 	private NettySocketServer server;
 	private io.micrometer.core.instrument.simple.SimpleMeterRegistry meters;
 	private final List<WebSocketSession> clients = new ArrayList<>();
@@ -48,7 +49,9 @@ class NettySocketServerTest {
 		// A real registry rather than null: the handler registers a gauge per endpoint on construction, and
 		// that is worth exercising rather than skipping.
 		meters = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-		server = new NettySocketServer(new PartyFrameHandler(manager, mapper), null, 0, meters);
+		admissions = new LocalPartyAdmissionService();
+		server = new NettySocketServer(
+			new PartyFrameHandler(manager, mapper, admissions), null, 0, meters, false);
 		server.start();
 	}
 
@@ -74,8 +77,11 @@ class NettySocketServerTest {
 
 		Collector memberOut = new Collector(Mux.LIVE);
 		WebSocketSession member = connect("/api/ws", memberOut);
+		// Named, and granted a seat: auto-admission is keyed on the player, so an anonymous joiner has
+		// nothing for the grant to match and would land PENDING however it filled in `invited`.
+		admissions.grant("r", "Mem");
 		member.sendMessage(tagged(Mux.LIVE,
-			"{\"t\":\"join\",\"room\":\"r\",\"accountHash\":222,\"invited\":true}"));
+			"{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222,\"invited\":true}"));
 		JsonNode memberWelcome = memberOut.await("welcome");
 		assertThat(memberWelcome.get("status").asText()).isEqualTo("MEMBER");
 		long memberId = memberWelcome.get("m").asLong();

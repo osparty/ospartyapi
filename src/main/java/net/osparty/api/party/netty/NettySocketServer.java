@@ -70,15 +70,21 @@ public class NettySocketServer implements SmartLifecycle {
 
 	private volatile EventLoopGroup boss;
 	private volatile EventLoopGroup workers;
+	private final SocketRateLimiter limiter;
+
 	private volatile Channel serverChannel;
 	private volatile boolean running;
 
 	public NettySocketServer(PartyFrameHandler frames, net.osparty.api.web.ws.BoardBroadcaster board,
 		@Value("${app.socket.port:8081}") int port,
-		io.micrometer.core.instrument.MeterRegistry meters) {
+		io.micrometer.core.instrument.MeterRegistry meters,
+		// Off by default on purpose: the ceilings are a guess until the metrics say otherwise, and an
+		// enforced guess disconnects players. See SocketRateLimiter.
+		@Value("${app.socket.rate-limit.enforce:false}") boolean enforceRateLimit) {
 		this.frames = frames;
 		this.board = board;
 		this.port = port;
+		this.limiter = meters == null ? null : new SocketRateLimiter(enforceRateLimit, meters);
 		this.meters = meters;
 	}
 
@@ -91,7 +97,7 @@ public class NettySocketServer implements SmartLifecycle {
 		// Default sizing: two loops per core, each serving many connections. Sends run on the loop that owns
 		// the channel, so this is the pool the fan-out actually costs.
 		workers = new NioEventLoopGroup();
-		NettySocketHandler handler = new NettySocketHandler(frames, board, dropped, meters);
+		NettySocketHandler handler = new NettySocketHandler(frames, board, dropped, meters, limiter);
 		WebSocketServerProtocolConfig ws = WebSocketServerProtocolConfig.newBuilder()
 			// The path is checked by SocketPathHandler, which has to see it anyway to reject anything else
 			// and to decide which protocols the connection carries. No single prefix covers both endpoints

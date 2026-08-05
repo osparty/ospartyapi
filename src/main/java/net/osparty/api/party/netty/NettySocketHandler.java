@@ -54,12 +54,15 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 	 * and does it silently — they would simply stop being able to search.
 	 */
 	private final EnumMap<Route, AtomicInteger> open = new EnumMap<>(Route.class);
+	/** Observes how fast clients talk and connect. Currently records; see {@link SocketRateLimiter}. */
+	private final SocketRateLimiter limiter;
 
 	NettySocketHandler(PartyFrameHandler frames, BoardBroadcaster board, LongAdder dropped,
-		io.micrometer.core.instrument.MeterRegistry meters) {
+		io.micrometer.core.instrument.MeterRegistry meters, SocketRateLimiter limiter) {
 		this.frames = frames;
 		this.board = board;
 		this.dropped = dropped;
+		this.limiter = limiter;
 		for (Route route : new Route[] { Route.BOARD, Route.MUX }) {
 			AtomicInteger count = new AtomicInteger();
 			open.put(route, count);
@@ -106,12 +109,17 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 		SocketSession liveSession = frames == null || !tagged ? null
 			: new NettySocketSession(ctx.channel(), path, dropped, Mux.LIVE, true);
 
+		String address = clientIp(ctx, complete.requestHeaders());
+		if (limiter != null && !limiter.allowConnect(address)) {
+			ctx.close();
+			return;
+		}
 		ctx.channel().attr(CONN).set(new Conn(boardSession, liveSession, tagged, route));
 		open.get(route).incrementAndGet();
 		// After the attribute is set, both of them: opening a session can send, and a send on a channel whose
 		// connection is not yet recorded would be answered by a close callback that finds nothing to clean up.
 		if (boardSession != null) {
-			board.onOpen(boardSession, clientIp(ctx));
+			board.onOpen(boardSession, address);
 		}
 		if (liveSession != null) {
 			frames.onOpen(liveSession);
@@ -124,6 +132,11 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 		// Ping, pong and close are answered by WebSocketServerProtocolHandler. Clients send binary; text is
 		// still read so an older one is not silently ignored.
 		if (conn == null || !(frame instanceof BinaryWebSocketFrame || frame instanceof TextWebSocketFrame)) {
+			return;
+		}
+		// Counted once per frame, before the mux split, so the ceiling is on what the connection sends rather
+		// than on what any one protocol on it does.
+		if (limiter != null && !limiter.allowFrame(ctx.channel().id().asLongText())) {
 			return;
 		}
 		ByteBuf content = frame.content();
@@ -167,6 +180,9 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 
 	@Override
 	public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+		if (limiter != null) {
+			limiter.forget(ctx.channel().id().asLongText());
+		}
 		Conn conn = ctx.channel().attr(CONN).getAndSet(null);
 		if (conn != null) {
 			AtomicInteger count = open.get(conn.route());
@@ -183,8 +199,32 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 		super.channelInactive(ctx);
 	}
 
-	/** The peer address, which the ad board uses to rate-limit reports. */
-	private static String clientIp(ChannelHandlerContext ctx) {
+	/**
+	 * The client's address, which the ad board uses to rate-limit reports.
+	 *
+	 * <p>The peer address alone is the ingress, not the client: every connection arrives through Traefik, so
+	 * anything keyed on it is keyed on one value shared by the entire userbase -- a per-IP limit that either
+	 * throttles everyone at once or nobody. {@code X-Forwarded-For} is what carries the real address.
+	 *
+	 * <p>Only the <em>last</em> entry is read, and only that one is trustworthy. The header is a list the
+	 * client can start: a client sending {@code X-Forwarded-For: 1.2.3.4} has Traefik append the address it
+	 * actually came from, leaving the forged value first and the real one last. Taking the first entry -- the
+	 * usual reading, and the one that means "the original client" behind proxies you trust -- would let any
+	 * client pick its own rate-limit bucket, which is worse than sharing one.
+	 *
+	 * <p>This holds only because nothing but the ingress can reach this port: the Netty listener is behind a
+	 * ClusterIP service with no route from outside the cluster. A deployment that exposed it directly would
+	 * have to stop reading the header at all, since then there is no hop that is guaranteed to have appended.
+	 */
+	private static String clientIp(ChannelHandlerContext ctx, io.netty.handler.codec.http.HttpHeaders headers) {
+		String forwarded = headers == null ? null : headers.get("x-forwarded-for");
+		if (forwarded != null && !forwarded.isBlank()) {
+			int last = forwarded.lastIndexOf(',');
+			String address = (last < 0 ? forwarded : forwarded.substring(last + 1)).trim();
+			if (!address.isEmpty()) {
+				return address;
+			}
+		}
 		return ctx.channel().remoteAddress() instanceof java.net.InetSocketAddress address
 			? address.getAddress().getHostAddress() : null;
 	}

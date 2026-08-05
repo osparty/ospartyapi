@@ -29,4 +29,18 @@ public record AdvertisementRequest(
 	String hostRole,
 	boolean learner,
 	boolean teacher) {
+
+	/**
+	 * Fold "no account" to the zero this service treats as unknown.
+	 *
+	 * <p>The plugin sends {@code -1} when nobody is logged in, because that is what
+	 * {@code Client.getAccountHash()} returns, while everything downstream tests {@code hostAccountHash != 0}.
+	 * Without this, an ad hosted from a logged-out client is a "known" account -- and every such ad shares
+	 * the same one, so they match each other in bans, block lists and party history.
+	 */
+	public AdvertisementRequest {
+		if (hostAccountHash == -1L) {
+			hostAccountHash = 0L;
+		}
+	}
 }

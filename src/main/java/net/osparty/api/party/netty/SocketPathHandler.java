@@ -48,15 +48,41 @@ final class SocketPathHandler extends ChannelInboundHandlerAdapter {
 			ctx.fireChannelRead(msg);
 			return;
 		}
-		if (route(request.uri()) != Route.NONE) {
-			ctx.fireChannelRead(msg);
+		if (route(request.uri()) == Route.NONE) {
+			refuse(ctx, msg, HttpResponseStatus.NOT_FOUND);
 			return;
 		}
+		if (!originAllowed(request.headers().get("origin"))) {
+			refuse(ctx, msg, HttpResponseStatus.FORBIDDEN);
+			return;
+		}
+		ctx.fireChannelRead(msg);
+	}
+
+	private static void refuse(ChannelHandlerContext ctx, Object msg, HttpResponseStatus status) {
 		ReferenceCountUtil.release(msg);
 		FullHttpResponse response = new DefaultFullHttpResponse(
-			HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND, ctx.alloc().buffer(0));
+			HttpVersion.HTTP_1_1, status, ctx.alloc().buffer(0));
 		response.headers().set("content-length", 0);
 		ctx.writeAndFlush(response).addListener(io.netty.channel.ChannelFutureListener.CLOSE);
+	}
+
+	/**
+	 * Whether a handshake carrying this {@code Origin} may proceed.
+	 *
+	 * <p>Netty does not check {@code Origin} and nothing configured one, so any web page a player visited
+	 * could open a socket to this service and speak the protocol as them, in the background, from their
+	 * address. That is a different adversary from someone running a script deliberately -- it needs no
+	 * intent from the victim beyond loading a page -- and it is the one a check here removes entirely.
+	 *
+	 * <p>Absent means allowed, and that is the whole reason this is safe to ship: browsers always send the
+	 * header on a cross-origin WebSocket, and non-browser clients never do. The plugin is one of the latter
+	 * -- OkHttp sets no {@code Origin} -- so every client in the wild passes, while a page in a browser has
+	 * to name itself and is turned away. It buys nothing against a script, which simply omits the header;
+	 * the browser case is what it is for.
+	 */
+	private static boolean originAllowed(String origin) {
+		return origin == null || origin.isBlank();
 	}
 
 	/** Whether {@code uri} names an endpoint this server serves, in any of its forms. */

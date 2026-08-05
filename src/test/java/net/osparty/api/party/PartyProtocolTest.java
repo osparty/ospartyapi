@@ -22,11 +22,20 @@ class PartyProtocolTest {
 	/** Long enough that no test trips the silence sweep by accident; staleness is driven explicitly. */
 	private static final long MEMBER_TIMEOUT_MS = 90_000L;
 
+	/** The room every test here hosts in. */
+	private static final String ROOM = "r";
+
 	private final ObjectMapper mapper = new ObjectMapper();
 	private PartyFrameHandler handler;
 	private PartyManager manager;
 	private LocalPartyBus bus;
 	private List<String> adsDropped;
+	/**
+	 * Auto-admission is decided from this, never from the joiner's own {@code invited} flag, so a test that
+	 * wants a member seated in one frame says so by granting the seat first (see {@link #inviteFor}).
+	 * {@link PartyAdmissionTest} covers the rule itself.
+	 */
+	private LocalPartyAdmissionService invites;
 
 	private FakeSession host;
 	private FakeSession member;
@@ -39,7 +48,8 @@ class PartyProtocolTest {
 		bus = new LocalPartyBus();
 		adsDropped = new ArrayList<>();
 		manager = new PartyManager(mapper, new LocalPartyOwnershipService(node), node, bus, new LocalNodeLoadRegistry(), adsDropped::add, MEMBER_TIMEOUT_MS);
-		handler = new PartyFrameHandler(manager, mapper);
+		invites = new LocalPartyAdmissionService();
+		handler = new PartyFrameHandler(manager, mapper, invites);
 		hostOut = new ArrayList<>();
 		memberOut = new ArrayList<>();
 		host = session("host", hostOut);
@@ -382,10 +392,11 @@ class PartyProtocolTest {
 			}
 		};
 		PartyManager manager = new PartyManager(mapper, flaky, node, new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, MEMBER_TIMEOUT_MS);
-		PartyFrameHandler fenced = new PartyFrameHandler(manager, mapper);
+		PartyFrameHandler fenced = new PartyFrameHandler(manager, mapper, invites);
 		fenced.onOpen(host);
 		fenced.onOpen(member);
 		sendTo(fenced, host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		inviteFor("Mem");
 		sendTo(fenced, member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		long memberId = last(memberOut, "welcome").get("m").asLong();
 
@@ -444,7 +455,7 @@ class PartyProtocolTest {
 			}
 		};
 		PartyFrameHandler redirecting = new PartyFrameHandler(
-			new PartyManager(mapper, foreign, node, new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, MEMBER_TIMEOUT_MS), mapper);
+			new PartyManager(mapper, foreign, node, new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, MEMBER_TIMEOUT_MS), mapper, invites);
 		List<String> out = new ArrayList<>();
 		FakeSession joiner = session("joiner", out);
 		redirecting.onOpen(joiner);
@@ -473,7 +484,7 @@ class PartyProtocolTest {
 		PartyManager loaded = new PartyManager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyBus(), load,
 			sessionId -> { }, MEMBER_TIMEOUT_MS);
-		PartyFrameHandler placing = new PartyFrameHandler(loaded, mapper);
+		PartyFrameHandler placing = new PartyFrameHandler(loaded, mapper, invites);
 		List<String> out = new ArrayList<>();
 		FakeSession newHost = session("newHost", out);
 		placing.onOpen(newHost);
@@ -588,6 +599,7 @@ class PartyProtocolTest {
 	void aHostComingBackTakesTheRoomItLeft() throws Exception {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"accountHash\":111,\"capacity\":3}");
 		long hostId = last(hostOut, "welcome").get("m").asLong();
+		inviteFor("Mem");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222,\"invited\":true}");
 
 		handler.onClose(host.id(), "NORMAL");
@@ -648,7 +660,9 @@ class PartyProtocolTest {
 		List<String> againOut = new ArrayList<>();
 		FakeSession again = session("member-again", againOut);
 		handler.onOpen(again);
-		// Claiming to be admitted, which is what any reconnecting member claims and the server takes on trust.
+		// Coming back on a real invite -- hostWithAdmittedMember recorded one, and it has not expired. A kick
+		// outranks it: the host's decision about a person is the later one, and it is about them, not about
+		// how they were let in the first time.
 		send(again, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222,\"invited\":true}");
 
 		// They are back in the applicant queue, where the host decides again — not back in the party.
@@ -666,10 +680,11 @@ class PartyProtocolTest {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		PartyManager impatient = new PartyManager(mapper, new LocalPartyOwnershipService(node), node,
 			new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, -1L);
-		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper);
+		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper, invites);
 		sweeping.onOpen(host);
 		sweeping.onOpen(member);
 		sendTo(sweeping, host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		inviteFor("Mem");
 		sendTo(sweeping, member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		sweeping.onClose(host.id(), "NORMAL");
 
@@ -692,10 +707,11 @@ class PartyProtocolTest {
 			// not yet stale, which makes the assertion depend on the clock. Negative means "everything is".
 			new NodeIdentity("node-a", true), new LocalPartyBus(), new LocalNodeLoadRegistry(),
 			sessionId -> { }, -1L);
-		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper);
+		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper, invites);
 		sweeping.onOpen(host);
 		sweeping.onOpen(member);
 		sendTo(sweeping, host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		inviteFor("Mem");
 		sendTo(sweeping, member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		assertThat(impatient.connectedMembers()).isEqualTo(2);
 
@@ -714,7 +730,7 @@ class PartyProtocolTest {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		PartyManager impatient = new PartyManager(mapper, new LocalPartyOwnershipService(node), node,
 			new LocalPartyBus(), new LocalNodeLoadRegistry(), adsDropped::add, -1L);
-		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper);
+		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper, invites);
 		sweeping.onOpen(host);
 		sendTo(sweeping, host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 
@@ -826,6 +842,7 @@ class PartyProtocolTest {
 		List<String> lateOut = new ArrayList<>();
 		FakeSession late = session("late", lateOut);
 		handler.onOpen(late);
+		inviteFor("Late");
 		send(late, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Late\",\"invited\":true}");
 		assertThat(last(lateOut, "meta").get("meta").get("lootRule").asText()).isEqualTo("FFA");
 	}
@@ -880,7 +897,9 @@ class PartyProtocolTest {
 		List<String> deadOut = new ArrayList<>();
 		FakeSession dead = session("dead", deadOut);
 		handler.onOpen(dead);
+		inviteFor("Dead");
 		send(dead, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Dead\",\"invited\":true}");
+		inviteFor("Mem");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		long memberId = last(memberOut, "welcome").get("m").asLong();
 
@@ -908,8 +927,11 @@ class PartyProtocolTest {
 		handler.onOpen(dead);
 		handler.onOpen(leaver);
 		// Seated so the healthy member comes after the dead one in the fan-out, which is when it mattered.
+		inviteFor("Dead");
 		send(dead, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Dead\",\"invited\":true}");
+		inviteFor("Mem");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		inviteFor("Leaver");
 		send(leaver, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Leaver\",\"invited\":true}");
 		long leaverId = last(leaverOut, "welcome").get("m").asLong();
 
@@ -925,6 +947,7 @@ class PartyProtocolTest {
 	@Test
 	void hostLeavingClosesTheRoomForMembers() throws Exception {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		inviteFor("Mem");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		// Said, not merely suffered: a host that leaves has disbanded the party (see
 		// aHostComingBackTakesTheRoomItLeft for the connection simply going away).
@@ -967,9 +990,20 @@ class PartyProtocolTest {
 
 	// ---- helpers ------------------------------------------------------------
 
+	/**
+	 * Grant these players a seat in {@link #ROOM}, which is what lets a single join frame seat one as a
+	 * MEMBER. Without it the joiner is an ordinary applicant no matter what its frame claims.
+	 */
+	private void inviteFor(String... names) {
+		for (String name : names) {
+			invites.grant(ROOM, name);
+		}
+	}
+
 	/** Host a room and admit one member (an invited joiner is seated straight away); returns its id. */
 	private long hostWithAdmittedMember() throws Exception {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		inviteFor("Mem");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		return last(memberOut, "welcome").get("m").asLong();
 	}
@@ -1000,6 +1034,7 @@ class PartyProtocolTest {
 		// Once the host re-hosts, the retry seats the member for real.
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
 		memberOut.clear();
+		inviteFor("Mem");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222,\"invited\":true}");
 		assertThat(last(memberOut, "welcome")).isNotNull();
 		assertThat(last(memberOut, "welcome").get("status").asText()).isEqualTo("MEMBER");
@@ -1033,6 +1068,7 @@ class PartyProtocolTest {
 		// The host returns and rebuilds the room on the node that reclaimed it.
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"activityId\":\"cox\",\"capacity\":4}");
 		memberOut.clear();
+		inviteFor("Mem");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		assertThat(last(memberOut, "welcome").get("status").asText()).isEqualTo("MEMBER");
 	}
@@ -1041,6 +1077,7 @@ class PartyProtocolTest {
 	@Test
 	void busOwnerChangedDrainsARoomWeNoLongerOwn() throws Exception {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		inviteFor("Mem");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 		assertThat(manager.roomCount()).isEqualTo(1);
 
@@ -1068,6 +1105,7 @@ class PartyProtocolTest {
 	@Test
 	void busForceReconnectDrainsAndReleasesTheRoom() throws Exception {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		inviteFor("Mem");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
 
 		bus.listener().onForceReconnect("r");

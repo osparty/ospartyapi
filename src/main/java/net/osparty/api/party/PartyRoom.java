@@ -129,7 +129,7 @@ final class PartyRoom {
 			host.teacher = teacher;
 			seat(host, session);
 			send(session, Outbound.welcome(host.memberId, RoomMember.Status.HOST.name(), nodeId));
-			sendSnapshotTo(session);
+			sendSnapshotTo(session, host);
 			broadcastRoster();
 			oweResync(host.memberId);
 			return host.memberId;
@@ -173,7 +173,7 @@ final class PartyRoom {
 			log.info("Party seated: room={} member={} name={} status={} invited={} returning={} members={}",
 				id, member.memberId, member.name, member.status, invited, returning, members.size());
 			send(session, Outbound.welcome(member.memberId, member.status.name(), nodeId));
-			sendSnapshotTo(session);
+			sendSnapshotTo(session, member);
 			broadcastRoster();
 			oweResync(member.memberId);
 			return member.memberId;
@@ -247,6 +247,18 @@ final class PartyRoom {
 			if (changed) {
 				broadcastRoster();
 			}
+		}
+	}
+
+	/**
+	 * The name a seated member reports itself under, or null if there is no such member. Read by the frame
+	 * handler to record an admission against a player rather than against a member id, which lasts only as
+	 * long as the connection that was given it.
+	 */
+	String nameOf(long memberId) {
+		synchronized (lock) {
+			RoomMember member = members.get(memberId);
+			return member == null ? null : member.name;
 		}
 	}
 
@@ -746,13 +758,38 @@ final class PartyRoom {
 	private List<Outbound.RosterEntry> roster() {
 		List<Outbound.RosterEntry> out = new ArrayList<>(members.size());
 		for (RoomMember m : members.values()) {
-			out.add(m.toRosterEntry(!sessions.containsKey(m.memberId)));
+			out.add(entryFor(m));
 		}
 		return out;
 	}
 
+	private Outbound.RosterEntry entryFor(RoomMember member) {
+		return member.toRosterEntry(!sessions.containsKey(member.memberId));
+	}
+
+	/**
+	 * Send the roster: the whole thing to the party, and to each applicant only its own entry.
+	 *
+	 * <p>The split is the same rule as {@link #sendSnapshotTo} and has to be here too, or hiding the roster
+	 * at the seat would only postpone it until the next member moved. Applicants are few and usually none,
+	 * so the extra serialisation is paid per applicant rather than per member, and not at all by a party
+	 * with nobody waiting.
+	 */
 	private void broadcastRoster() {
-		broadcast(Outbound.roster(hostName, capacity, locked, false, discordUrl, roster()), null);
+		Outbound full = Outbound.roster(hostName, capacity, locked, false, discordUrl, roster());
+		byte[] json = serialize(full);
+		if (json == null) {
+			return;
+		}
+		for (Map.Entry<Long, SocketSession> entry : recipients()) {
+			RoomMember member = members.get(entry.getKey());
+			if (member != null && member.status == RoomMember.Status.PENDING) {
+				send(entry.getValue(), Outbound.roster(hostName, capacity, locked, false, discordUrl,
+					List.of(entryFor(member))));
+				continue;
+			}
+			sendRaw(entry.getValue(), json);
+		}
 	}
 
 	/**
@@ -760,8 +797,16 @@ final class PartyRoom {
 	 * this node owns. Peers' live state is not here — the owner does not hold any — and arrives instead from
 	 * the {@link #flushResync} round the peers answer on their next tick.
 	 */
-	private void sendSnapshotTo(SocketSession session) {
-		send(session, Outbound.roster(hostName, capacity, locked, false, discordUrl, roster()));
+	private void sendSnapshotTo(SocketSession session, RoomMember seated) {
+		// An applicant is not in the party yet and is not shown who is. The roster carries every member's
+		// account hash, so sending it before the host has decided handed those out to anyone who knew the
+		// room key -- which is on the public board -- and they are exactly what someone would need to
+		// impersonate a member later. The applicant's own entry stays, because that is how a client reads
+		// back the status it was seated with, and the party's name and settings stay, because that is what
+		// it is deciding whether to wait for.
+		List<Outbound.RosterEntry> visible = seated != null && seated.status == RoomMember.Status.PENDING
+			? List.of(entryFor(seated)) : roster();
+		send(session, Outbound.roster(hostName, capacity, locked, false, discordUrl, visible));
 		if (meta != null) {
 			send(session, Outbound.meta(meta));
 		}

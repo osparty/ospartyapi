@@ -31,11 +31,14 @@ public class PartyFrameHandler {
 
 	private final PartyManager manager;
 	private final ObjectMapper mapper;
+	/** Whether a joiner claiming a seat actually has one coming. See {@link #handleJoin}. */
+	private final PartyAdmissionService admissions;
 	private final Map<String, Ctx> contexts = new ConcurrentHashMap<>();
 
-	public PartyFrameHandler(PartyManager manager, ObjectMapper mapper) {
+	public PartyFrameHandler(PartyManager manager, ObjectMapper mapper, PartyAdmissionService admissions) {
 		this.manager = manager;
 		this.mapper = mapper;
+		this.admissions = admissions;
 	}
 
 	public void onOpen(SocketSession session) {
@@ -282,12 +285,22 @@ public class PartyFrameHandler {
 		}
 		ensureMemberId(ctx);
 		ctx.roomId = in.room();
+		String name = in.name() != null ? in.name() : ctx.name;
+		// Auto-admission runs off our own grant, never off `in.invited()`. That flag is the joiner's claim
+		// about itself, and believing it made admission to any party a matter of asserting it -- with the
+		// room key already on the public board, that was the whole door. A joiner with no grant lands
+		// PENDING and the host admits by hand, which is the ordinary path, not a failure.
+		boolean granted = admissions.isGranted(in.room(), name);
+		if (!granted && Boolean.TRUE.equals(in.invited())) {
+			log.info("Party join claimed a seat we have no grant for: session={} room={} name={}",
+				ctx.session.id(), in.room(), name);
+		}
 		// As with hosting: a member the room was still holding a seat for is seated back under its own id.
 		ctx.memberId = room.seatApplicant(ctx.memberId, ctx.session,
-			in.name() != null ? in.name() : ctx.name,
+			name,
 			in.accountHash() != null ? in.accountHash() : ctx.accountHash,
 			in.role(), Boolean.TRUE.equals(in.learner()), Boolean.TRUE.equals(in.teacher()),
-			Boolean.TRUE.equals(in.invited()));
+			granted);
 		log.info("Party join: session={} room={} member={}", ctx.session.id(), in.room(), ctx.memberId);
 	}
 
@@ -303,6 +316,11 @@ public class PartyFrameHandler {
 	 * and losing it should cost a second, not the party. A joiner arriving on a code nobody gave it still
 	 * gets the error straight away, which is the right answer to a typo. The client bounds the retries
 	 * either way, so a host that never comes ends the same way it used to, just later.
+	 *
+	 * <p>This is the one place {@code invited} is still read off the frame, and it stays there deliberately:
+	 * here the flag buys a retry hint for a room that does not exist, which grants nothing and admits nobody.
+	 * Checking the invite record instead would cost a lookup on an error path to change how fast a client
+	 * gives up. Admission itself is decided in {@link #handleJoin}, from our own record.
 	 */
 	private void sendUnowned(Ctx ctx, String room, boolean invited) {
 		if (manager.handoverPending(room) || invited) {
@@ -335,7 +353,13 @@ public class PartyFrameHandler {
 		}
 		withOwnedRoom(ctx, room -> {
 			if ("ADMIT".equals(in.action())) {
-				room.admit(ctx.memberId, in.target());
+				if (room.admit(ctx.memberId, in.target())) {
+					// Remember the host's decision, so a member that is already in the party is seated back
+					// into it rather than queued again. A room rebuilt on a new owner starts with no memory
+					// of who was admitted, and the clients cannot be believed about it -- this is that
+					// memory. Keyed on the player, because member ids die with the connection.
+					admissions.grant(room.id, room.nameOf(in.target()));
+				}
 			}
 			else if ("KICK".equals(in.action()) || "REJECT".equals(in.action())) {
 				room.remove(ctx.memberId, in.target());

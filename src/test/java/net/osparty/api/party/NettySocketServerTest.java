@@ -74,8 +74,11 @@ class NettySocketServerTest {
 
 		Collector memberOut = new Collector(Mux.LIVE);
 		WebSocketSession member = connect("/api/ws", memberOut);
-		member.sendMessage(tagged(Mux.LIVE, "{\"t\":\"join\",\"room\":\"r\",\"invited\":true}"));
-		assertThat(memberOut.await("welcome").get("status").asText()).isEqualTo("MEMBER");
+		member.sendMessage(tagged(Mux.LIVE,
+			"{\"t\":\"join\",\"room\":\"r\",\"accountHash\":222,\"invited\":true}"));
+		JsonNode memberWelcome = memberOut.await("welcome");
+		assertThat(memberWelcome.get("status").asText()).isEqualTo("MEMBER");
+		long memberId = memberWelcome.get("m").asLong();
 
 		// A live update reaching its peer is the whole job of this transport. The frame has to arrive before
 		// the flush can carry it, so the flush is driven inside the wait rather than once before it.
@@ -86,9 +89,19 @@ class NettySocketServerTest {
 		});
 		assertThat(relayed.get("u").get(0).get("s").get("currentHp").asInt()).isEqualTo(42);
 
-		// Closing the socket removes the member: the close callback is wired, not just the read path.
+		// Closing the socket releases the member's connection — the close callback is wired, not just the
+		// read path — while the room goes on holding its seat.
 		member.close(CloseStatus.NORMAL);
-		assertThat(waitFor(() -> hostOut.find("memberLeft"))).isNotNull();
+		waitFor(() -> manager.connectedMembers() == 1 ? mapper.createObjectNode() : null);
+		assertThat(hostOut.find("memberLeft")).isNull();
+
+		// So the same player dialling back in lands in the seat it left, over a real socket and all.
+		Collector againOut = new Collector(Mux.LIVE);
+		WebSocketSession again = connect("/api/ws", againOut);
+		again.sendMessage(tagged(Mux.LIVE, "{\"t\":\"join\",\"room\":\"r\",\"accountHash\":222}"));
+		JsonNode back = againOut.await("welcome");
+		assertThat(back.get("m").asLong()).isEqualTo(memberId);
+		assertThat(back.get("status").asText()).isEqualTo("MEMBER");
 	}
 
 	/** The node-hint form is a different path to the same endpoint, and the client is told where it landed. */

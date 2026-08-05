@@ -43,7 +43,12 @@ public record AdvertisementDelta(
 	 * it, which is after it advertised — so the stamp always arrives as a change to an ad the
 	 * board already holds.
 	 */
-	String node) {
+	String node,
+	/**
+	 * The searching clock, restarted because a full party stopped being full. Absent otherwise: it is set
+	 * once when the ad is created, and a client that already holds the ad already has it.
+	 */
+	Long createdAt) {
 
 	/**
 	 * {@code privateAd} under the name plugin 1.0.50 knows it by. Outbound only — a delta is never read
@@ -85,6 +90,7 @@ public record AdvertisementDelta(
 		Boolean learner = prev.isLearner() != cur.isLearner() ? cur.isLearner() : null;
 		Boolean teacher = prev.isTeacher() != cur.isTeacher() ? cur.isTeacher() : null;
 		String node = Objects.equals(prev.getNode(), cur.getNode()) ? null : cur.getNode();
+		Long createdAt = prev.getCreatedAt() == cur.getCreatedAt() ? null : cur.getCreatedAt();
 
 		if (host == null && hostAccountHash == null && hostAccountType == null
 			&& size == null && members == null && world == null
@@ -92,12 +98,12 @@ public record AdvertisementDelta(
 			&& description == null && capacity == null && lootRule == null && ironmanOnly == null && privateAd == null
 			&& minKillCount == null && minHardModeKillCount == null && invocation == null && hardMode == null
 			&& coxScale == null && requiredRoles == null && hostRole == null && learner == null && teacher == null
-			&& node == null) {
+			&& node == null && createdAt == null) {
 			return null;
 		}
 		return new AdvertisementDelta(cur.getId(), cur.getActivity(), host, hostAccountHash, hostAccountType,
 			size, members, world, layout, neededRoles, description,
 			capacity, lootRule, ironmanOnly, privateAd, minKillCount, minHardModeKillCount, invocation, hardMode,
-			coxScale, requiredRoles, hostRole, learner, teacher, node);
+			coxScale, requiredRoles, hostRole, learner, teacher, node, createdAt);
 	}
 }

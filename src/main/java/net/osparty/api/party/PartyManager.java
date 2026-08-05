@@ -313,11 +313,15 @@ public class PartyManager {
 		return rooms.size();
 	}
 
-	/** Members connected to rooms owned by this node (metrics). */
+	/**
+	 * Members connected to rooms owned by this node (metrics, and the load this node advertises for
+	 * placement). Connections rather than seats: a room holding a seat for a member whose client went away
+	 * is serving nobody on it, and placement asks what a node is carrying, not what it is remembering.
+	 */
 	public int connectedMembers() {
 		int total = 0;
 		for (PartyRoom room : rooms.values()) {
-			total += room.memberCount();
+			total += room.connectedCount();
 		}
 		return total;
 	}

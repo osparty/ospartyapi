@@ -513,28 +513,173 @@ class PartyProtocolTest {
 	}
 
 	@Test
-	void sweepingDropsMembersWhoseSocketDiedWithoutACloseCallback() throws Exception {
+	void aConnectionThatGoesAwayKeepsItsSeat() throws Exception {
 		long memberId = hostWithAdmittedMember();
 		assertThat(manager.connectedMembers()).isEqualTo(2);
 
-		// The member's socket dies without the close callback ever firing. Sends to it are silently
-		// skipped, so nothing else in the system would ever notice it had gone.
-		member.close();
+		// However the connection went — a close callback, or a socket that died without one — the member
+		// itself has not said it is leaving, and is usually back well inside the timeout.
+		handler.onClose(member.id(), "NORMAL");
 		manager.pruneRoom("r");
 
+		// The seat is still theirs: nobody is told they left, and the roster still names them.
+		assertThat(manager.prunedCount()).isZero();
+		assertThat(last(hostOut, "memberLeft")).isNull();
+		assertThat(statusOf(last(hostOut, "roster"), memberId)).isEqualTo("MEMBER");
+		assertThat(manager.roomCount()).isEqualTo(1);
+		// What did change is what the room costs this node: a held seat is serving nobody.
 		assertThat(manager.connectedMembers()).isEqualTo(1);
-		assertThat(manager.prunedCount()).isEqualTo(1);
-		// The host hears about it exactly as it would for a clean leave.
-		assertThat(last(hostOut, "memberLeft").get("m").asLong()).isEqualTo(memberId);
-		// The room survives — its host is still connected.
+	}
+
+	/**
+	 * A held seat is only useful if the party can see it is being held. Peers judge presence by silence
+	 * otherwise, and silence takes their whole timeout to mean anything — twenty seconds of a member who is
+	 * plainly not there still looking present.
+	 */
+	@Test
+	void aHeldSeatIsReportedOfflineAtOnce() throws Exception {
+		long memberId = hostWithAdmittedMember();
+		send(member, "{\"t\":\"hello\",\"accountHash\":222,\"name\":\"Mem\"}");
+		assertThat(offlineIn(last(hostOut, "roster"), memberId)).isFalse();
+
+		handler.onClose(member.id(), "NORMAL");
+
+		assertThat(offlineIn(last(hostOut, "roster"), memberId)).isTrue();
+
+		// And taking the seat back says so on the same frame, without waiting for their first update.
+		List<String> againOut = new ArrayList<>();
+		FakeSession again = session("member-again", againOut);
+		handler.onOpen(again);
+		send(again, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
+
+		assertThat(offlineIn(last(hostOut, "roster"), memberId)).isFalse();
+	}
+
+	/** The point of holding the seat: the same player comes back to it rather than applying all over again. */
+	@Test
+	void aMemberComingBackTakesItsOwnSeat() throws Exception {
+		long memberId = hostWithAdmittedMember();
+		// As a real client does: a joiner only knows its own account once it is in-game, which is usually
+		// after it was seated, so the seat learns who is in it from a later hello.
+		send(member, "{\"t\":\"hello\",\"accountHash\":222,\"name\":\"Mem\"}");
+		handler.onClose(member.id(), "NORMAL");
+
+		// A fresh connection, as a restarted client always is — the account hash is what says who it is.
+		List<String> againOut = new ArrayList<>();
+		FakeSession again = session("member-again", againOut);
+		handler.onOpen(again);
+		send(again, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
+
+		JsonNode welcome = last(againOut, "welcome");
+		// Their own member id and their own admission: not a second seat, and not a new application.
+		assertThat(welcome.get("m").asLong()).isEqualTo(memberId);
+		assertThat(welcome.get("status").asText()).isEqualTo("MEMBER");
+		assertThat(last(hostOut, "roster").get("members")).hasSize(2);
+		assertThat(manager.connectedMembers()).isEqualTo(2);
+
+		// And the connection that came back is the one the room now speaks to.
+		send(host, "{\"t\":\"update\",\"s\":{\"currentHp\":50}}");
+		manager.flushRooms();
+		assertThat(onlyUpdate(last(againOut, "mu")).get("s").get("currentHp").asInt()).isEqualTo(50);
+	}
+
+	/** A host is not a special case of coming back — except that the party is waiting for it. */
+	@Test
+	void aHostComingBackTakesTheRoomItLeft() throws Exception {
+		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"accountHash\":111,\"capacity\":3}");
+		long hostId = last(hostOut, "welcome").get("m").asLong();
+		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222,\"invited\":true}");
+
+		handler.onClose(host.id(), "NORMAL");
+		// Nobody is told the party is over, because it isn't: its host is on its way back.
+		assertThat(last(memberOut, "roster").get("closed").asBoolean()).isFalse();
 		assertThat(manager.roomCount()).isEqualTo(1);
 
-		// When the host goes the same way the room goes with it, releasing its ownership lock instead of
-		// being renewed forever.
-		host.close();
-		manager.pruneRoom("r");
-		assertThat(manager.roomCount()).isZero();
-		assertThat(manager.prunedCount()).isEqualTo(2);
+		List<String> againOut = new ArrayList<>();
+		FakeSession again = session("host-again", againOut);
+		handler.onOpen(again);
+		send(again, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"accountHash\":111,\"capacity\":3}");
+
+		JsonNode welcome = last(againOut, "welcome");
+		assertThat(welcome.get("m").asLong()).isEqualTo(hostId);
+		assertThat(welcome.get("status").asText()).isEqualTo("HOST");
+		// The member never went anywhere: same room, same roster, nobody re-admitted.
+		assertThat(last(memberOut, "roster").get("members")).hasSize(2);
+		assertThat(manager.roomCount()).isEqualTo(1);
+	}
+
+	/**
+	 * The shape a hard kill actually leaves: no close callback at all, just a socket nothing has torn down.
+	 * The relaunched client has to be recognised anyway, and the old connection's close — whenever the
+	 * network gets around to it — must not then cut off the one that replaced it.
+	 */
+	@Test
+	void aMemberComingBackPastItsOwnHalfOpenSocketKeepsTheSeat() throws Exception {
+		long memberId = hostWithAdmittedMember();
+		send(member, "{\"t\":\"hello\",\"accountHash\":222,\"name\":\"Mem\"}");
+
+		List<String> againOut = new ArrayList<>();
+		FakeSession again = session("member-again", againOut);
+		handler.onOpen(again);
+		send(again, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222}");
+
+		// One seat, taken back — not a second one beside a member nobody can reach.
+		assertThat(last(againOut, "welcome").get("m").asLong()).isEqualTo(memberId);
+		assertThat(last(hostOut, "roster").get("members")).hasSize(2);
+
+		// The abandoned socket finally closes. It speaks for nobody now, and saying so must not take the
+		// live connection's seat with it.
+		handler.onClose(member.id(), "timeout");
+
+		send(host, "{\"t\":\"update\",\"s\":{\"currentHp\":31}}");
+		manager.flushRooms();
+		assertThat(onlyUpdate(last(againOut, "mu")).get("s").get("currentHp").asInt()).isEqualTo(31);
+		assertThat(manager.connectedMembers()).isEqualTo(2);
+	}
+
+	/** Holding seats means a host can kick someone who is away — and it has to stick when they come back. */
+	@Test
+	void aKickedMemberDoesNotWalkBackInOnItsReconnect() throws Exception {
+		long memberId = hostWithAdmittedMember();
+		send(member, "{\"t\":\"hello\",\"accountHash\":222,\"name\":\"Mem\"}");
+		handler.onClose(member.id(), "NORMAL");
+		send(host, "{\"t\":\"command\",\"action\":\"KICK\",\"target\":" + memberId + "}");
+
+		List<String> againOut = new ArrayList<>();
+		FakeSession again = session("member-again", againOut);
+		handler.onOpen(again);
+		// Claiming to be admitted, which is what any reconnecting member claims and the server takes on trust.
+		send(again, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"accountHash\":222,\"invited\":true}");
+
+		// They are back in the applicant queue, where the host decides again — not back in the party.
+		assertThat(last(againOut, "welcome").get("status").asText()).isEqualTo("PENDING");
+
+		// And admitting them is the host changing its mind, which it may: the removal stops counting.
+		long backId = last(againOut, "welcome").get("m").asLong();
+		send(host, "{\"t\":\"command\",\"action\":\"ADMIT\",\"target\":" + backId + "}");
+		assertThat(statusOf(last(hostOut, "roster"), backId)).isEqualTo("MEMBER");
+	}
+
+	@Test
+	void aSeatNobodyComesBackForIsSwept() throws Exception {
+		// A timeout nothing can be fresh enough for, so the sweep sees every seat as one nobody came back to.
+		NodeIdentity node = new NodeIdentity("node-a", true);
+		PartyManager impatient = new PartyManager(mapper, new LocalPartyOwnershipService(node), node,
+			new LocalPartyBus(), new LocalNodeLoadRegistry(), sessionId -> { }, -1L);
+		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper);
+		sweeping.onOpen(host);
+		sweeping.onOpen(member);
+		sendTo(sweeping, host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+		sendTo(sweeping, member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
+		sweeping.onClose(host.id(), "NORMAL");
+
+		impatient.pruneRoom("r");
+
+		// The party ends the way it always has when its host is gone — only now after a window in which it
+		// could have come back, rather than the instant its socket dropped.
+		assertThat(last(memberOut, "roster").get("closed").asBoolean()).isTrue();
+		assertThat(impatient.roomCount()).isZero();
+		assertThat(impatient.prunedCount()).isEqualTo(2);
 	}
 
 	@Test
@@ -565,19 +710,34 @@ class PartyProtocolTest {
 
 	@Test
 	void sweepingAHostTakesItsAdvertisementWithIt() throws Exception {
+		// The sweep is what drops the ad, so this needs a timeout no seat can be fresh enough for.
+		NodeIdentity node = new NodeIdentity("node-a", true);
+		PartyManager impatient = new PartyManager(mapper, new LocalPartyOwnershipService(node), node,
+			new LocalPartyBus(), new LocalNodeLoadRegistry(), adsDropped::add, -1L);
+		PartyFrameHandler sweeping = new PartyFrameHandler(impatient, mapper);
+		sweeping.onOpen(host);
+		sendTo(sweeping, host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
+
+		// The board renews an ad for as long as its host's connection is up, and the client this sweep exists
+		// to catch — logged out of the game, still connected — keeps that connection up indefinitely, leaving
+		// the board advertising a room that no longer exists.
+		impatient.pruneRoom("r");
+
+		assertThat(adsDropped).containsExactly("host");
+	}
+
+	@Test
+	void aConnectionGoingAwayLeavesTheAdvertisementAlone() throws Exception {
 		hostWithAdmittedMember();
 
-		// Losing a member leaves the ad alone: the party is still there to join.
-		member.close();
+		// Neither seat has been given up yet, so there is still a party being advertised. The ad has its own
+		// TTL for the case where the host really is gone; nothing here should shorten it.
+		handler.onClose(member.id(), "NORMAL");
+		handler.onClose(host.id(), "NORMAL");
 		manager.pruneRoom("r");
-		assertThat(adsDropped).isEmpty();
 
-		// Losing the host does not. The board renews an ad for as long as its host's connection is up, and
-		// the client this sweep exists to catch — logged out of the game, still connected — keeps that
-		// connection up indefinitely, leaving the board advertising a room that no longer exists.
-		host.close();
-		manager.pruneRoom("r");
-		assertThat(adsDropped).containsExactly("host");
+		assertThat(adsDropped).isEmpty();
+		assertThat(manager.roomCount()).isEqualTo(1);
 	}
 
 	@Test
@@ -729,10 +889,10 @@ class PartyProtocolTest {
 
 		send(host, "{\"t\":\"update\",\"s\":{\"name\":\"Host\",\"world\":301}}");
 
-		// The healthy member still got the frame, and the room dropped only the dead peer.
+		// The healthy member still got the frame; the dead peer only lost its connection, not its seat.
 		manager.flushRooms();
 		assertThat(onlyUpdate(last(memberOut, "mu")).get("s").get("world").asInt()).isEqualTo(301);
-		assertThat(last(memberOut, "roster").get("members")).hasSize(2);
+		assertThat(last(memberOut, "roster").get("members")).hasSize(3);
 		assertThat(statusOf(last(memberOut, "roster"), memberId)).isEqualTo("MEMBER");
 	}
 
@@ -758,15 +918,17 @@ class PartyProtocolTest {
 		send(leaver, "{\"t\":\"leave\"}");
 
 		assertThat(last(memberOut, "memberLeft").get("m").asLong()).isEqualTo(leaverId);
-		// Host and the healthy member remain; the leaver and the dead peer are both gone.
-		assertThat(last(memberOut, "roster").get("members")).hasSize(2);
+		// Only the leaver said it was leaving; the dead peer keeps the seat its connection let go of.
+		assertThat(last(memberOut, "roster").get("members")).hasSize(3);
 	}
 
 	@Test
 	void hostLeavingClosesTheRoomForMembers() throws Exception {
 		send(host, "{\"t\":\"host\",\"room\":\"r\",\"hostName\":\"Host\",\"capacity\":3}");
 		send(member, "{\"t\":\"join\",\"room\":\"r\",\"name\":\"Mem\",\"invited\":true}");
-		handler.onClose(host.id(), "NORMAL");
+		// Said, not merely suffered: a host that leaves has disbanded the party (see
+		// aHostComingBackTakesTheRoomItLeft for the connection simply going away).
+		send(host, "{\"t\":\"leave\"}");
 
 		JsonNode roster = last(memberOut, "roster");
 		assertThat(roster.get("closed").asBoolean()).isTrue();
@@ -993,6 +1155,15 @@ class PartyProtocolTest {
 			}
 		}
 		return null;
+	}
+
+	private static boolean offlineIn(JsonNode roster, long memberId) {
+		for (JsonNode m : roster.get("members")) {
+			if (m.get("m").asLong() == memberId) {
+				return m.get("offline").asBoolean();
+			}
+		}
+		throw new AssertionError("member " + memberId + " is not on the roster");
 	}
 
 	private static FakeSession session(String id, List<String> out) {

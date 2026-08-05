@@ -38,6 +38,14 @@ public class Advertisement {
 	private int invocation;
 	/** Chambers of Xeric team-size scaling as advertised (e.g. "3+4"); null/empty when unset. */
 	private String coxScale;
+	/**
+	 * When this party started looking for people — which is when it was advertised, and again every time a
+	 * full one stops being full (see {@link net.osparty.api.service.AdvertisementFactory#applyUpdate}).
+	 *
+	 * <p>Named for when the advertisement was created because that is what it was, and what every client
+	 * released so far reads it as. What clients actually do with it — "searching 20m", dimming the ones that
+	 * have been at it for an hour, sorting by newest — has always wanted the answer to the other question.
+	 */
 	private long createdAt;
 	/**
 	 * Cluster-wide revision, allocated from Redis on every meaningful write and never on a TTL touch.

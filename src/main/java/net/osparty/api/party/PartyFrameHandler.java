@@ -42,7 +42,20 @@ public class PartyFrameHandler {
 	}
 
 	public void onOpen(SocketSession session) {
-		contexts.put(session.id(), new Ctx(session));
+		onOpen(session, null);
+	}
+
+	/**
+	 * @param authenticated the account this connection proved during the handshake, or null if it presented
+	 *     no credential. When set it outranks anything the connection's frames say about who they are.
+	 */
+	public void onOpen(SocketSession session, Long authenticated) {
+		Ctx ctx = new Ctx(session);
+		if (authenticated != null) {
+			ctx.authenticated = true;
+			ctx.accountHash = authenticated;
+		}
+		contexts.put(session.id(), ctx);
 		log.info("Party WS connected: session={}", session.id());
 	}
 
@@ -199,9 +212,28 @@ public class PartyFrameHandler {
 		return Boolean.TRUE.equals(in.urgent());
 	}
 
+	/**
+	 * The account a frame acts as: the one this connection proved, or the one it claims if it proved
+	 * nothing.
+	 *
+	 * <p>An authenticated connection cannot change accounts by sending a different hash. A mismatch is worth
+	 * a log line rather than a refusal -- the ordinary cause is a second character logging in on a client
+	 * that has not reconnected yet, not an attack, and dropping the frame would break that.
+	 */
+	private long identityOf(Ctx ctx, Inbound in) {
+		if (ctx.authenticated) {
+			if (in.accountHash() != null && in.accountHash() != ctx.accountHash && ctx.firstTime("identity")) {
+				log.info("Ignoring frame identity: session={} authenticated as {} but sent {}",
+					ctx.session.id(), ctx.accountHash, in.accountHash());
+			}
+			return ctx.accountHash;
+		}
+		return in.accountHash() != null ? in.accountHash() : ctx.accountHash;
+	}
+
 	private void handleHello(Ctx ctx, Inbound in) {
 		ensureMemberId(ctx);
-		if (in.accountHash() != null) {
+		if (in.accountHash() != null && !ctx.authenticated) {
 			ctx.accountHash = in.accountHash();
 		}
 		if (in.name() != null) {
@@ -246,7 +278,7 @@ public class PartyFrameHandler {
 		}
 		ensureMemberId(ctx);
 		String name = in.hostName() != null ? in.hostName() : ctx.name;
-		long accountHash = in.accountHash() != null ? in.accountHash() : ctx.accountHash;
+		long accountHash = identityOf(ctx, in);
 		ctx.roomId = in.room();
 		// The room answers with the seat it actually put us in: a host returning to a room that outlived its
 		// connection takes its own back, and this connection has to speak for that member from here on.
@@ -298,7 +330,7 @@ public class PartyFrameHandler {
 		// As with hosting: a member the room was still holding a seat for is seated back under its own id.
 		ctx.memberId = room.seatApplicant(ctx.memberId, ctx.session,
 			name,
-			in.accountHash() != null ? in.accountHash() : ctx.accountHash,
+			identityOf(ctx, in),
 			in.role(), Boolean.TRUE.equals(in.learner()), Boolean.TRUE.equals(in.teacher()),
 			granted);
 		log.info("Party join: session={} room={} member={}", ctx.session.id(), in.room(), ctx.memberId);
@@ -464,6 +496,15 @@ public class PartyFrameHandler {
 		final SocketSession session;
 		volatile long memberId;
 		volatile long accountHash;
+		/**
+		 * Whether {@link #accountHash} came from a credential rather than from a frame.
+		 *
+		 * <p>When set, the account this connection speaks for is settled and the frames cannot move it. That
+		 * is the entire point of the credential: identity stops being a field the sender fills in. When
+		 * unset the connection presented nothing, and the old behaviour stands -- it is believed, because
+		 * every client from before this existed has nothing else to offer.
+		 */
+		volatile boolean authenticated;
 		volatile String name;
 		volatile String roomId;
 		/**

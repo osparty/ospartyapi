@@ -32,6 +32,28 @@ final class SocketPathHandler extends ChannelInboundHandlerAdapter {
 	/** The ad board alone, untagged, as every version of this service served it before the merge. */
 	private static final String BOARD_PATH = "/api/v1/ws/parties";
 
+	/** The credential a client presents to say which account it is. Absent for every pre-auth client. */
+	private static final String AUTH_HEADER = "x-osparty-auth";
+
+	/**
+	 * The account this connection proved, set before the upgrade completes and true for its whole life.
+	 *
+	 * <p>Read rather than the account hash in a frame wherever identity decides anything. A frame's hash is
+	 * whatever the client typed; this is what a credential we issued resolved to.
+	 */
+	static final io.netty.util.AttributeKey<Long> AUTH_ACCOUNT =
+		io.netty.util.AttributeKey.valueOf("ospartyAuthAccount");
+
+	/** The token itself, kept only to mark it as used once the connection is established. */
+	static final io.netty.util.AttributeKey<String> AUTH_TOKEN =
+		io.netty.util.AttributeKey.valueOf("ospartyAuthToken");
+
+	private final net.osparty.api.service.AccountAuthService auth;
+
+	SocketPathHandler(net.osparty.api.service.AccountAuthService auth) {
+		this.auth = auth;
+	}
+
 	/** Which protocols a connection carries, decided once from the path it arrived on. */
 	enum Route {
 		/** Not an endpoint of this server. */
@@ -56,7 +78,33 @@ final class SocketPathHandler extends ChannelInboundHandlerAdapter {
 			refuse(ctx, msg, HttpResponseStatus.FORBIDDEN);
 			return;
 		}
+		authenticate(ctx, request.headers().get(AUTH_HEADER));
 		ctx.fireChannelRead(msg);
+	}
+
+	/**
+	 * Resolve the presented credential, before the upgrade completes, and record what it proved on the
+	 * channel.
+	 *
+	 * <p>Here rather than in a frame handler for two reasons. This handler is one instance per connection, so
+	 * it can hold per-connection state, where the frame handler is {@code @Sharable} and cannot. And it runs
+	 * while this is still an HTTP request, so the credential rides a header -- not a query string, which
+	 * proxies and access logs keep, and not a frame, which would leave a window where the connection is
+	 * established and its identity is not yet settled.
+	 *
+	 * <p>A bad token is not refused. It is simply not believed: the connection continues with no account
+	 * attached and gets whatever an unauthenticated client gets. Refusing would make an expired or
+	 * server-side-revoked credential look like an outage to a client that cannot tell the difference, and
+	 * every client from before this existed sends nothing here anyway.
+	 */
+	private void authenticate(ChannelHandlerContext ctx, String token) {
+		if (auth == null || token == null || token.isBlank()) {
+			return;
+		}
+		auth.accountFor(token).ifPresent(accountHash -> {
+			ctx.channel().attr(AUTH_ACCOUNT).set(accountHash);
+			ctx.channel().attr(AUTH_TOKEN).set(token);
+		});
 	}
 
 	private static void refuse(ChannelHandlerContext ctx, Object msg, HttpResponseStatus status) {

@@ -9,3 +9,5 @@ databaseChangeLog:
       file: db/changelog/changes/003-discord-link.yaml
   - include:
       file: db/changelog/changes/004-data-migration.yaml
+  - include:
+      file: db/changelog/changes/005-account-credential.yaml

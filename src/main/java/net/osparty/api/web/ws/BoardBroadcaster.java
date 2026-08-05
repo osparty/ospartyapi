@@ -49,6 +49,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	 * key the party side will ask about.
 	 */
 	private final net.osparty.api.party.PartyAdmissionService admissions;
+	/** Mints and resolves the per-install credential that settles who a connection is. */
+	private final net.osparty.api.service.AccountAuthService auth;
+	/** Turns an account hash into the public id other players see, so the hash itself never has to travel. */
+	private final net.osparty.api.service.PlayerIdService playerIds;
 	/** Kill switches: both lookups are reachable by the banned host's own client. */
 	private final boolean filterByHost;
 	private final boolean filterByCode;
@@ -80,6 +84,8 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		net.osparty.api.service.BanService bans,
 		BoardChangeBus changes,
 		net.osparty.api.party.PartyAdmissionService admissions,
+		net.osparty.api.service.AccountAuthService auth,
+		net.osparty.api.service.PlayerIdService playerIds,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-host:true}")
 		boolean filterByHost,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-code:true}")
@@ -102,6 +108,8 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		this.bans = bans;
 		this.changes = changes;
 		this.admissions = admissions;
+		this.auth = auth;
+		this.playerIds = playerIds;
 		this.filterByHost = filterByHost;
 		this.filterByCode = filterByCode;
 		this.reports = reports;
@@ -135,7 +143,21 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	 * needs it.
 	 */
 	public void onOpen(net.osparty.api.transport.SocketSession session, String clientIp) {
+		onOpen(session, clientIp, null);
+	}
+
+	/**
+	 * @param authenticated the account this connection proved during the handshake, or null if it presented
+	 *     no credential. When set, {@code identify} can no longer move this session onto another account and
+	 *     the Discord frames act on this one whatever they name.
+	 */
+	public void onOpen(net.osparty.api.transport.SocketSession session, String clientIp, Long authenticated) {
 		Subscriber sub = new Subscriber(session, clientIp);
+		if (authenticated != null) {
+			sub.authenticated = true;
+			sub.accountHash = authenticated;
+			sessionByAccount.put(authenticated, session.id());
+		}
 		subscribers.put(session.id(), sub);
 		log.info("WS connected: session={} (subscribers={})",
 			session.id(), subscribers.size());
@@ -615,7 +637,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	 */
 	private void handleIdentify(Subscriber sub, Inbound in) {
 		String sessionId = sub.session.id();
-		if (in.accountHash() != null && in.accountHash() != 0) {
+		// An authenticated session already knows which account it is and cannot be told otherwise. Its name
+		// is still taken from the frame below: the account is proved, the display name is not, and a name is
+		// only ever a routing label here.
+		if (in.accountHash() != null && in.accountHash() != 0 && !sub.authenticated) {
 			if (sub.accountHash != null && !sub.accountHash.equals(in.accountHash())) {
 				sessionByAccount.remove(sub.accountHash, sessionId);
 			}
@@ -632,6 +657,49 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 				sessionByName.put(name, sessionId);
 			}
 		}
+		maybeEnrol(sub, in);
+	}
+
+	/**
+	 * Issue this client a credential the first time it tells us an account we have no credential for.
+	 *
+	 * <p>This is the trust-on-first-use moment, and it is the only point in the scheme where an account hash
+	 * is taken on faith. Everything after it runs on the credential. The token is sent once, in this frame,
+	 * and never again -- we keep only its digest, so a client that loses it has to enrol afresh rather than
+	 * ask for it back.
+	 *
+	 * <p>Silent when enrolment is off, which is how it ships: a client that gets no {@code authIssued} is
+	 * expected to carry on unauthenticated, exactly as every client from before this existed already does.
+	 */
+	private void maybeEnrol(Subscriber sub, Inbound in) {
+		if (sub.authenticated || !auth.enrolmentEnabled() || in.accountHash() == null) {
+			return;
+		}
+		auth.enrol(in.accountHash(), sub.clientIp).ifPresent(issued -> {
+			sub.authenticated = true;
+			sub.accountHash = issued.accountHash();
+			sendAuthIssued(sub, issued);
+		});
+	}
+
+	/** The one delivery of a freshly minted token, alongside the public id it will be known by. */
+	private void sendAuthIssued(Subscriber sub, net.osparty.api.service.AccountAuthService.Issued issued) {
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new AuthIssued(
+				"authIssued", issued.token(), playerIds.of(issued.accountHash()), issued.firstDevice()))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver an issued credential to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
+	/**
+	 * Sent once, when a credential is minted. Its own frame rather than a variant of {@link Outbound} so the
+	 * token does not become a nullable field on every other frame this service sends.
+	 */
+	record AuthIssued(@com.fasterxml.jackson.annotation.JsonProperty("t") String type, String token,
+		String playerId, boolean firstDevice) {
 	}
 
 	/**
@@ -1457,6 +1525,12 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		volatile String activity;
 		// Self-reported identity, mirrored into sessionByAccount/sessionByName for invite routing.
 		volatile Long accountHash;
+		/**
+		 * Whether {@link #accountHash} came from a credential rather than from an {@code identify} frame.
+		 * When set, this session's account is settled: identify cannot move it, and the Discord frames act
+		 * on it whatever account they name.
+		 */
+		volatile boolean authenticated;
 		volatile String name;
 		/** Advertisements reported on this connection, so each is only reported once per session. */
 		final java.util.Set<String> reportedAdIds = java.util.concurrent.ConcurrentHashMap.newKeySet();

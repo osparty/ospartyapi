@@ -118,11 +118,15 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 		open.get(route).incrementAndGet();
 		// After the attribute is set, both of them: opening a session can send, and a send on a channel whose
 		// connection is not yet recorded would be answered by a close callback that finds nothing to clean up.
+		// Settled during the handshake by SocketPathHandler, and null for every client that presented no
+		// credential. Both protocols take it as given: from here on identity is something this connection
+		// proved, not something its frames claim.
+		Long authenticated = ctx.channel().attr(SocketPathHandler.AUTH_ACCOUNT).get();
 		if (boardSession != null) {
-			board.onOpen(boardSession, address);
+			board.onOpen(boardSession, address, authenticated);
 		}
 		if (liveSession != null) {
-			frames.onOpen(liveSession);
+			frames.onOpen(liveSession, authenticated);
 		}
 	}
 

@@ -51,7 +51,9 @@ class NettySocketServerTest {
 		meters = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
 		admissions = new LocalPartyAdmissionService();
 		server = new NettySocketServer(
-			new PartyFrameHandler(manager, mapper, admissions), null, 0, meters, false);
+			new PartyFrameHandler(manager, mapper, admissions), null, 0, meters, false,
+			new net.osparty.api.service.AccountAuthService(
+				new net.osparty.api.repository.InMemoryAccountCredentialRepository(), true));
 		server.start();
 	}
 

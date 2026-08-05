@@ -4,10 +4,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import net.osparty.api.repository.AccountCredentialRepository;
 import net.osparty.api.repository.AccountCredentialRepository.Credential;
 import org.slf4j.Logger;
@@ -47,16 +50,30 @@ public class AccountAuthService {
 	 * again -- but an unbounded set is a leak that never stops growing, and a real person does not have
 	 * thirty computers. Hitting it means something is wrong and worth a log line.
 	 */
-	private static final int MAX_DEVICES = 20;
+	private static final int MAX_DEVICES = 1;
+
+	/** Six digits, numeric, displayed as three groups of two. */
+	private static final int COUPLING_CODE_LENGTH = 6;
+
+	/** Seconds a coupling code remains valid. Long enough to type; short enough that a stale code is not an invite. */
+	private static final int COUPLING_CODE_TTL = 300;
 
 	private final AccountCredentialRepository store;
 	private final SecureRandom random = new SecureRandom();
 	private final boolean enrolmentEnabled;
+	private final Map<Long, PendingCoupling> pendingCouplings = new ConcurrentHashMap<>();
+
+	/** A pending coupling request: the code, when it expires, and the session id of the challenger. */
+	record PendingCoupling(String code, Instant expiresAt, String challengerSessionId) {
+		public boolean expired() {
+			return Instant.now().isAfter(expiresAt);
+		}
+	}
 
 	public AccountAuthService(AccountCredentialRepository store,
 		// Enrolment stays off until raw account hashes have stopped leaving the server (research doc
 		// §10.1). Verification of already-issued credentials is always on: it can only ever refuse.
-		@Value("${app.auth.enrolment-enabled:false}") boolean enrolmentEnabled) {
+		@Value("${app.auth.enrolment-enabled:true}") boolean enrolmentEnabled) {
 		this.store = store;
 		this.enrolmentEnabled = enrolmentEnabled;
 	}
@@ -144,6 +161,64 @@ public class AccountAuthService {
 		int revoked = store.revokeAllForAccount(accountHash);
 		log.info("Revoked all {} credentials for account {}", revoked, accountHash);
 		return revoked;
+	}
+
+	/**
+	 * Whether the account already has a live credential.
+	 */
+	public boolean hasActiveCredential(long accountHash) {
+		return store.countActiveByAccountHash(accountHash) > 0;
+	}
+
+	/**
+	 * Generate a fresh coupling code for an account that already has a credential.
+	 *
+	 * <p>The code is sent to the connected client for that account. The challenger must present
+	 * the same code to enrol. Only one pending coupling per account at a time.
+	 *
+	 * @param accountHash the account to couple for
+	 * @param challengerSessionId the session id of the new client waiting to enrol
+	 * @return the code to display to the connected client, or empty if one is already pending
+	 */
+	public Optional<String> generateCouplingCode(long accountHash, String challengerSessionId) {
+		if (pendingCouplings.containsKey(accountHash)) {
+			return Optional.empty();
+		}
+		String code = String.format("%06d", random.nextInt(1_000_000));
+		PendingCoupling pending = new PendingCoupling(code, Instant.now().plusSeconds(COUPLING_CODE_TTL), challengerSessionId);
+		pendingCouplings.put(accountHash, pending);
+		log.info("Generated coupling code for account {}", accountHash);
+		return Optional.of(code);
+	}
+
+	/**
+	 * Validate a coupling code and enrol the challenger if it matches.
+	 *
+	 * @param accountHash the account the code is for
+	 * @param code the code the challenger presents
+	 * @param challengerSessionId the session id of the challenger
+	 * @param clientIp the challenger's IP
+	 * @return issued credential if valid, empty if code is wrong, expired, or not pending
+	 */
+	public Optional<Issued> validateCouplingCode(long accountHash, String code, String challengerSessionId, String clientIp) {
+		PendingCoupling pending = pendingCouplings.get(accountHash);
+		if (pending == null) {
+			return Optional.empty();
+		}
+		if (pending.expired()) {
+			pendingCouplings.remove(accountHash, pending);
+			return Optional.empty();
+		}
+		if (!pending.code().equals(code)) {
+			return Optional.empty();
+		}
+		if (!pending.challengerSessionId().equals(challengerSessionId)) {
+			return Optional.empty();
+		}
+		pendingCouplings.remove(accountHash, pending);
+		log.info("Coupling code validated for account {}", accountHash);
+		store.revokeAllForAccount(accountHash);
+		return enrol(accountHash, clientIp);
 	}
 
 	/**

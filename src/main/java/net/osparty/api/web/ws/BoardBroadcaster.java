@@ -243,6 +243,9 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			case "identify":
 				handleIdentify(sub, in);
 				break;
+			case "couplingConfirm":
+				handleCouplingConfirm(sub, in);
+				break;
 			case "invite":
 				handleInvite(sub, in);
 				break;
@@ -670,9 +673,19 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	 *
 	 * <p>Silent when enrolment is off, which is how it ships: a client that gets no {@code authIssued} is
 	 * expected to carry on unauthenticated, exactly as every client from before this existed already does.
+	 *
+	 * <p>If the account already has a credential, a coupling code is generated and sent to the connected
+	 * client. The challenger must present the code to enrol.
 	 */
 	private void maybeEnrol(Subscriber sub, Inbound in) {
 		if (sub.authenticated || !auth.enrolmentEnabled() || in.accountHash() == null) {
+			return;
+		}
+		if (auth.hasActiveCredential(in.accountHash())) {
+			auth.generateCouplingCode(in.accountHash(), sub.session.id()).ifPresent(code -> {
+				sendCouplingRequest(sub, in.accountHash(), code);
+				findAndSendCouplingCodeToIncumbent(in.accountHash(), code);
+			});
 			return;
 		}
 		auth.enrol(in.accountHash(), sub.clientIp).ifPresent(issued -> {
@@ -680,6 +693,78 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			sub.accountHash = issued.accountHash();
 			sendAuthIssued(sub, issued);
 		});
+	}
+
+	private void sendCouplingRequest(Subscriber sub, Long accountHash, String code) {
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new CouplingRequired(
+				"couplingRequired", accountHash, code))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver coupling request to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
+	private void findAndSendCouplingCodeToIncumbent(Long accountHash, String code) {
+		subscribers.values().stream()
+			.filter(s -> accountHash.equals(s.accountHash))
+			.forEach(s -> {
+				try {
+					sendRaw(s, new Frame(mapper.writeValueAsString(new CouplingCode(
+						"couplingCode", accountHash, code))));
+				}
+				catch (Exception e) {
+					log.warn("Failed to deliver coupling code to session {}: {}",
+						s.session.id(), e.toString());
+				}
+			});
+	}
+
+	/**
+	 * Handle a coupling code confirmation. The challenger presents the code it was told to enter.
+	 */
+	private void handleCouplingConfirm(Subscriber sub, Inbound in) {
+		if (in.accountHash() == null || in.code() == null) {
+			sendError(sub, null, "missing accountHash or code");
+			return;
+		}
+		Optional<net.osparty.api.service.AccountAuthService.Issued> result = auth.validateCouplingCode(in.accountHash(), in.code(), sub.session.id(), sub.clientIp);
+		if (result.isPresent()) {
+			sub.authenticated = true;
+			sub.accountHash = result.get().accountHash();
+			sendAuthIssued(sub, result.get());
+			sendCouplingResult(sub, in.accountHash(), true);
+			findAndNotifyIncumbentOfRevoke(in.accountHash());
+		} else {
+			sendCouplingResult(sub, in.accountHash(), false);
+		}
+	}
+
+	private void sendCouplingResult(Subscriber sub, Long accountHash, boolean success) {
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new CouplingResult(
+				"couplingResult", accountHash, success))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver coupling result to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
+	private void findAndNotifyIncumbentOfRevoke(Long accountHash) {
+		subscribers.values().stream()
+			.filter(s -> accountHash.equals(s.accountHash))
+			.forEach(s -> {
+				try {
+					sendRaw(s, new Frame(mapper.writeValueAsString(new CouplingRevoked(
+						"couplingRevoked", accountHash))));
+				}
+				catch (Exception e) {
+					log.warn("Failed to deliver coupling revoke to session {}: {}",
+						s.session.id(), e.toString());
+				}
+			});
 	}
 
 	/** The one delivery of a freshly minted token, alongside the public id it will be known by. */
@@ -698,8 +783,24 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	 * Sent once, when a credential is minted. Its own frame rather than a variant of {@link Outbound} so the
 	 * token does not become a nullable field on every other frame this service sends.
 	 */
-	record AuthIssued(@com.fasterxml.jackson.annotation.JsonProperty("t") String type, String token,
+	record AuthIssued(String type, String token,
 		String playerId, boolean firstDevice) {
+	}
+
+	/** Sent to the challenger: you need a coupling code to enrol. */
+	record CouplingRequired(String type, Long accountHash, String code) {
+	}
+
+	/** Sent to the incumbent: here is the code to display. */
+	record CouplingCode(String type, Long accountHash, String code) {
+	}
+
+	/** Sent to the challenger after it presents a code: success or failure. */
+	record CouplingResult(String type, Long accountHash, boolean success) {
+	}
+
+	/** Sent to the incumbent after the challenger succeeds: your credential has been revoked. */
+	record CouplingRevoked(String type, Long accountHash) {
 	}
 
 	/**

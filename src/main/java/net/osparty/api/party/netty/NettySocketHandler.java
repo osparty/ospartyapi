@@ -122,8 +122,12 @@ final class NettySocketHandler extends SimpleChannelInboundHandler<WebSocketFram
 		// credential. Both protocols take it as given: from here on identity is something this connection
 		// proved, not something its frames claim.
 		Long authenticated = ctx.channel().attr(SocketPathHandler.AUTH_ACCOUNT).get();
+		// Client-reported and unverified, same footing as X-OSParty-Client -- used only as a fresh
+		// enrolment's initial device label, never to decide anything.
+		String deviceLabel = complete.requestHeaders() == null ? null
+			: complete.requestHeaders().get("x-osparty-device");
 		if (boardSession != null) {
-			board.onOpen(boardSession, address, authenticated);
+			board.onOpen(boardSession, address, authenticated, deviceLabel);
 		}
 		if (liveSession != null) {
 			frames.onOpen(liveSession, authenticated);

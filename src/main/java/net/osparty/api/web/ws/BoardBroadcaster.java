@@ -143,7 +143,7 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	 * needs it.
 	 */
 	public void onOpen(net.osparty.api.transport.SocketSession session, String clientIp) {
-		onOpen(session, clientIp, null);
+		onOpen(session, clientIp, null, null);
 	}
 
 	/**
@@ -152,7 +152,16 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	 *     the Discord frames act on this one whatever they name.
 	 */
 	public void onOpen(net.osparty.api.transport.SocketSession session, String clientIp, Long authenticated) {
-		Subscriber sub = new Subscriber(session, clientIp);
+		onOpen(session, clientIp, authenticated, null);
+	}
+
+	/**
+	 * @param deviceLabel a client-reported name for this device (e.g. its hostname), carried only as far as
+	 *     an enrolment that happens on this connection -- see {@link AccountAuthService#enrol}.
+	 */
+	public void onOpen(net.osparty.api.transport.SocketSession session, String clientIp, Long authenticated,
+		String deviceLabel) {
+		Subscriber sub = new Subscriber(session, clientIp, deviceLabel);
 		if (authenticated != null) {
 			sub.authenticated = true;
 			sub.accountHash = authenticated;
@@ -251,6 +260,9 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 				break;
 			case "revokeDevice":
 				handleRevokeDevice(sub, in);
+				break;
+			case "renameDevice":
+				handleRenameDevice(sub, in);
 				break;
 			case "invite":
 				handleInvite(sub, in);
@@ -706,7 +718,7 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			});
 			return;
 		}
-		auth.enrol(in.accountHash(), sub.clientIp).ifPresent(issued -> {
+		auth.enrol(in.accountHash(), sub.clientIp, sub.deviceLabel).ifPresent(issued -> {
 			sub.authenticated = true;
 			sub.accountHash = issued.accountHash();
 			sendAuthIssued(sub, issued);
@@ -773,7 +785,8 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			sendError(sub, null, "missing accountHash or code");
 			return;
 		}
-		Optional<net.osparty.api.service.AccountAuthService.Issued> result = auth.validateCouplingCode(in.accountHash(), in.code(), sub.session.id(), sub.clientIp);
+		Optional<net.osparty.api.service.AccountAuthService.Issued> result = auth.validateCouplingCode(
+			in.accountHash(), in.code(), sub.session.id(), sub.clientIp, sub.deviceLabel);
 		if (result.isPresent()) {
 			sub.authenticated = true;
 			sub.accountHash = result.get().accountHash();
@@ -840,6 +853,31 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		}
 	}
 
+	/**
+	 * Rename one of the caller's own devices. Purely cosmetic -- the label is never read for anything but
+	 * display, so there is nothing here to validate beyond ownership, which {@link AccountAuthService#renameDevice}
+	 * already enforces the same way {@code revokeDevice} does.
+	 */
+	private void handleRenameDevice(Subscriber sub, Inbound in) {
+		if (!sub.authenticated) {
+			sendError(sub, null, "not authenticated");
+			return;
+		}
+		if (in.deviceId() == null || in.deviceId().isBlank()) {
+			sendError(sub, null, "missing deviceId");
+			return;
+		}
+		boolean renamed = auth.renameDevice(sub.accountHash, in.deviceId(), in.label());
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(
+				new DeviceRenamed("deviceRenamed", in.deviceId(), renamed))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver device rename result to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
 	/** One row of {@link Devices}. {@code id} is the token's stored digest -- see revokeDevice's doc. */
 	record DeviceSummary(String id, String label, long issuedAt, long lastSeenAt) {
 	}
@@ -848,6 +886,9 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	}
 
 	record DeviceRevoked(String type, String deviceId, boolean success) {
+	}
+
+	record DeviceRenamed(String type, String deviceId, boolean success) {
 	}
 
 	private void sendCouplingResult(Subscriber sub, Long accountHash, boolean success) {
@@ -1746,6 +1787,8 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		final net.osparty.api.transport.SocketSession session;
 		/** Captured at the handshake: the seam carries frames, not the servlet's attribute bag. */
 		final String clientIp;
+		/** Captured at the handshake, as reported by the client. Used only as an enrolment's initial label. */
+		final String deviceLabel;
 		volatile boolean subscribed;
 		/** Whether this client asked for gzipped binary frames rather than JSON text. */
 		volatile boolean compressed;
@@ -1767,8 +1810,9 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		 */
 		final java.util.Set<String> warnedTypes = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-		Subscriber(net.osparty.api.transport.SocketSession session, String clientIp) {
+		Subscriber(net.osparty.api.transport.SocketSession session, String clientIp, String deviceLabel) {
 			this.clientIp = clientIp;
+			this.deviceLabel = deviceLabel;
 			this.session = session;
 		}
 
@@ -1780,8 +1824,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 
 	record Inbound(String type, String activity, AdvertisementRequest request, AdvertisementUpdate patch, String id, String key,
 		String code, String host, Long accountHash, Boolean visible, String newKey, String name, String target,
-		/** Sent with {@code revokeDevice}: the id (token digest) of the device to withdraw. */
+		/** Sent with {@code revokeDevice}/{@code renameDevice}: the id (token digest) of the target device. */
 		String deviceId,
+		/** Sent with {@code renameDevice}: the new label. */
+		String label,
 		/** Sent with {@code transferHost}: the incoming host's account type, which re-stamps the ad's badge. */
 		String hostAccountType,
 		/** Sent with {@code subscribe}: this client can read gzipped binary frames. Absent means it cannot. */

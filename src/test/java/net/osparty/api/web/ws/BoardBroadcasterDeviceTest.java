@@ -72,7 +72,7 @@ class BoardBroadcasterDeviceTest {
 
 	@Test
 	void anAuthenticatedSessionListsItsOwnDevice() throws Exception {
-		auth.enrol(4242L, null);
+		auth.enrol(4242L, null, null);
 
 		send(session, "{\"type\":\"listDevices\"}");
 
@@ -83,7 +83,7 @@ class BoardBroadcasterDeviceTest {
 
 	@Test
 	void anUnauthenticatedSessionCannotRevokeADevice() throws Exception {
-		auth.enrol(4242L, null);
+		auth.enrol(4242L, null, null);
 		String deviceId = auth.devices(4242L).get(0).tokenHash();
 		CollectingSession stranger = new CollectingSession("stranger");
 		board.onOpen(stranger, "9.9.9.9");
@@ -100,7 +100,7 @@ class BoardBroadcasterDeviceTest {
 	 */
 	@Test
 	void aSessionCannotRevokeAnotherAccountsDeviceByNamingItsHash() throws Exception {
-		auth.enrol(9999L, null);
+		auth.enrol(9999L, null, null);
 		String otherDeviceId = auth.devices(9999L).get(0).tokenHash();
 
 		// session is authenticated as 4242; the frame tries to act on 9999's device anyway.
@@ -114,7 +114,7 @@ class BoardBroadcasterDeviceTest {
 
 	@Test
 	void anAuthenticatedSessionRevokesItsOwnDeviceById() throws Exception {
-		auth.enrol(4242L, null);
+		auth.enrol(4242L, null, null);
 		String deviceId = auth.devices(4242L).get(0).tokenHash();
 
 		send(session, "{\"type\":\"revokeDevice\",\"deviceId\":\"" + deviceId + "\"}");
@@ -123,6 +123,48 @@ class BoardBroadcasterDeviceTest {
 		assertThat(result.path("success").asBoolean()).isTrue();
 		assertThat(result.path("deviceId").asText()).isEqualTo(deviceId);
 		assertThat(auth.devices(4242L)).isEmpty();
+	}
+
+	@Test
+	void anUnauthenticatedSessionCannotRenameADevice() throws Exception {
+		auth.enrol(4242L, null, "Desktop");
+		String deviceId = auth.devices(4242L).get(0).tokenHash();
+		CollectingSession stranger = new CollectingSession("stranger");
+		board.onOpen(stranger, "9.9.9.9");
+
+		send(stranger, "{\"type\":\"renameDevice\",\"deviceId\":\"" + deviceId + "\",\"label\":\"Not mine\"}");
+
+		assertThat(last(stranger, "deviceRenamed")).isNull();
+		assertThat(auth.devices(4242L)).singleElement()
+			.satisfies(d -> assertThat(d.label()).isEqualTo("Desktop")); // untouched
+	}
+
+	@Test
+	void aSessionCannotRenameAnotherAccountsDeviceByNamingItsHash() throws Exception {
+		auth.enrol(9999L, null, "Other's PC");
+		String otherDeviceId = auth.devices(9999L).get(0).tokenHash();
+
+		send(session, "{\"type\":\"renameDevice\",\"accountHash\":9999,\"deviceId\":\"" + otherDeviceId
+			+ "\",\"label\":\"Mine now\"}");
+
+		JsonNode result = last(session, "deviceRenamed");
+		assertThat(result.path("success").asBoolean()).isFalse();
+		assertThat(auth.devices(9999L)).singleElement()
+			.satisfies(d -> assertThat(d.label()).isEqualTo("Other's PC")); // untouched
+	}
+
+	@Test
+	void anAuthenticatedSessionRenamesItsOwnDevice() throws Exception {
+		auth.enrol(4242L, null, "Desktop");
+		String deviceId = auth.devices(4242L).get(0).tokenHash();
+
+		send(session, "{\"type\":\"renameDevice\",\"deviceId\":\"" + deviceId + "\",\"label\":\"Home PC\"}");
+
+		JsonNode result = last(session, "deviceRenamed");
+		assertThat(result.path("success").asBoolean()).isTrue();
+		assertThat(result.path("deviceId").asText()).isEqualTo(deviceId);
+		assertThat(auth.devices(4242L)).singleElement()
+			.satisfies(d -> assertThat(d.label()).isEqualTo("Home PC"));
 	}
 
 	private void send(CollectingSession s, String json) throws Exception {

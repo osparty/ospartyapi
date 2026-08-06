@@ -104,8 +104,12 @@ public class AccountAuthService {
 	/**
 	 * Issue a credential binding {@code accountHash} to the machine that asked, or empty when enrolment is
 	 * off or the account already has more machines than makes sense.
+	 *
+	 * @param label a client-reported name for the device (e.g. its hostname), shown back in the device list
+	 *     so "which one is this" has an answer better than a bare timestamp. Best-effort and unverified --
+	 *     purely a display convenience, never used to decide anything. Null when the client sent none.
 	 */
-	public Optional<Issued> enrol(long accountHash, String clientIp) {
+	public Optional<Issued> enrol(long accountHash, String clientIp, String label) {
 		if (!enrolmentEnabled) {
 			return Optional.empty();
 		}
@@ -126,7 +130,7 @@ public class AccountAuthService {
 			return Optional.empty();
 		}
 		String token = mintToken();
-		store.insert(hash(token), accountHash, null);
+		store.insert(hash(token), accountHash, sanitizeLabel(label));
 		store.logEnrolment(accountHash, clientIp, true);
 		log.info("Enrolled the first device for account {}", accountHash);
 		return Optional.of(new Issued(token, accountHash, true));
@@ -172,6 +176,26 @@ public class AccountAuthService {
 		}
 		store.revoke(deviceId);
 		log.info("Revoked device for account {}", accountHash);
+		return true;
+	}
+
+	/**
+	 * Rename one of the caller's own devices. Same ownership check and the same reason for it as
+	 * {@link #revokeDevice} -- {@code deviceId} is a digest, not a secret, so nothing stops a session from
+	 * naming another account's device id here without this check.
+	 *
+	 * @return whether a device was actually renamed -- false for an unknown id, one already revoked, or one
+	 *     belonging to a different account.
+	 */
+	public boolean renameDevice(long accountHash, String deviceId, String label) {
+		if (deviceId == null || deviceId.isBlank()) {
+			return false;
+		}
+		Optional<Credential> found = store.findByTokenHash(deviceId);
+		if (found.isEmpty() || !found.get().active() || found.get().accountHash() != accountHash) {
+			return false;
+		}
+		store.updateLabel(deviceId, sanitizeLabel(label));
 		return true;
 	}
 
@@ -225,10 +249,11 @@ public class AccountAuthService {
 	 * @param code the code the challenger presents
 	 * @param challengerSessionId the session id of the challenger
 	 * @param clientIp the challenger's IP
+	 * @param label the challenger's device label, as in {@link #enrol}
 	 * @return issued credential if valid, empty if code is wrong, expired, or not pending
 	 */
 	public Optional<Issued> validateCouplingCode(long accountHash, String code, String challengerSessionId,
-		String clientIp) {
+		String clientIp, String label) {
 		Optional<CouplingCodeStore.Pending> found = couplings.get(accountHash);
 		if (found.isEmpty()) {
 			return Optional.empty();
@@ -251,7 +276,7 @@ public class AccountAuthService {
 		// Adds a machine. The one that displayed the code keeps working: the point of coupling is to let
 		// somebody prove they hold the account's existing machine, not to make them give it up. An account
 		// ends up with the set of machines its owner has actually stood in front of.
-		return enrolCoupled(accountHash, clientIp);
+		return enrolCoupled(accountHash, clientIp, label);
 	}
 
 	/**
@@ -260,17 +285,33 @@ public class AccountAuthService {
 	 * <p>Separate from {@link #enrol} because that one refuses an account which already has a credential --
 	 * which is what sends a second machine here in the first place.
 	 */
-	private Optional<Issued> enrolCoupled(long accountHash, String clientIp) {
+	private Optional<Issued> enrolCoupled(long accountHash, String clientIp, String label) {
 		int existing = store.countActiveByAccountHash(accountHash);
 		if (existing >= MAX_DEVICES) {
 			log.warn("Refusing coupled enrolment for account {}: already has {} devices", accountHash, existing);
 			return Optional.empty();
 		}
 		String token = mintToken();
-		store.insert(hash(token), accountHash, null);
+		store.insert(hash(token), accountHash, sanitizeLabel(label));
 		store.logEnrolment(accountHash, clientIp, false);
 		log.info("Coupled a device for account {} (device {} of this account)", accountHash, existing + 1);
 		return Optional.of(new Issued(token, accountHash, false));
+	}
+
+	/**
+	 * A client-reported device label, made safe to store: trimmed, capped to the column's width, and folded
+	 * to null when blank so the UI's "no label" fallback (the enrolment date) kicks in instead of showing an
+	 * empty string.
+	 */
+	private static String sanitizeLabel(String label) {
+		if (label == null) {
+			return null;
+		}
+		String trimmed = label.trim();
+		if (trimmed.isEmpty()) {
+			return null;
+		}
+		return trimmed.length() > 64 ? trimmed.substring(0, 64) : trimmed;
 	}
 
 	private String mintToken() {

@@ -43,6 +43,16 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	private final net.osparty.api.service.BanService bans;
 	/** Announces an ad's change to every node, so nobody has to re-scan the board to find it. */
 	private final BoardChangeBus changes;
+	/**
+	 * Seats we have promised, so the live-party side can auto-admit on our record instead of on the joiner's
+	 * own say-so. Written here because this is the only place that knows both the advertisement and the room
+	 * key the party side will ask about.
+	 */
+	private final net.osparty.api.party.PartyAdmissionService admissions;
+	/** Mints and resolves the per-install credential that settles who a connection is. */
+	private final net.osparty.api.service.AccountAuthService auth;
+	/** Turns an account hash into the public id other players see, so the hash itself never has to travel. */
+	private final net.osparty.api.service.PlayerIdService playerIds;
 	/** Kill switches: both lookups are reachable by the banned host's own client. */
 	private final boolean filterByHost;
 	private final boolean filterByCode;
@@ -73,6 +83,9 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		InviteBus inviteBus,
 		net.osparty.api.service.BanService bans,
 		BoardChangeBus changes,
+		net.osparty.api.party.PartyAdmissionService admissions,
+		net.osparty.api.service.AccountAuthService auth,
+		net.osparty.api.service.PlayerIdService playerIds,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-host:true}")
 		boolean filterByHost,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-code:true}")
@@ -94,6 +107,9 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		this.inviteBus = inviteBus;
 		this.bans = bans;
 		this.changes = changes;
+		this.admissions = admissions;
+		this.auth = auth;
+		this.playerIds = playerIds;
 		this.filterByHost = filterByHost;
 		this.filterByCode = filterByCode;
 		this.reports = reports;
@@ -127,7 +143,21 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	 * needs it.
 	 */
 	public void onOpen(net.osparty.api.transport.SocketSession session, String clientIp) {
+		onOpen(session, clientIp, null);
+	}
+
+	/**
+	 * @param authenticated the account this connection proved during the handshake, or null if it presented
+	 *     no credential. When set, {@code identify} can no longer move this session onto another account and
+	 *     the Discord frames act on this one whatever they name.
+	 */
+	public void onOpen(net.osparty.api.transport.SocketSession session, String clientIp, Long authenticated) {
 		Subscriber sub = new Subscriber(session, clientIp);
+		if (authenticated != null) {
+			sub.authenticated = true;
+			sub.accountHash = authenticated;
+			sessionByAccount.put(authenticated, session.id());
+		}
 		subscribers.put(session.id(), sub);
 		log.info("WS connected: session={} (subscribers={})",
 			session.id(), subscribers.size());
@@ -212,6 +242,15 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 				break;
 			case "identify":
 				handleIdentify(sub, in);
+				break;
+			case "couplingConfirm":
+				handleCouplingConfirm(sub, in);
+				break;
+			case "listDevices":
+				handleListDevices(sub);
+				break;
+			case "revokeDevice":
+				handleRevokeDevice(sub, in);
 				break;
 			case "invite":
 				handleInvite(sub, in);
@@ -298,7 +337,7 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	}
 
 	private Advertisement enriched(Advertisement ad) {
-		return ad == null ? null : badges.enrichAds(List.of(ad)).get(0);
+		return ad == null ? null : playerIds.enrichAds(badges.enrichAds(List.of(ad))).get(0);
 	}
 
 	private void handleUpdate(Subscriber sub, Inbound in) {
@@ -469,6 +508,27 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		changes.publish(id, store.findById(id).map(Advertisement::getSeq).orElse(0L));
 	}
 
+	/**
+	 * Whether this connection may act on {@code in}'s account for the Discord/badge frames, all of which
+	 * name the account they operate on and used to act on whichever one they were given -- so one client
+	 * could read another player's Discord id, unlink them, or flip their badge.
+	 *
+	 * <p>This cannot be fixed properly here. The check that belongs in this spot is "is this connection that
+	 * account", and nothing on the socket can answer it until the connection is authenticated -- which the
+	 * clients already in the wild cannot do. So the rule is the strongest one that no existing client trips:
+	 * a connection that has said who it is has to keep saying the same thing, and one that never identified
+	 * is left alone. That closes acting on someone else's account from a session identified as your own, and
+	 * puts the rest in the log where it can be seen.
+	 */
+	private boolean actingOnOwnAccount(Subscriber sub, Inbound in, String frame) {
+		if (sub.accountHash == null || sub.accountHash.equals(in.accountHash())) {
+			return true;
+		}
+		log.warn("Refused {}: session={} identified as {} but acted on {}",
+			frame, sub.session.id(), sub.accountHash, in.accountHash());
+		return false;
+	}
+
 	private void handleStartDiscordLink(Subscriber sub, Inbound in) {
 		if (!discordLinks.isEnabled()) {
 			sendError(sub, null, "linking disabled");
@@ -476,6 +536,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		}
 		if (in.accountHash() == null || in.accountHash() == 0) {
 			sendError(sub, null, "missing accountHash");
+			return;
+		}
+		if (!actingOnOwnAccount(sub, in, "startDiscordLink")) {
+			sendError(sub, null, "not your account");
 			return;
 		}
 		String url = discordLinks.beginLink(in.accountHash());
@@ -487,6 +551,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			sendError(sub, null, "missing accountHash");
 			return;
 		}
+		if (!actingOnOwnAccount(sub, in, "unlinkDiscord")) {
+			sendError(sub, null, "not your account");
+			return;
+		}
 		discordLinks.unlink(in.accountHash());
 		log.info("Unlinked Discord for accountHash {}", in.accountHash());
 		send(sub, Outbound.discordLink(version.get(), in.accountHash(), null, null, null));
@@ -495,6 +563,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	private void handleGetDiscordLink(Subscriber sub, Inbound in) {
 		if (in.accountHash() == null || in.accountHash() == 0) {
 			sendError(sub, null, "missing accountHash");
+			return;
+		}
+		if (!actingOnOwnAccount(sub, in, "getDiscordLink")) {
+			sendError(sub, null, "not your account");
 			return;
 		}
 		DiscordLinkService.Link link = discordLinks.getByAccountHash(in.accountHash()).orElse(null);
@@ -510,6 +582,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		}
 		if (in.visible() == null) {
 			sendError(sub, null, "missing visible");
+			return;
+		}
+		if (!actingOnOwnAccount(sub, in, "setBadgeVisibility")) {
+			sendError(sub, null, "not your account");
 			return;
 		}
 		badges.setBadgesHidden(in.accountHash(), !in.visible());
@@ -570,7 +646,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	 */
 	private void handleIdentify(Subscriber sub, Inbound in) {
 		String sessionId = sub.session.id();
-		if (in.accountHash() != null && in.accountHash() != 0) {
+		// An authenticated session already knows which account it is and cannot be told otherwise. Its name
+		// is still taken from the frame below: the account is proved, the display name is not, and a name is
+		// only ever a routing label here.
+		if (in.accountHash() != null && in.accountHash() != 0 && !sub.authenticated) {
 			if (sub.accountHash != null && !sub.accountHash.equals(in.accountHash())) {
 				sessionByAccount.remove(sub.accountHash, sessionId);
 			}
@@ -583,8 +662,302 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 				sessionByName.remove(sub.name, sessionId);
 			}
 			sub.name = name;
-			sessionByName.put(name, sessionId);
+			if (mayClaimName(sub, name, sessionId)) {
+				sessionByName.put(name, sessionId);
+			}
 		}
+		maybeEnrol(sub, in);
+	}
+
+	/**
+	 * Issue this client a credential the first time it tells us an account we have no credential for.
+	 *
+	 * <p>This is the trust-on-first-use moment, and it is the only point in the scheme where an account hash
+	 * is taken on faith. Everything after it runs on the credential. The token is sent once, in this frame,
+	 * and never again -- we keep only its digest, so a client that loses it has to enrol afresh rather than
+	 * ask for it back.
+	 *
+	 * <p>Silent when enrolment is off, which is how it ships: a client that gets no {@code authIssued} is
+	 * expected to carry on unauthenticated, exactly as every client from before this existed already does.
+	 *
+	 * <p>If the account already has a credential, a coupling code is generated and sent to the connected
+	 * client. The challenger must present the code to enrol.
+	 */
+	private void maybeEnrol(Subscriber sub, Inbound in) {
+		if (sub.authenticated || !auth.enrolmentEnabled() || in.accountHash() == null) {
+			return;
+		}
+		if (auth.hasActiveCredential(in.accountHash())) {
+			auth.generateCouplingCode(in.accountHash(), sub.session.id()).ifPresent(code -> {
+				// The code goes to the machine that already holds the credential, and to nothing else. The
+				// challenger is told only that it needs one: it has to be read off the other machine by the
+				// person who owns both, which is the only thing here that a stranger cannot do. Sending the
+				// code to the challenger as well would hand it to anyone who names an account hash -- and
+				// since confirming revokes the incumbent, that is worse than not asking at all.
+				int reached = sendCouplingCodeToIncumbent(in.accountHash(), code);
+				if (reached == 0) {
+					// Nothing to read the code off. Say so rather than leaving the challenger waiting on a
+					// number that was never displayed anywhere.
+					auth.cancelCoupling(in.accountHash());
+					sendCouplingUnavailable(sub, in.accountHash());
+					return;
+				}
+				sendCouplingRequired(sub, in.accountHash());
+			});
+			return;
+		}
+		auth.enrol(in.accountHash(), sub.clientIp).ifPresent(issued -> {
+			sub.authenticated = true;
+			sub.accountHash = issued.accountHash();
+			sendAuthIssued(sub, issued);
+		});
+	}
+
+	/** Tell the challenger a code is needed. Carries no code: knowing it is the whole test. */
+	private void sendCouplingRequired(Subscriber sub, Long accountHash) {
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new CouplingRequired(
+				"couplingRequired", accountHash))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver coupling request to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
+	/** Tell the challenger there is no machine online to read a code off, so it cannot proceed now. */
+	private void sendCouplingUnavailable(Subscriber sub, Long accountHash) {
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new CouplingResult(
+				"couplingUnavailable", accountHash, false))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver coupling unavailable to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
+	/**
+	 * Show the code on the machines that already hold a credential for this account.
+	 *
+	 * <p>Authenticated sessions only. {@code Subscriber.accountHash} is also set from an {@code identify}
+	 * frame, which anybody can send naming anybody -- so matching on it alone would deliver the code to a
+	 * session that merely claimed the account, which is exactly the session the code exists to keep out.
+	 *
+	 * @return how many machines were shown the code; zero means nobody can read it.
+	 */
+	private int sendCouplingCodeToIncumbent(Long accountHash, String code) {
+		int reached = 0;
+		for (Subscriber s : subscribers.values()) {
+			if (!s.authenticated || !accountHash.equals(s.accountHash)) {
+				continue;
+			}
+			try {
+				sendRaw(s, new Frame(mapper.writeValueAsString(new CouplingCode(
+					"couplingCode", accountHash, code))));
+				reached++;
+			}
+			catch (Exception e) {
+				log.warn("Failed to deliver coupling code to session {}: {}",
+					s.session.id(), e.toString());
+			}
+		}
+		return reached;
+	}
+
+	/**
+	 * Handle a coupling code confirmation. The challenger presents the code it was told to enter.
+	 */
+	private void handleCouplingConfirm(Subscriber sub, Inbound in) {
+		if (in.accountHash() == null || in.code() == null) {
+			sendError(sub, null, "missing accountHash or code");
+			return;
+		}
+		Optional<net.osparty.api.service.AccountAuthService.Issued> result = auth.validateCouplingCode(in.accountHash(), in.code(), sub.session.id(), sub.clientIp);
+		if (result.isPresent()) {
+			sub.authenticated = true;
+			sub.accountHash = result.get().accountHash();
+			sendAuthIssued(sub, result.get());
+			sendCouplingResult(sub, in.accountHash(), true);
+			// The machines that were already on this account keep their credentials -- coupling adds one.
+			// They are told so the user sees, on the screen they read the code off, that it was used.
+			notifyIncumbentOfCoupling(in.accountHash(), sub.session.id());
+		} else {
+			sendCouplingResult(sub, in.accountHash(), false);
+		}
+	}
+
+	/**
+	 * List the machines currently entitled to speak for the caller's own account.
+	 *
+	 * <p>Requires {@code sub.authenticated}: managing devices is something an account does to itself, and
+	 * the only account this connection can act as is the one its own credential proved. There is
+	 * deliberately no path that lists another account's devices by naming a hash.
+	 */
+	private void handleListDevices(Subscriber sub) {
+		if (!sub.authenticated) {
+			sendError(sub, null, "not authenticated");
+			return;
+		}
+		List<net.osparty.api.repository.AccountCredentialRepository.Credential> devices =
+			auth.devices(sub.accountHash);
+		List<DeviceSummary> summaries = new java.util.ArrayList<>(devices.size());
+		for (net.osparty.api.repository.AccountCredentialRepository.Credential d : devices) {
+			summaries.add(new DeviceSummary(d.tokenHash(), d.label(),
+				d.issuedAt() == null ? 0 : d.issuedAt().toEpochMilli(),
+				d.lastSeenAt() == null ? 0 : d.lastSeenAt().toEpochMilli()));
+		}
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new Devices("devices", summaries))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver device list to session {}: {}", sub.session.id(), e.toString());
+		}
+	}
+
+	/**
+	 * Withdraw one of the caller's own devices by id. This is the only way a lost or stolen device is ever
+	 * removed -- {@link net.osparty.api.service.AccountAuthService#revoke} needs the plaintext token, which
+	 * by definition only the lost device still holds.
+	 */
+	private void handleRevokeDevice(Subscriber sub, Inbound in) {
+		if (!sub.authenticated) {
+			sendError(sub, null, "not authenticated");
+			return;
+		}
+		if (in.deviceId() == null || in.deviceId().isBlank()) {
+			sendError(sub, null, "missing deviceId");
+			return;
+		}
+		boolean revoked = auth.revokeDevice(sub.accountHash, in.deviceId());
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(
+				new DeviceRevoked("deviceRevoked", in.deviceId(), revoked))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver device revocation result to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
+	/** One row of {@link Devices}. {@code id} is the token's stored digest -- see revokeDevice's doc. */
+	record DeviceSummary(String id, String label, long issuedAt, long lastSeenAt) {
+	}
+
+	record Devices(String type, List<DeviceSummary> devices) {
+	}
+
+	record DeviceRevoked(String type, String deviceId, boolean success) {
+	}
+
+	private void sendCouplingResult(Subscriber sub, Long accountHash, boolean success) {
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new CouplingResult(
+				"couplingResult", accountHash, success))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver coupling result to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
+	/**
+	 * Tell the machines already on this account that another one has just joined it.
+	 *
+	 * <p>Never the session that did the joining: by this point the challenger is authenticated on the same
+	 * account, so an unfiltered sweep reaches it too and it would be told about itself.
+	 *
+	 * <p>This is a notice, not a revocation -- nothing here loses its credential. It exists so that a code
+	 * being spent is visible on the screen it was displayed on, which is the one place someone who did not
+	 * expect it would notice.
+	 */
+	private void notifyIncumbentOfCoupling(Long accountHash, String exceptSessionId) {
+		subscribers.values().stream()
+			.filter(s -> s.authenticated && accountHash.equals(s.accountHash)
+				&& !s.session.id().equals(exceptSessionId))
+			.forEach(s -> {
+				try {
+					sendRaw(s, new Frame(mapper.writeValueAsString(new CouplingAccepted(
+						"couplingAccepted", accountHash))));
+				}
+				catch (Exception e) {
+					log.warn("Failed to deliver coupling notice to session {}: {}",
+						s.session.id(), e.toString());
+				}
+			});
+	}
+
+	/** The one delivery of a freshly minted token, alongside the public id it will be known by. */
+	private void sendAuthIssued(Subscriber sub, net.osparty.api.service.AccountAuthService.Issued issued) {
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new AuthIssued(
+				"authIssued", issued.token(), playerIds.of(issued.accountHash()), issued.firstDevice()))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver an issued credential to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
+	/**
+	 * Sent once, when a credential is minted. Its own frame rather than a variant of {@link Outbound} so the
+	 * token does not become a nullable field on every other frame this service sends.
+	 */
+	record AuthIssued(String type, String token,
+		String playerId, boolean firstDevice) {
+	}
+
+	/**
+	 * Sent to the challenger: this account is already on another machine, go and read the code off it.
+	 *
+	 * <p>Deliberately carries no code. The challenger proving it can see the incumbent's screen is the
+	 * entire check, so a code on this frame would answer its own question.
+	 */
+	record CouplingRequired(String type, Long accountHash) {
+	}
+
+	/** Sent to the incumbent: here is the code to display. */
+	record CouplingCode(String type, Long accountHash, String code) {
+	}
+
+	/** Sent to the challenger after it presents a code: success or failure. */
+	record CouplingResult(String type, Long accountHash, boolean success) {
+	}
+
+	/** Sent to the incumbent after the challenger succeeds: your credential has been revoked. */
+	/** Sent to the machines already on an account when another one couples to it. Nothing is lost. */
+	record CouplingAccepted(String type, Long accountHash) {
+	}
+
+	/**
+	 * Whether this connection may become the invite destination for {@code name}.
+	 *
+	 * <p>The index used to be a plain overwrite, so claiming a name that somebody else was already connected
+	 * under redirected their invites to the claimant -- no party membership needed, and nothing the target
+	 * could notice. Identity is still self-asserted, so this cannot be settled properly until the socket is
+	 * authenticated; what it can do is stop the claim being free.
+	 *
+	 * <p>The incumbent keeps the name unless the claimant reports the same account, which is what a genuine
+	 * reconnect does -- a new session, the same player. The half-open connection problem is why this is not
+	 * simply "refuse while the incumbent is open": a client killed outright leaves a socket that still reads
+	 * as connected, and its owner has to be able to take its own name back. An incumbent that reported no
+	 * account at all is not evidence of anything and does not block the claim.
+	 */
+	private boolean mayClaimName(Subscriber sub, String name, String sessionId) {
+		String incumbentId = sessionByName.get(name);
+		if (incumbentId == null || incumbentId.equals(sessionId)) {
+			return true;
+		}
+		Subscriber incumbent = subscribers.get(incumbentId);
+		if (incumbent == null || incumbent.accountHash == null) {
+			return true;
+		}
+		if (incumbent.accountHash.equals(sub.accountHash)) {
+			return true;
+		}
+		log.info("Refused name claim: session={} name={} already held by session={} on another account",
+			sessionId, name, incumbentId);
+		return false;
 	}
 
 	/**
@@ -627,6 +1000,11 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			send(sub, Outbound.inviteAck(version.get(), in.target(), true));
 			return;
 		}
+		// Promise the seat before dispatching the invite. The live-party side auto-admits on this rather than
+		// on the joiner's own `invited` flag, and the room it will ask about is keyed by the ad's passphrase
+		// -- which this is the only side to hold. Granted even if delivery then fails: an invite the target
+		// heard about by other means is still one we authorised.
+		admissions.grant(ad.getPassphrase(), target);
 		String from = (in.name() == null || in.name().isBlank()) ? ad.getHost() : in.name();
 		String frame;
 		try {
@@ -994,7 +1372,7 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 				return;
 			}
 		}
-		List<Advertisement> all = badges.enrichAds(store.list(sub.activity));
+		List<Advertisement> all = playerIds.enrichAds(badges.enrichAds(store.list(sub.activity)));
 		List<Advertisement> list = new java.util.ArrayList<>(all.size());
 		for (Advertisement ad : all) {
 			if (!bans.isHidden(ad) || isOwnAdvertisement(sub, ad)) {
@@ -1374,6 +1752,12 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		volatile String activity;
 		// Self-reported identity, mirrored into sessionByAccount/sessionByName for invite routing.
 		volatile Long accountHash;
+		/**
+		 * Whether {@link #accountHash} came from a credential rather than from an {@code identify} frame.
+		 * When set, this session's account is settled: identify cannot move it, and the Discord frames act
+		 * on it whatever account they name.
+		 */
+		volatile boolean authenticated;
 		volatile String name;
 		/** Advertisements reported on this connection, so each is only reported once per session. */
 		final java.util.Set<String> reportedAdIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -1396,6 +1780,8 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 
 	record Inbound(String type, String activity, AdvertisementRequest request, AdvertisementUpdate patch, String id, String key,
 		String code, String host, Long accountHash, Boolean visible, String newKey, String name, String target,
+		/** Sent with {@code revokeDevice}: the id (token digest) of the device to withdraw. */
+		String deviceId,
 		/** Sent with {@code transferHost}: the incoming host's account type, which re-stamps the ad's badge. */
 		String hostAccountType,
 		/** Sent with {@code subscribe}: this client can read gzipped binary frames. Absent means it cannot. */
@@ -1405,6 +1791,23 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		 * Answered with the changes since, or with a whole board when it has been away too long.
 		 */
 		Long since) {
+
+		/**
+		 * Fold "no account" to null however the client spells it.
+		 *
+		 * <p>The plugin sends {@code -1} when nobody is logged in, because that is what
+		 * {@code Client.getAccountHash()} returns; this service documents {@code 0} as unknown and the checks
+		 * here are all written as {@code != 0}. Left alone, {@code -1} passes every one of them, so every
+		 * logged-out client shares a single "known" identity -- one that can be looked up in the Discord
+		 * tables, indexed for invite routing, and matched against bans.
+		 *
+		 * <p>Normalising at decode rather than at each use means a check added later cannot miss the case.
+		 */
+		Inbound {
+			if (accountHash != null && (accountHash == -1L || accountHash == 0L)) {
+				accountHash = null;
+			}
+		}
 	}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)

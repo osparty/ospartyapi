@@ -56,4 +56,23 @@ public record Inbound(
 	String newHostName,
 	Boolean hostStays,
 	JsonNode meta) {
+
+	/**
+	 * Fold "no account" to null however the client spells it.
+	 *
+	 * <p>The plugin sends {@code -1} when nobody is logged in, because that is what
+	 * {@code Client.getAccountHash()} returns; this service documents {@code 0} as unknown and every check
+	 * downstream is written as {@code != 0}. Left alone, {@code -1} passes all of them, and every logged-out
+	 * client in the world shares one "known" identity -- they collide in the block list, in player flags, in
+	 * party history, and in the account index invites are routed by.
+	 *
+	 * <p>Normalising here rather than at each use means a check added later cannot miss the case. Null, not
+	 * zero, because {@code null} is what the rest of this record already means by "not supplied", and the two
+	 * spellings should not survive past decoding.
+	 */
+	public Inbound {
+		if (accountHash != null && (accountHash == -1L || accountHash == 0L)) {
+			accountHash = null;
+		}
+	}
 }

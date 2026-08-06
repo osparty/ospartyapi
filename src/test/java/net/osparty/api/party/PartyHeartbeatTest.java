@@ -26,8 +26,9 @@ class PartyHeartbeatTest {
 		// Zero-length silence window: every seated member counts as gone the moment the sweep looks.
 		PartyManager manager = new PartyManager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyBus(),
-			new LocalNodeLoadRegistry(), sessionId -> { }, -1L);
-		PartyFrameHandler handler = new PartyFrameHandler(manager, mapper);
+			new LocalNodeLoadRegistry(), sessionId -> { }, -1L,
+			new net.osparty.api.service.PlayerIdService("test-salt"));
+		PartyFrameHandler handler = new PartyFrameHandler(manager, mapper, new LocalPartyAdmissionService());
 
 		hostARoom(handler);
 		assertThat(manager.roomCount()).isEqualTo(1);
@@ -43,8 +44,9 @@ class PartyHeartbeatTest {
 		NodeIdentity node = new NodeIdentity("node-a", true);
 		PartyManager manager = new PartyManager(
 			mapper, new LocalPartyOwnershipService(node), node, new LocalPartyBus(),
-			new LocalNodeLoadRegistry(), sessionId -> { }, 90_000L);
-		PartyFrameHandler handler = new PartyFrameHandler(manager, mapper);
+			new LocalNodeLoadRegistry(), sessionId -> { }, 90_000L,
+			new net.osparty.api.service.PlayerIdService("test-salt"));
+		PartyFrameHandler handler = new PartyFrameHandler(manager, mapper, new LocalPartyAdmissionService());
 
 		hostARoom(handler);
 

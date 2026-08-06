@@ -31,15 +31,31 @@ public class PartyFrameHandler {
 
 	private final PartyManager manager;
 	private final ObjectMapper mapper;
+	/** Whether a joiner claiming a seat actually has one coming. See {@link #handleJoin}. */
+	private final PartyAdmissionService admissions;
 	private final Map<String, Ctx> contexts = new ConcurrentHashMap<>();
 
-	public PartyFrameHandler(PartyManager manager, ObjectMapper mapper) {
+	public PartyFrameHandler(PartyManager manager, ObjectMapper mapper, PartyAdmissionService admissions) {
 		this.manager = manager;
 		this.mapper = mapper;
+		this.admissions = admissions;
 	}
 
 	public void onOpen(SocketSession session) {
-		contexts.put(session.id(), new Ctx(session));
+		onOpen(session, null);
+	}
+
+	/**
+	 * @param authenticated the account this connection proved during the handshake, or null if it presented
+	 *     no credential. When set it outranks anything the connection's frames say about who they are.
+	 */
+	public void onOpen(SocketSession session, Long authenticated) {
+		Ctx ctx = new Ctx(session);
+		if (authenticated != null) {
+			ctx.authenticated = true;
+			ctx.accountHash = authenticated;
+		}
+		contexts.put(session.id(), ctx);
 		log.info("Party WS connected: session={}", session.id());
 	}
 
@@ -196,9 +212,28 @@ public class PartyFrameHandler {
 		return Boolean.TRUE.equals(in.urgent());
 	}
 
+	/**
+	 * The account a frame acts as: the one this connection proved, or the one it claims if it proved
+	 * nothing.
+	 *
+	 * <p>An authenticated connection cannot change accounts by sending a different hash. A mismatch is worth
+	 * a log line rather than a refusal -- the ordinary cause is a second character logging in on a client
+	 * that has not reconnected yet, not an attack, and dropping the frame would break that.
+	 */
+	private long identityOf(Ctx ctx, Inbound in) {
+		if (ctx.authenticated) {
+			if (in.accountHash() != null && in.accountHash() != ctx.accountHash && ctx.firstTime("identity")) {
+				log.info("Ignoring frame identity: session={} authenticated as {} but sent {}",
+					ctx.session.id(), ctx.accountHash, in.accountHash());
+			}
+			return ctx.accountHash;
+		}
+		return in.accountHash() != null ? in.accountHash() : ctx.accountHash;
+	}
+
 	private void handleHello(Ctx ctx, Inbound in) {
 		ensureMemberId(ctx);
-		if (in.accountHash() != null) {
+		if (in.accountHash() != null && !ctx.authenticated) {
 			ctx.accountHash = in.accountHash();
 		}
 		if (in.name() != null) {
@@ -243,7 +278,7 @@ public class PartyFrameHandler {
 		}
 		ensureMemberId(ctx);
 		String name = in.hostName() != null ? in.hostName() : ctx.name;
-		long accountHash = in.accountHash() != null ? in.accountHash() : ctx.accountHash;
+		long accountHash = identityOf(ctx, in);
 		ctx.roomId = in.room();
 		// The room answers with the seat it actually put us in: a host returning to a room that outlived its
 		// connection takes its own back, and this connection has to speak for that member from here on.
@@ -282,12 +317,22 @@ public class PartyFrameHandler {
 		}
 		ensureMemberId(ctx);
 		ctx.roomId = in.room();
+		String name = in.name() != null ? in.name() : ctx.name;
+		// Auto-admission runs off our own grant, never off `in.invited()`. That flag is the joiner's claim
+		// about itself, and believing it made admission to any party a matter of asserting it -- with the
+		// room key already on the public board, that was the whole door. A joiner with no grant lands
+		// PENDING and the host admits by hand, which is the ordinary path, not a failure.
+		boolean granted = admissions.isGranted(in.room(), name);
+		if (!granted && Boolean.TRUE.equals(in.invited())) {
+			log.info("Party join claimed a seat we have no grant for: session={} room={} name={}",
+				ctx.session.id(), in.room(), name);
+		}
 		// As with hosting: a member the room was still holding a seat for is seated back under its own id.
 		ctx.memberId = room.seatApplicant(ctx.memberId, ctx.session,
-			in.name() != null ? in.name() : ctx.name,
-			in.accountHash() != null ? in.accountHash() : ctx.accountHash,
+			name,
+			identityOf(ctx, in),
 			in.role(), Boolean.TRUE.equals(in.learner()), Boolean.TRUE.equals(in.teacher()),
-			Boolean.TRUE.equals(in.invited()));
+			granted);
 		log.info("Party join: session={} room={} member={}", ctx.session.id(), in.room(), ctx.memberId);
 	}
 
@@ -303,6 +348,11 @@ public class PartyFrameHandler {
 	 * and losing it should cost a second, not the party. A joiner arriving on a code nobody gave it still
 	 * gets the error straight away, which is the right answer to a typo. The client bounds the retries
 	 * either way, so a host that never comes ends the same way it used to, just later.
+	 *
+	 * <p>This is the one place {@code invited} is still read off the frame, and it stays there deliberately:
+	 * here the flag buys a retry hint for a room that does not exist, which grants nothing and admits nobody.
+	 * Checking the invite record instead would cost a lookup on an error path to change how fast a client
+	 * gives up. Admission itself is decided in {@link #handleJoin}, from our own record.
 	 */
 	private void sendUnowned(Ctx ctx, String room, boolean invited) {
 		if (manager.handoverPending(room) || invited) {
@@ -335,7 +385,13 @@ public class PartyFrameHandler {
 		}
 		withOwnedRoom(ctx, room -> {
 			if ("ADMIT".equals(in.action())) {
-				room.admit(ctx.memberId, in.target());
+				if (room.admit(ctx.memberId, in.target())) {
+					// Remember the host's decision, so a member that is already in the party is seated back
+					// into it rather than queued again. A room rebuilt on a new owner starts with no memory
+					// of who was admitted, and the clients cannot be believed about it -- this is that
+					// memory. Keyed on the player, because member ids die with the connection.
+					admissions.grant(room.id, room.nameOf(in.target()));
+				}
 			}
 			else if ("KICK".equals(in.action()) || "REJECT".equals(in.action())) {
 				room.remove(ctx.memberId, in.target());
@@ -440,6 +496,15 @@ public class PartyFrameHandler {
 		final SocketSession session;
 		volatile long memberId;
 		volatile long accountHash;
+		/**
+		 * Whether {@link #accountHash} came from a credential rather than from a frame.
+		 *
+		 * <p>When set, the account this connection speaks for is settled and the frames cannot move it. That
+		 * is the entire point of the credential: identity stops being a field the sender fills in. When
+		 * unset the connection presented nothing, and the old behaviour stands -- it is believed, because
+		 * every client from before this existed has nothing else to offer.
+		 */
+		volatile boolean authenticated;
 		volatile String name;
 		volatile String roomId;
 		/**

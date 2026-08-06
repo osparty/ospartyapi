@@ -70,15 +70,25 @@ public class NettySocketServer implements SmartLifecycle {
 
 	private volatile EventLoopGroup boss;
 	private volatile EventLoopGroup workers;
+	private final SocketRateLimiter limiter;
+	/** Resolves a presented credential to an account, once per connection, before the upgrade completes. */
+	private final net.osparty.api.service.AccountAuthService auth;
+
 	private volatile Channel serverChannel;
 	private volatile boolean running;
 
 	public NettySocketServer(PartyFrameHandler frames, net.osparty.api.web.ws.BoardBroadcaster board,
 		@Value("${app.socket.port:8081}") int port,
-		io.micrometer.core.instrument.MeterRegistry meters) {
+		io.micrometer.core.instrument.MeterRegistry meters,
+		// Off by default on purpose: the ceilings are a guess until the metrics say otherwise, and an
+		// enforced guess disconnects players. See SocketRateLimiter.
+		@Value("${app.socket.rate-limit.enforce:false}") boolean enforceRateLimit,
+		net.osparty.api.service.AccountAuthService auth) {
 		this.frames = frames;
 		this.board = board;
 		this.port = port;
+		this.auth = auth;
+		this.limiter = meters == null ? null : new SocketRateLimiter(enforceRateLimit, meters);
 		this.meters = meters;
 	}
 
@@ -91,7 +101,7 @@ public class NettySocketServer implements SmartLifecycle {
 		// Default sizing: two loops per core, each serving many connections. Sends run on the loop that owns
 		// the channel, so this is the pool the fan-out actually costs.
 		workers = new NioEventLoopGroup();
-		NettySocketHandler handler = new NettySocketHandler(frames, board, dropped, meters);
+		NettySocketHandler handler = new NettySocketHandler(frames, board, dropped, meters, limiter);
 		WebSocketServerProtocolConfig ws = WebSocketServerProtocolConfig.newBuilder()
 			// The path is checked by SocketPathHandler, which has to see it anyway to reject anything else
 			// and to decide which protocols the connection carries. No single prefix covers both endpoints
@@ -113,7 +123,7 @@ public class NettySocketServer implements SmartLifecycle {
 					channel.pipeline()
 						.addLast(new HttpServerCodec())
 						.addLast(new HttpObjectAggregator(MAX_HTTP_BYTES))
-						.addLast(new SocketPathHandler())
+						.addLast(new SocketPathHandler(auth))
 						.addLast(new WebSocketServerProtocolHandler(ws))
 						// Clients do not fragment, but a fragmented frame that arrived unassembled would be
 						// silently dropped rather than parsed, which is a bad way to find out.

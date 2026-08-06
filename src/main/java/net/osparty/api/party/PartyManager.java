@@ -23,6 +23,8 @@ public class PartyManager {
 	private static final Logger log = LoggerFactory.getLogger(PartyManager.class);
 
 	private final ObjectMapper mapper;
+	/** Handed to each room so its roster can carry public ids rather than the account hashes behind them. */
+	private final net.osparty.api.service.PlayerIdService playerIds;
 	private final PartyOwnershipService ownership;
 	private final NodeIdentity node;
 	private final PartyBus bus;
@@ -46,7 +48,9 @@ public class PartyManager {
 	public PartyManager(ObjectMapper mapper, PartyOwnershipService ownership, NodeIdentity node,
 		PartyBus bus, NodeLoadRegistry load, HostedAds hostedAds,
 		@org.springframework.beans.factory.annotation.Value("${app.party.member-timeout-ms:90000}")
-		long memberTimeoutMs) {
+		long memberTimeoutMs,
+		net.osparty.api.service.PlayerIdService playerIds) {
+		this.playerIds = playerIds;
 		this.mapper = mapper;
 		this.ownership = ownership;
 		this.node = node;
@@ -154,7 +158,7 @@ public class PartyManager {
 			// a node still serving it stops now instead of on its next failed renewal.
 			bus.publishOwnerChanged(id, node.nodeId());
 		}
-		return rooms.computeIfAbsent(id, k -> new PartyRoom(id, activityId, node.nodeId(), mapper));
+		return rooms.computeIfAbsent(id, k -> new PartyRoom(id, activityId, node.nodeId(), mapper, playerIds));
 	}
 
 	/**

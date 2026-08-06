@@ -178,7 +178,8 @@ class LiquibaseMigrationTest {
 			"001-1-create-ad-report", "001-2-index-ad-report",
 			"002-1-create-ad-ban", "002-2-index-ad-ban", "002-3-index-ad-report-ban",
 			"003-1-create-discord-link", "003-2-create-account-preference",
-			"004-1-create-data-migration");
+			"004-1-create-data-migration",
+			"005-1-create-account-credential", "005-2-create-account-enrolment-log");
 		// A second startup must be a no-op; Liquibase records checksums, so a changed file would
 		// have failed the context refresh above rather than reaching this assertion.
 		assertThat(db.sql("SELECT count(*) FROM databasechangeloglock").query(Integer.class).single())

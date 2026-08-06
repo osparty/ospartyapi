@@ -35,6 +35,7 @@ public class BoardReconciler {
 	private final BoardBroadcaster broadcaster;
 	private final net.osparty.api.service.VoiceChannelService voice;
 	private final net.osparty.api.service.DiscordBadgeService badges;
+	private final net.osparty.api.service.PlayerIdService playerIds;
 	private final BanService bans;
 
 	/**
@@ -65,11 +66,13 @@ public class BoardReconciler {
 	public BoardReconciler(AdvertisementRepository store, BoardBroadcaster broadcaster,
 		net.osparty.api.service.VoiceChannelService voice,
 		net.osparty.api.service.DiscordBadgeService badges,
+		net.osparty.api.service.PlayerIdService playerIds,
 		BanService bans, BoardChangeBus changes) {
 		this.store = store;
 		this.broadcaster = broadcaster;
 		this.voice = voice;
 		this.badges = badges;
+		this.playerIds = playerIds;
 		// One ad changed somewhere in the cluster: handle that ad rather than waiting for the next sweep
 		// over all of them. The sweep stays, for TTL expiries and for anything a lost message dropped.
 		changes.setListener(this::onChange);
@@ -82,7 +85,7 @@ public class BoardReconciler {
 	@Scheduled(fixedDelayString = "${app.ws.reconcile-interval-ms:5000}")
 	public synchronized void reconcile() {
 		startHistory();
-		List<Advertisement> current = badges.enrichAds(store.list(null));
+		List<Advertisement> current = playerIds.enrichAds(badges.enrichAds(store.list(null)));
 		Map<String, Known> currentById = new HashMap<>();
 		for (Advertisement ad : current) {
 			currentById.put(ad.getId(), new Known(Advertisement.copyOf(ad), !bans.isHidden(ad)));
@@ -205,7 +208,8 @@ public class BoardReconciler {
 	private void applyChange(String id, long seq, List<Advertisement> created, List<AdvertisementDelta> updated,
 		List<BoardBroadcaster.RemovedRef> removed) {
 		Known previous = lastKnown.get(id);
-		Advertisement ad = store.findById(id).map(p -> badges.enrichAds(List.of(p)).get(0)).orElse(null);
+		Advertisement ad = store.findById(id)
+			.map(p -> playerIds.enrichAds(badges.enrichAds(List.of(p))).get(0)).orElse(null);
 		if (ad == null) {
 			if (previous == null) {
 				return;

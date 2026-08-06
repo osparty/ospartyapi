@@ -37,6 +37,13 @@ public class JdbcAccountCredentialRepository implements AccountCredentialReposit
 	}
 
 	@Override
+	public void updateLabel(String tokenHash, String label) {
+		db.sql("UPDATE account_credential SET label = ? WHERE token_hash = ?")
+			.params(label, tokenHash)
+			.update();
+	}
+
+	@Override
 	public Optional<Credential> findByTokenHash(String tokenHash) {
 		return db.sql("SELECT " + COLUMNS + " FROM account_credential WHERE token_hash = ?")
 			.param(tokenHash)

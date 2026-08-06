@@ -22,6 +22,9 @@ public interface AccountCredentialRepository {
 
 	void insert(String tokenHash, long accountHash, String label);
 
+	/** Rename a credential. The owner is the only caller that can reach this -- see {@code renameDevice}. */
+	void updateLabel(String tokenHash, String label);
+
 	/** The credential behind a presented token, revoked ones included -- the caller decides what that means. */
 	Optional<Credential> findByTokenHash(String tokenHash);
 

@@ -123,7 +123,7 @@ class NettySocketServerTest {
 	 */
 	@Test
 	void presentingACredentialOnConnectTouchesIt() throws Exception {
-		String token = auth.enrol(4242L, null).orElseThrow().token();
+		String token = auth.enrol(4242L, null, null).orElseThrow().token();
 		java.time.Instant issuedAt = auth.devices(4242L).get(0).lastSeenAt();
 		Thread.sleep(5); // clock resolution: without a gap, "touched" and "just issued" can land in the same ms
 

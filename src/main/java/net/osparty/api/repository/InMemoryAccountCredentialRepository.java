@@ -28,6 +28,12 @@ public class InMemoryAccountCredentialRepository implements AccountCredentialRep
 	}
 
 	@Override
+	public void updateLabel(String tokenHash, String label) {
+		byTokenHash.computeIfPresent(tokenHash, (key, c) -> new Credential(
+			c.tokenHash(), c.accountHash(), label, c.issuedAt(), c.lastSeenAt(), c.revokedAt()));
+	}
+
+	@Override
 	public Optional<Credential> findByTokenHash(String tokenHash) {
 		return Optional.ofNullable(byTokenHash.get(tokenHash));
 	}

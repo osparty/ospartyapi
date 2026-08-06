@@ -49,38 +49,27 @@ class AccountAuthTest {
 			.satisfies(credential -> assertThat(credential.tokenHash()).isNotEqualTo(issued.token()));
 	}
 
-	/** One person, two machines. The account is the identity; credentials are what may speak for it. */
+	/**
+	 * One machine at a time. A second one does not quietly enrol alongside the first -- it has to go through
+	 * coupling, which is what makes claiming somebody else's account hash worth nothing on its own.
+	 */
 	@Test
-	void anAccountCanHoldSeveralDevices() {
+	void aSecondMachineDoesNotEnrolOnItsOwn() {
 		AccountAuthService.Issued desktop = auth.enrol(4242L, null).orElseThrow();
-		AccountAuthService.Issued laptop = auth.enrol(4242L, null).orElseThrow();
 
-		assertThat(laptop.firstDevice()).isFalse();
+		assertThat(auth.enrol(4242L, null)).isEmpty();
 		assertThat(auth.accountFor(desktop.token())).contains(4242L);
-		assertThat(auth.accountFor(laptop.token())).contains(4242L);
-		assertThat(auth.devices(4242L)).hasSize(2);
+		assertThat(auth.devices(4242L)).hasSize(1);
 	}
 
 	@Test
-	void revokingOneDeviceLeavesTheOthers() {
+	void revokingSignsTheMachineOut() {
 		AccountAuthService.Issued desktop = auth.enrol(4242L, null).orElseThrow();
-		AccountAuthService.Issued laptop = auth.enrol(4242L, null).orElseThrow();
 
 		auth.revoke(desktop.token());
 
 		assertThat(auth.accountFor(desktop.token())).isEmpty();
-		assertThat(auth.accountFor(laptop.token())).contains(4242L);
-	}
-
-	@Test
-	void revokingEverythingSignsTheAccountOutOfEveryMachine() {
-		AccountAuthService.Issued desktop = auth.enrol(4242L, null).orElseThrow();
-		AccountAuthService.Issued laptop = auth.enrol(4242L, null).orElseThrow();
-
-		assertThat(auth.revokeAll(4242L)).isEqualTo(2);
-
-		assertThat(auth.accountFor(desktop.token())).isEmpty();
-		assertThat(auth.accountFor(laptop.token())).isEmpty();
+		assertThat(auth.hasActiveCredential(4242L)).isFalse();
 	}
 
 	/**
@@ -90,12 +79,88 @@ class AccountAuthTest {
 	@Test
 	void everyEnrolmentIsRecorded() {
 		auth.enrol(4242L, "1.2.3.4");
-		auth.enrol(4242L, "5.6.7.8");
 
-		assertThat(store.enrolments()).hasSize(2);
+		assertThat(store.enrolments()).hasSize(1);
 		assertThat(store.enrolments().get(0).firstDevice()).isTrue();
-		assertThat(store.enrolments().get(1).firstDevice()).isFalse();
-		assertThat(store.enrolments().get(1).clientIp()).isEqualTo("5.6.7.8");
+		assertThat(store.enrolments().get(0).clientIp()).isEqualTo("1.2.3.4");
+	}
+
+	// ---- coupling a second machine ------------------------------------------
+
+	/** The code moves the credential: the new machine gets one, the old one stops working. */
+	@Test
+	void aValidCodeMovesTheCredentialToTheNewMachine() {
+		AccountAuthService.Issued desktop = auth.enrol(4242L, null).orElseThrow();
+		String code = auth.generateCouplingCode(4242L, "challenger").orElseThrow();
+
+		AccountAuthService.Issued laptop =
+			auth.validateCouplingCode(4242L, code, "challenger", "1.2.3.4").orElseThrow();
+
+		assertThat(auth.accountFor(laptop.token())).contains(4242L);
+		assertThat(auth.accountFor(desktop.token())).isEmpty();
+	}
+
+	@Test
+	void aWrongCodeMovesNothing() {
+		AccountAuthService.Issued desktop = auth.enrol(4242L, null).orElseThrow();
+		auth.generateCouplingCode(4242L, "challenger");
+
+		assertThat(auth.validateCouplingCode(4242L, "000000", "challenger", null)).isEmpty();
+		assertThat(auth.accountFor(desktop.token())).contains(4242L);
+	}
+
+	/**
+	 * The code is issued to one waiting session and is only good there. Otherwise a bystander who saw the
+	 * code -- a stream, a shared screen -- could spend it from their own connection.
+	 */
+	@Test
+	void aCodeIsOnlyGoodForTheSessionItWasIssuedTo() {
+		auth.enrol(4242L, null);
+		String code = auth.generateCouplingCode(4242L, "challenger").orElseThrow();
+
+		assertThat(auth.validateCouplingCode(4242L, code, "somebody-else", null)).isEmpty();
+		// Still spendable by the session it belongs to: a refusal must not consume it.
+		assertThat(auth.validateCouplingCode(4242L, code, "challenger", null)).isPresent();
+	}
+
+	@Test
+	void aCodeCannotBeSpentTwice() {
+		auth.enrol(4242L, null);
+		String code = auth.generateCouplingCode(4242L, "challenger").orElseThrow();
+		auth.validateCouplingCode(4242L, code, "challenger", null);
+
+		assertThat(auth.validateCouplingCode(4242L, code, "challenger", null)).isEmpty();
+	}
+
+	/** One request at a time, so a second challenger cannot start a race for the same account. */
+	@Test
+	void onlyOneCouplingIsPendingAtATime() {
+		auth.enrol(4242L, null);
+		auth.generateCouplingCode(4242L, "challenger").orElseThrow();
+
+		assertThat(auth.generateCouplingCode(4242L, "another")).isEmpty();
+	}
+
+	/**
+	 * A request that was never completed must not become a permanent lockout. Cancelling is what the
+	 * "nobody was online to read the code" path does, and the next attempt has to work.
+	 */
+	@Test
+	void anAbandonedCouplingDoesNotBlockTheNextOne() {
+		auth.enrol(4242L, null);
+		auth.generateCouplingCode(4242L, "challenger").orElseThrow();
+
+		auth.cancelCoupling(4242L);
+
+		assertThat(auth.generateCouplingCode(4242L, "another")).isPresent();
+	}
+
+	/** Six digits, so it can be read off one screen and typed into another without ambiguity. */
+	@Test
+	void theCodeIsSixDigits() {
+		auth.enrol(4242L, null);
+
+		assertThat(auth.generateCouplingCode(4242L, "challenger").orElseThrow()).matches("\\d{6}");
 	}
 
 	/** Ships off. A client that gets no credential carries on unauthenticated, as every old client does. */

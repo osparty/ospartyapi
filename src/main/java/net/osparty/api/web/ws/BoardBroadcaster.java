@@ -683,8 +683,20 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		}
 		if (auth.hasActiveCredential(in.accountHash())) {
 			auth.generateCouplingCode(in.accountHash(), sub.session.id()).ifPresent(code -> {
-				sendCouplingRequest(sub, in.accountHash(), code);
-				findAndSendCouplingCodeToIncumbent(in.accountHash(), code);
+				// The code goes to the machine that already holds the credential, and to nothing else. The
+				// challenger is told only that it needs one: it has to be read off the other machine by the
+				// person who owns both, which is the only thing here that a stranger cannot do. Sending the
+				// code to the challenger as well would hand it to anyone who names an account hash -- and
+				// since confirming revokes the incumbent, that is worse than not asking at all.
+				int reached = sendCouplingCodeToIncumbent(in.accountHash(), code);
+				if (reached == 0) {
+					// Nothing to read the code off. Say so rather than leaving the challenger waiting on a
+					// number that was never displayed anywhere.
+					auth.cancelCoupling(in.accountHash());
+					sendCouplingUnavailable(sub, in.accountHash());
+					return;
+				}
+				sendCouplingRequired(sub, in.accountHash());
 			});
 			return;
 		}
@@ -695,10 +707,11 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		});
 	}
 
-	private void sendCouplingRequest(Subscriber sub, Long accountHash, String code) {
+	/** Tell the challenger a code is needed. Carries no code: knowing it is the whole test. */
+	private void sendCouplingRequired(Subscriber sub, Long accountHash) {
 		try {
 			sendRaw(sub, new Frame(mapper.writeValueAsString(new CouplingRequired(
-				"couplingRequired", accountHash, code))));
+				"couplingRequired", accountHash))));
 		}
 		catch (Exception e) {
 			log.warn("Failed to deliver coupling request to session {}: {}",
@@ -706,19 +719,44 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		}
 	}
 
-	private void findAndSendCouplingCodeToIncumbent(Long accountHash, String code) {
-		subscribers.values().stream()
-			.filter(s -> accountHash.equals(s.accountHash))
-			.forEach(s -> {
-				try {
-					sendRaw(s, new Frame(mapper.writeValueAsString(new CouplingCode(
-						"couplingCode", accountHash, code))));
-				}
-				catch (Exception e) {
-					log.warn("Failed to deliver coupling code to session {}: {}",
-						s.session.id(), e.toString());
-				}
-			});
+	/** Tell the challenger there is no machine online to read a code off, so it cannot proceed now. */
+	private void sendCouplingUnavailable(Subscriber sub, Long accountHash) {
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new CouplingResult(
+				"couplingUnavailable", accountHash, false))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver coupling unavailable to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
+	/**
+	 * Show the code on the machines that already hold a credential for this account.
+	 *
+	 * <p>Authenticated sessions only. {@code Subscriber.accountHash} is also set from an {@code identify}
+	 * frame, which anybody can send naming anybody -- so matching on it alone would deliver the code to a
+	 * session that merely claimed the account, which is exactly the session the code exists to keep out.
+	 *
+	 * @return how many machines were shown the code; zero means nobody can read it.
+	 */
+	private int sendCouplingCodeToIncumbent(Long accountHash, String code) {
+		int reached = 0;
+		for (Subscriber s : subscribers.values()) {
+			if (!s.authenticated || !accountHash.equals(s.accountHash)) {
+				continue;
+			}
+			try {
+				sendRaw(s, new Frame(mapper.writeValueAsString(new CouplingCode(
+					"couplingCode", accountHash, code))));
+				reached++;
+			}
+			catch (Exception e) {
+				log.warn("Failed to deliver coupling code to session {}: {}",
+					s.session.id(), e.toString());
+			}
+		}
+		return reached;
 	}
 
 	/**
@@ -735,7 +773,7 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			sub.accountHash = result.get().accountHash();
 			sendAuthIssued(sub, result.get());
 			sendCouplingResult(sub, in.accountHash(), true);
-			findAndNotifyIncumbentOfRevoke(in.accountHash());
+			findAndNotifyIncumbentOfRevoke(in.accountHash(), sub.session.id());
 		} else {
 			sendCouplingResult(sub, in.accountHash(), false);
 		}
@@ -752,9 +790,16 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		}
 	}
 
-	private void findAndNotifyIncumbentOfRevoke(Long accountHash) {
+	/**
+	 * Tell the machines that just lost the credential.
+	 *
+	 * <p>Never the session that took it: by this point the challenger is authenticated on the same account,
+	 * so an unfiltered sweep reaches it too and it deletes the credential it was issued a moment ago.
+	 */
+	private void findAndNotifyIncumbentOfRevoke(Long accountHash, String exceptSessionId) {
 		subscribers.values().stream()
-			.filter(s -> accountHash.equals(s.accountHash))
+			.filter(s -> s.authenticated && accountHash.equals(s.accountHash)
+				&& !s.session.id().equals(exceptSessionId))
 			.forEach(s -> {
 				try {
 					sendRaw(s, new Frame(mapper.writeValueAsString(new CouplingRevoked(
@@ -787,8 +832,13 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		String playerId, boolean firstDevice) {
 	}
 
-	/** Sent to the challenger: you need a coupling code to enrol. */
-	record CouplingRequired(String type, Long accountHash, String code) {
+	/**
+	 * Sent to the challenger: this account is already on another machine, go and read the code off it.
+	 *
+	 * <p>Deliberately carries no code. The challenger proving it can see the incumbent's screen is the
+	 * entire check, so a code on this frame would answer its own question.
+	 */
+	record CouplingRequired(String type, Long accountHash) {
 	}
 
 	/** Sent to the incumbent: here is the code to display. */

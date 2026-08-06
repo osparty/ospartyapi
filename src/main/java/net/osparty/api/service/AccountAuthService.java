@@ -181,7 +181,15 @@ public class AccountAuthService {
 	 * @return the code to display to the connected client, or empty if one is already pending
 	 */
 	public Optional<String> generateCouplingCode(long accountHash, String challengerSessionId) {
-		if (pendingCouplings.containsKey(accountHash)) {
+		// An expired request is not a request. Testing only for presence left a lapsed one sitting in the
+		// map with nothing to remove it, so an account that started a coupling and walked away could never
+		// couple again -- a permanent lockout produced by the timeout that was meant to be the safe outcome.
+		PendingCoupling existing = pendingCouplings.get(accountHash);
+		if (existing != null && existing.expired()) {
+			pendingCouplings.remove(accountHash, existing);
+			existing = null;
+		}
+		if (existing != null) {
 			return Optional.empty();
 		}
 		String code = String.format("%06d", random.nextInt(1_000_000));
@@ -189,6 +197,14 @@ public class AccountAuthService {
 		pendingCouplings.put(accountHash, pending);
 		log.info("Generated coupling code for account {}", accountHash);
 		return Optional.of(code);
+	}
+
+	/**
+	 * Drop a pending coupling, for when it cannot be completed -- no machine was online to show the code, so
+	 * leaving it pending would block the next attempt for the whole of its lifetime.
+	 */
+	public void cancelCoupling(long accountHash) {
+		pendingCouplings.remove(accountHash);
 	}
 
 	/**

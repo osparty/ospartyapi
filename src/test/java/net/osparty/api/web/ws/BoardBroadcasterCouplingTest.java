@@ -189,7 +189,7 @@ class BoardBroadcasterCouplingTest {
 	@Test
 	void couplingWithNoIncumbentOnlineIsReportedUnavailable() throws Exception {
 		// Enrolled directly, so the account has an active credential with no live session behind it.
-		auth.enrol(4343L, null);
+		auth.enrol(4343L, null, null);
 
 		identify(laptop, 4343L);
 

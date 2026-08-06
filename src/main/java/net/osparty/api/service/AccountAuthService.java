@@ -137,11 +137,42 @@ public class AccountAuthService {
 		return store.findActiveByAccountHash(accountHash);
 	}
 
-	/** Withdraw one machine's credential; the account keeps its others. */
+	/** Withdraw one machine's credential; the account keeps its others. Only that machine can call this. */
 	public void revoke(String token) {
 		if (token != null && !token.isBlank()) {
 			store.revoke(hash(token));
 		}
+	}
+
+	/**
+	 * Withdraw one machine's credential by device id, from a <em>different</em> machine on the same
+	 * account. This is the only way a lost or stolen device is ever removed: {@link #revoke} needs the
+	 * plaintext token, which by then only the lost device still holds.
+	 *
+	 * <p>{@code deviceId} is the token's stored digest -- see {@link #devices}, which is the only place a
+	 * caller can have gotten one from. Knowing a digest cannot authenticate as the device (the handshake
+	 * presents the plaintext, which the server hashes and compares; the digest alone opens nothing), so
+	 * handing it back to the client that owns the account is safe.
+	 *
+	 * <p>The ownership check is what makes this safe to expose to any authenticated caller: without it,
+	 * knowing (or guessing) any digest would let a session revoke a device on an account that isn't its
+	 * own. {@link net.osparty.api.web.ws.BoardBroadcaster} only ever calls this with the caller's own
+	 * authenticated {@code accountHash}, never a client-supplied one.
+	 *
+	 * @return whether a device was actually withdrawn -- false for an unknown id, one already revoked, or
+	 *     one belonging to a different account.
+	 */
+	public boolean revokeDevice(long accountHash, String deviceId) {
+		if (deviceId == null || deviceId.isBlank()) {
+			return false;
+		}
+		Optional<Credential> found = store.findByTokenHash(deviceId);
+		if (found.isEmpty() || !found.get().active() || found.get().accountHash() != accountHash) {
+			return false;
+		}
+		store.revoke(deviceId);
+		log.info("Revoked device for account {}", accountHash);
+		return true;
 	}
 
 	/** Withdraw every machine for an account, for "none of these are mine". */

@@ -246,6 +246,12 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			case "couplingConfirm":
 				handleCouplingConfirm(sub, in);
 				break;
+			case "listDevices":
+				handleListDevices(sub);
+				break;
+			case "revokeDevice":
+				handleRevokeDevice(sub, in);
+				break;
 			case "invite":
 				handleInvite(sub, in);
 				break;
@@ -779,6 +785,69 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		} else {
 			sendCouplingResult(sub, in.accountHash(), false);
 		}
+	}
+
+	/**
+	 * List the machines currently entitled to speak for the caller's own account.
+	 *
+	 * <p>Requires {@code sub.authenticated}: managing devices is something an account does to itself, and
+	 * the only account this connection can act as is the one its own credential proved. There is
+	 * deliberately no path that lists another account's devices by naming a hash.
+	 */
+	private void handleListDevices(Subscriber sub) {
+		if (!sub.authenticated) {
+			sendError(sub, null, "not authenticated");
+			return;
+		}
+		List<net.osparty.api.repository.AccountCredentialRepository.Credential> devices =
+			auth.devices(sub.accountHash);
+		List<DeviceSummary> summaries = new java.util.ArrayList<>(devices.size());
+		for (net.osparty.api.repository.AccountCredentialRepository.Credential d : devices) {
+			summaries.add(new DeviceSummary(d.tokenHash(), d.label(),
+				d.issuedAt() == null ? 0 : d.issuedAt().toEpochMilli(),
+				d.lastSeenAt() == null ? 0 : d.lastSeenAt().toEpochMilli()));
+		}
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new Devices("devices", summaries))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver device list to session {}: {}", sub.session.id(), e.toString());
+		}
+	}
+
+	/**
+	 * Withdraw one of the caller's own devices by id. This is the only way a lost or stolen device is ever
+	 * removed -- {@link net.osparty.api.service.AccountAuthService#revoke} needs the plaintext token, which
+	 * by definition only the lost device still holds.
+	 */
+	private void handleRevokeDevice(Subscriber sub, Inbound in) {
+		if (!sub.authenticated) {
+			sendError(sub, null, "not authenticated");
+			return;
+		}
+		if (in.deviceId() == null || in.deviceId().isBlank()) {
+			sendError(sub, null, "missing deviceId");
+			return;
+		}
+		boolean revoked = auth.revokeDevice(sub.accountHash, in.deviceId());
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(
+				new DeviceRevoked("deviceRevoked", in.deviceId(), revoked))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver device revocation result to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
+	/** One row of {@link Devices}. {@code id} is the token's stored digest -- see revokeDevice's doc. */
+	record DeviceSummary(String id, String label, long issuedAt, long lastSeenAt) {
+	}
+
+	record Devices(String type, List<DeviceSummary> devices) {
+	}
+
+	record DeviceRevoked(String type, String deviceId, boolean success) {
 	}
 
 	private void sendCouplingResult(Subscriber sub, Long accountHash, boolean success) {
@@ -1711,6 +1780,8 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 
 	record Inbound(String type, String activity, AdvertisementRequest request, AdvertisementUpdate patch, String id, String key,
 		String code, String host, Long accountHash, Boolean visible, String newKey, String name, String target,
+		/** Sent with {@code revokeDevice}: the id (token digest) of the device to withdraw. */
+		String deviceId,
 		/** Sent with {@code transferHost}: the incoming host's account type, which re-stamps the ad's badge. */
 		String hostAccountType,
 		/** Sent with {@code subscribe}: this client can read gzipped binary frames. Absent means it cannot. */

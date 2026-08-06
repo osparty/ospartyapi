@@ -102,6 +102,10 @@ final class SocketPathHandler extends ChannelInboundHandlerAdapter {
 			return;
 		}
 		auth.accountFor(token).ifPresent(accountHash -> {
+			// The one place a credential's use is ever recorded. Without this a device's "last seen" never
+			// moves past the moment it was issued or coupled, which is exactly the number someone deciding
+			// whether to revoke a device they don't recognise needs to not be stale.
+			auth.touch(token);
 			ctx.channel().attr(AUTH_ACCOUNT).set(accountHash);
 			ctx.channel().attr(AUTH_TOKEN).set(token);
 		});

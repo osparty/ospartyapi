@@ -94,6 +94,59 @@ class AccountAuthTest {
 		assertThat(store.enrolments().get(0).clientIp()).isEqualTo("1.2.3.4");
 	}
 
+	// ---- revoking a device you cannot reach ---------------------------------
+
+	/**
+	 * The whole point of {@link AccountAuthService#revokeDevice}: it works from a machine that never held
+	 * the lost one's token, which {@link AccountAuthService#revoke} cannot do.
+	 */
+	@Test
+	void revokeDeviceWithdrawsAMachineByIdFromAnotherMachine() {
+		AccountAuthService.Issued lost = auth.enrol(4242L, null).orElseThrow();
+		AccountAuthService.Issued current = auth.validateCouplingCode(4242L,
+			auth.generateCouplingCode(4242L, "current").orElseThrow(), "current", null).orElseThrow();
+		String lostDeviceId = auth.devices(4242L).stream()
+			.filter(d -> !d.tokenHash().equals(digestOf(current.token())))
+			.findFirst().orElseThrow().tokenHash();
+
+		assertThat(auth.revokeDevice(4242L, lostDeviceId)).isTrue();
+
+		assertThat(auth.accountFor(lost.token())).isEmpty();
+		assertThat(auth.accountFor(current.token())).contains(4242L);
+	}
+
+	/** A device id only means something on the account it belongs to. */
+	@Test
+	void revokeDeviceRefusesADeviceBelongingToAnotherAccount() {
+		AccountAuthService.Issued other = auth.enrol(9999L, null).orElseThrow();
+		String otherDeviceId = auth.devices(9999L).get(0).tokenHash();
+
+		assertThat(auth.revokeDevice(4242L, otherDeviceId)).isFalse();
+		assertThat(auth.accountFor(other.token())).contains(9999L);
+	}
+
+	@Test
+	void revokeDeviceIsFalseForAnUnknownOrAlreadyRevokedId() {
+		AccountAuthService.Issued desktop = auth.enrol(4242L, null).orElseThrow();
+		String deviceId = auth.devices(4242L).get(0).tokenHash();
+		auth.revoke(desktop.token());
+
+		assertThat(auth.revokeDevice(4242L, deviceId)).isFalse();
+		assertThat(auth.revokeDevice(4242L, "not-a-real-id")).isFalse();
+	}
+
+	/** Only ever exposed as a digest that authenticates nothing on its own; a test SHA-256 recreation. */
+	private static String digestOf(String token) {
+		try {
+			java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+			return java.util.HexFormat.of().formatHex(
+				digest.digest(token.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+		}
+		catch (java.security.NoSuchAlgorithmException e) {
+			throw new IllegalStateException(e);
+		}
+	}
+
 	// ---- coupling a second machine ------------------------------------------
 
 	/**

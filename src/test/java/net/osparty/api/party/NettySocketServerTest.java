@@ -37,6 +37,7 @@ class NettySocketServerTest {
 	private LocalPartyAdmissionService admissions;
 	private NettySocketServer server;
 	private io.micrometer.core.instrument.simple.SimpleMeterRegistry meters;
+	private net.osparty.api.service.AccountAuthService auth;
 	private final List<WebSocketSession> clients = new ArrayList<>();
 
 	@BeforeEach
@@ -51,11 +52,11 @@ class NettySocketServerTest {
 		// that is worth exercising rather than skipping.
 		meters = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
 		admissions = new LocalPartyAdmissionService();
+		auth = new net.osparty.api.service.AccountAuthService(
+			new net.osparty.api.repository.InMemoryAccountCredentialRepository(),
+			new net.osparty.api.service.LocalCouplingCodeStore(), true);
 		server = new NettySocketServer(
-			new PartyFrameHandler(manager, mapper, admissions), null, 0, meters, false,
-			new net.osparty.api.service.AccountAuthService(
-				new net.osparty.api.repository.InMemoryAccountCredentialRepository(),
-				new net.osparty.api.service.LocalCouplingCodeStore(), true));
+			new PartyFrameHandler(manager, mapper, admissions), null, 0, meters, false, auth);
 		server.start();
 	}
 
@@ -112,6 +113,25 @@ class NettySocketServerTest {
 		JsonNode back = againOut.await("welcome");
 		assertThat(back.get("m").asLong()).isEqualTo(memberId);
 		assertThat(back.get("status").asText()).isEqualTo("MEMBER");
+	}
+
+	/**
+	 * {@code SocketPathHandler.authenticate} stashes {@code AUTH_TOKEN} specifically "to mark it as used
+	 * once the connection is established" -- this pins down that the mark actually happens. Real handshake,
+	 * real header, over a real socket: nothing about {@code touch} is reachable from a test that talks to
+	 * {@code AccountAuthService} directly, since the whole point is that it fires from the transport layer.
+	 */
+	@Test
+	void presentingACredentialOnConnectTouchesIt() throws Exception {
+		String token = auth.enrol(4242L, null).orElseThrow().token();
+		java.time.Instant issuedAt = auth.devices(4242L).get(0).lastSeenAt();
+		Thread.sleep(5); // clock resolution: without a gap, "touched" and "just issued" can land in the same ms
+
+		connectAuthenticated("/api/ws", new Collector(Mux.LIVE), token);
+
+		waitFor(() -> auth.devices(4242L).get(0).lastSeenAt().isAfter(issuedAt)
+			? mapper.createObjectNode() : null);
+		assertThat(auth.devices(4242L).get(0).lastSeenAt()).isAfter(issuedAt);
 	}
 
 	/** The node-hint form is a different path to the same endpoint, and the client is told where it landed. */
@@ -214,6 +234,19 @@ class NettySocketServerTest {
 	private WebSocketSession connect(String path, Collector collector) throws Exception {
 		WebSocketSession session = new StandardWebSocketClient()
 			.execute(collector, "ws://localhost:" + server.boundPort() + path)
+			.get(WAIT_MS, TimeUnit.MILLISECONDS);
+		clients.add(session);
+		return session;
+	}
+
+	/** As {@link #connect(String, Collector)}, presenting a credential on the upgrade. */
+	private WebSocketSession connectAuthenticated(String path, Collector collector, String token)
+		throws Exception {
+		org.springframework.web.socket.WebSocketHttpHeaders headers =
+			new org.springframework.web.socket.WebSocketHttpHeaders();
+		headers.add("X-OSParty-Auth", token);
+		WebSocketSession session = new StandardWebSocketClient()
+			.execute(collector, headers, java.net.URI.create("ws://localhost:" + server.boundPort() + path))
 			.get(WAIT_MS, TimeUnit.MILLISECONDS);
 		clients.add(session);
 		return session;

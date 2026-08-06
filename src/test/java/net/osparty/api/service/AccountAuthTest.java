@@ -19,7 +19,7 @@ class AccountAuthTest {
 	@BeforeEach
 	void setUp() {
 		store = new InMemoryAccountCredentialRepository();
-		auth = new AccountAuthService(store, true);
+		auth = new AccountAuthService(store, new LocalCouplingCodeStore(), true);
 	}
 
 	@Test
@@ -72,6 +72,15 @@ class AccountAuthTest {
 		assertThat(auth.hasActiveCredential(4242L)).isFalse();
 	}
 
+	/** With nothing left holding the account, the next machine is a first machine again. */
+	@Test
+	void anAccountWithNoMachinesEnrolsPlainlyAgain() {
+		AccountAuthService.Issued desktop = auth.enrol(4242L, null).orElseThrow();
+		auth.revoke(desktop.token());
+
+		assertThat(auth.enrol(4242L, null)).isPresent();
+	}
+
 	/**
 	 * Enrolment is the one moment this scheme takes an account hash on faith, so it is never silent. The
 	 * record has to outlive the credential -- a hijack is discovered after the fact or not at all.
@@ -87,9 +96,12 @@ class AccountAuthTest {
 
 	// ---- coupling a second machine ------------------------------------------
 
-	/** The code moves the credential: the new machine gets one, the old one stops working. */
+	/**
+	 * Coupling adds a machine. The one that displayed the code keeps working -- the point is to let someone
+	 * prove they hold the account's existing machine, not to make them give it up.
+	 */
 	@Test
-	void aValidCodeMovesTheCredentialToTheNewMachine() {
+	void aValidCodeAddsAMachineWithoutTakingTheFirst() {
 		AccountAuthService.Issued desktop = auth.enrol(4242L, null).orElseThrow();
 		String code = auth.generateCouplingCode(4242L, "challenger").orElseThrow();
 
@@ -97,11 +109,39 @@ class AccountAuthTest {
 			auth.validateCouplingCode(4242L, code, "challenger", "1.2.3.4").orElseThrow();
 
 		assertThat(auth.accountFor(laptop.token())).contains(4242L);
-		assertThat(auth.accountFor(desktop.token())).isEmpty();
+		assertThat(auth.accountFor(desktop.token())).contains(4242L);
+		assertThat(auth.devices(4242L)).hasSize(2);
+	}
+
+	/** And again, so an account accumulates the machines its owner has actually stood in front of. */
+	@Test
+	void aThirdMachineCouplesTheSameWay() {
+		AccountAuthService.Issued first = auth.enrol(4242L, null).orElseThrow();
+		AccountAuthService.Issued second = auth.validateCouplingCode(4242L,
+			auth.generateCouplingCode(4242L, "second").orElseThrow(), "second", null).orElseThrow();
+		AccountAuthService.Issued third = auth.validateCouplingCode(4242L,
+			auth.generateCouplingCode(4242L, "third").orElseThrow(), "third", null).orElseThrow();
+
+		assertThat(auth.accountFor(first.token())).contains(4242L);
+		assertThat(auth.accountFor(second.token())).contains(4242L);
+		assertThat(auth.accountFor(third.token())).contains(4242L);
+	}
+
+	/** Signing one machine out leaves the rest alone: they are separate credentials, not one shared seat. */
+	@Test
+	void revokingOneCoupledMachineLeavesTheOthers() {
+		AccountAuthService.Issued desktop = auth.enrol(4242L, null).orElseThrow();
+		AccountAuthService.Issued laptop = auth.validateCouplingCode(4242L,
+			auth.generateCouplingCode(4242L, "challenger").orElseThrow(), "challenger", null).orElseThrow();
+
+		auth.revoke(laptop.token());
+
+		assertThat(auth.accountFor(laptop.token())).isEmpty();
+		assertThat(auth.accountFor(desktop.token())).contains(4242L);
 	}
 
 	@Test
-	void aWrongCodeMovesNothing() {
+	void aWrongCodeAddsNothing() {
 		AccountAuthService.Issued desktop = auth.enrol(4242L, null).orElseThrow();
 		auth.generateCouplingCode(4242L, "challenger");
 
@@ -166,7 +206,7 @@ class AccountAuthTest {
 	/** Ships off. A client that gets no credential carries on unauthenticated, as every old client does. */
 	@Test
 	void enrolmentIssuesNothingWhileItIsSwitchedOff() {
-		AccountAuthService disabled = new AccountAuthService(store, false);
+		AccountAuthService disabled = new AccountAuthService(store, new LocalCouplingCodeStore(), false);
 
 		assertThat(disabled.enrol(4242L, null)).isEmpty();
 		assertThat(store.findActiveByAccountHash(4242L)).isEmpty();

@@ -4,13 +4,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
-import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import net.osparty.api.repository.AccountCredentialRepository;
 import net.osparty.api.repository.AccountCredentialRepository.Credential;
 import org.slf4j.Logger;
@@ -50,31 +47,19 @@ public class AccountAuthService {
 	 * again -- but an unbounded set is a leak that never stops growing, and a real person does not have
 	 * thirty computers. Hitting it means something is wrong and worth a log line.
 	 */
-	private static final int MAX_DEVICES = 1;
-
-	/** Six digits, numeric, displayed as three groups of two. */
-	private static final int COUPLING_CODE_LENGTH = 6;
-
-	/** Seconds a coupling code remains valid. Long enough to type; short enough that a stale code is not an invite. */
-	private static final int COUPLING_CODE_TTL = 300;
+	private static final int MAX_DEVICES = 20;
 
 	private final AccountCredentialRepository store;
+	private final CouplingCodeStore couplings;
 	private final SecureRandom random = new SecureRandom();
 	private final boolean enrolmentEnabled;
-	private final Map<Long, PendingCoupling> pendingCouplings = new ConcurrentHashMap<>();
 
-	/** A pending coupling request: the code, when it expires, and the session id of the challenger. */
-	record PendingCoupling(String code, Instant expiresAt, String challengerSessionId) {
-		public boolean expired() {
-			return Instant.now().isAfter(expiresAt);
-		}
-	}
-
-	public AccountAuthService(AccountCredentialRepository store,
+	public AccountAuthService(AccountCredentialRepository store, CouplingCodeStore couplings,
 		// Enrolment stays off until raw account hashes have stopped leaving the server (research doc
 		// §10.1). Verification of already-issued credentials is always on: it can only ever refuse.
 		@Value("${app.auth.enrolment-enabled:true}") boolean enrolmentEnabled) {
 		this.store = store;
+		this.couplings = couplings;
 		this.enrolmentEnabled = enrolmentEnabled;
 	}
 
@@ -130,18 +115,21 @@ public class AccountAuthService {
 			// shared identity.
 			return Optional.empty();
 		}
+		// First machine only. Anything after that has to prove itself by coupling, and the check lives here
+		// as well as in the caller: a path that reached this method without asking would otherwise hand out
+		// a credential for an account somebody else already holds, which is the whole thing coupling exists
+		// to prevent.
 		int existing = store.countActiveByAccountHash(accountHash);
-		if (existing >= MAX_DEVICES) {
-			log.warn("Refusing enrolment for account {}: already has {} devices", accountHash, existing);
+		if (existing > 0) {
+			log.warn("Refusing plain enrolment for account {}: it already has {} devices, so this must couple",
+				accountHash, existing);
 			return Optional.empty();
 		}
-		byte[] bytes = new byte[TOKEN_BYTES];
-		random.nextBytes(bytes);
-		String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+		String token = mintToken();
 		store.insert(hash(token), accountHash, null);
-		store.logEnrolment(accountHash, clientIp, existing == 0);
-		log.info("Enrolled a device for account {} (device {} of this account)", accountHash, existing + 1);
-		return Optional.of(new Issued(token, accountHash, existing == 0));
+		store.logEnrolment(accountHash, clientIp, true);
+		log.info("Enrolled the first device for account {}", accountHash);
+		return Optional.of(new Issued(token, accountHash, true));
 	}
 
 	/** The machines currently entitled to speak for an account. */
@@ -181,20 +169,12 @@ public class AccountAuthService {
 	 * @return the code to display to the connected client, or empty if one is already pending
 	 */
 	public Optional<String> generateCouplingCode(long accountHash, String challengerSessionId) {
-		// An expired request is not a request. Testing only for presence left a lapsed one sitting in the
-		// map with nothing to remove it, so an account that started a coupling and walked away could never
-		// couple again -- a permanent lockout produced by the timeout that was meant to be the safe outcome.
-		PendingCoupling existing = pendingCouplings.get(accountHash);
-		if (existing != null && existing.expired()) {
-			pendingCouplings.remove(accountHash, existing);
-			existing = null;
-		}
-		if (existing != null) {
+		String code = String.format("%06d", random.nextInt(1_000_000));
+		if (!couplings.putIfAbsent(accountHash, code, challengerSessionId)) {
+			// Another challenger is already waiting. Refusing rather than replacing keeps the code on the
+			// user's other screen matching the one being asked for.
 			return Optional.empty();
 		}
-		String code = String.format("%06d", random.nextInt(1_000_000));
-		PendingCoupling pending = new PendingCoupling(code, Instant.now().plusSeconds(COUPLING_CODE_TTL), challengerSessionId);
-		pendingCouplings.put(accountHash, pending);
 		log.info("Generated coupling code for account {}", accountHash);
 		return Optional.of(code);
 	}
@@ -204,7 +184,7 @@ public class AccountAuthService {
 	 * leaving it pending would block the next attempt for the whole of its lifetime.
 	 */
 	public void cancelCoupling(long accountHash) {
-		pendingCouplings.remove(accountHash);
+		couplings.remove(accountHash);
 	}
 
 	/**
@@ -216,25 +196,56 @@ public class AccountAuthService {
 	 * @param clientIp the challenger's IP
 	 * @return issued credential if valid, empty if code is wrong, expired, or not pending
 	 */
-	public Optional<Issued> validateCouplingCode(long accountHash, String code, String challengerSessionId, String clientIp) {
-		PendingCoupling pending = pendingCouplings.get(accountHash);
-		if (pending == null) {
+	public Optional<Issued> validateCouplingCode(long accountHash, String code, String challengerSessionId,
+		String clientIp) {
+		Optional<CouplingCodeStore.Pending> found = couplings.get(accountHash);
+		if (found.isEmpty()) {
 			return Optional.empty();
 		}
-		if (pending.expired()) {
-			pendingCouplings.remove(accountHash, pending);
+		CouplingCodeStore.Pending pending = found.get();
+		// Compared without short-circuiting on length so a wrong code costs the same time as a right one.
+		// Six digits is a small space, and a timing signal on the first differing digit would shrink it to
+		// sixty guesses.
+		if (!MessageDigest.isEqual(pending.code().getBytes(StandardCharsets.UTF_8),
+			code == null ? new byte[0] : code.getBytes(StandardCharsets.UTF_8))) {
 			return Optional.empty();
 		}
-		if (!pending.code().equals(code)) {
-			return Optional.empty();
-		}
+		// The code was issued to one waiting connection. Anyone else who saw it -- over a shoulder, on a
+		// stream -- cannot spend it from their own.
 		if (!pending.challengerSessionId().equals(challengerSessionId)) {
 			return Optional.empty();
 		}
-		pendingCouplings.remove(accountHash, pending);
+		couplings.remove(accountHash);
 		log.info("Coupling code validated for account {}", accountHash);
-		store.revokeAllForAccount(accountHash);
-		return enrol(accountHash, clientIp);
+		// Adds a machine. The one that displayed the code keeps working: the point of coupling is to let
+		// somebody prove they hold the account's existing machine, not to make them give it up. An account
+		// ends up with the set of machines its owner has actually stood in front of.
+		return enrolCoupled(accountHash, clientIp);
+	}
+
+	/**
+	 * Enrol a machine that has just proved itself by coupling.
+	 *
+	 * <p>Separate from {@link #enrol} because that one refuses an account which already has a credential --
+	 * which is what sends a second machine here in the first place.
+	 */
+	private Optional<Issued> enrolCoupled(long accountHash, String clientIp) {
+		int existing = store.countActiveByAccountHash(accountHash);
+		if (existing >= MAX_DEVICES) {
+			log.warn("Refusing coupled enrolment for account {}: already has {} devices", accountHash, existing);
+			return Optional.empty();
+		}
+		String token = mintToken();
+		store.insert(hash(token), accountHash, null);
+		store.logEnrolment(accountHash, clientIp, false);
+		log.info("Coupled a device for account {} (device {} of this account)", accountHash, existing + 1);
+		return Optional.of(new Issued(token, accountHash, false));
+	}
+
+	private String mintToken() {
+		byte[] bytes = new byte[TOKEN_BYTES];
+		random.nextBytes(bytes);
+		return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
 	}
 
 	/**

@@ -773,7 +773,9 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			sub.accountHash = result.get().accountHash();
 			sendAuthIssued(sub, result.get());
 			sendCouplingResult(sub, in.accountHash(), true);
-			findAndNotifyIncumbentOfRevoke(in.accountHash(), sub.session.id());
+			// The machines that were already on this account keep their credentials -- coupling adds one.
+			// They are told so the user sees, on the screen they read the code off, that it was used.
+			notifyIncumbentOfCoupling(in.accountHash(), sub.session.id());
 		} else {
 			sendCouplingResult(sub, in.accountHash(), false);
 		}
@@ -791,22 +793,26 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	}
 
 	/**
-	 * Tell the machines that just lost the credential.
+	 * Tell the machines already on this account that another one has just joined it.
 	 *
-	 * <p>Never the session that took it: by this point the challenger is authenticated on the same account,
-	 * so an unfiltered sweep reaches it too and it deletes the credential it was issued a moment ago.
+	 * <p>Never the session that did the joining: by this point the challenger is authenticated on the same
+	 * account, so an unfiltered sweep reaches it too and it would be told about itself.
+	 *
+	 * <p>This is a notice, not a revocation -- nothing here loses its credential. It exists so that a code
+	 * being spent is visible on the screen it was displayed on, which is the one place someone who did not
+	 * expect it would notice.
 	 */
-	private void findAndNotifyIncumbentOfRevoke(Long accountHash, String exceptSessionId) {
+	private void notifyIncumbentOfCoupling(Long accountHash, String exceptSessionId) {
 		subscribers.values().stream()
 			.filter(s -> s.authenticated && accountHash.equals(s.accountHash)
 				&& !s.session.id().equals(exceptSessionId))
 			.forEach(s -> {
 				try {
-					sendRaw(s, new Frame(mapper.writeValueAsString(new CouplingRevoked(
-						"couplingRevoked", accountHash))));
+					sendRaw(s, new Frame(mapper.writeValueAsString(new CouplingAccepted(
+						"couplingAccepted", accountHash))));
 				}
 				catch (Exception e) {
-					log.warn("Failed to deliver coupling revoke to session {}: {}",
+					log.warn("Failed to deliver coupling notice to session {}: {}",
 						s.session.id(), e.toString());
 				}
 			});
@@ -850,7 +856,8 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	}
 
 	/** Sent to the incumbent after the challenger succeeds: your credential has been revoked. */
-	record CouplingRevoked(String type, Long accountHash) {
+	/** Sent to the machines already on an account when another one couples to it. Nothing is lost. */
+	record CouplingAccepted(String type, Long accountHash) {
 	}
 
 	/**

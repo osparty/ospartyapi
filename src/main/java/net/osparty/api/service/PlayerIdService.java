@@ -4,6 +4,10 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.List;
+import net.osparty.api.model.Advertisement;
+import net.osparty.api.model.Member;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -86,6 +90,54 @@ public class PlayerIdService {
 			out.append(ALPHABET[value & 0x1F]);
 		}
 		return out.toString();
+	}
+
+	/**
+	 * Stamp {@code playerId} onto a copy of each ad's member list, leaving the stored/internal objects and
+	 * anything with no members untouched.
+	 *
+	 * <p>The board ad's member list is a second place {@code accountHash} rides to a client -- separate
+	 * from, and touched by none of, the fix that stopped it riding the live-party payload (see
+	 * WEBSOCKET_AUTH_RESEARCH.md §10.3). It is broadcast to every board subscriber, not just party members,
+	 * on every {@code hosted}/{@code created}/{@code updated}/{@code snapshot} frame. This is the wire-side
+	 * substitute; {@code accountHash} keeps riding alongside it during the transition, the same as it does
+	 * on the live-party roster, and is dropped only once client adoption is measured.
+	 *
+	 * <p>Same shape as {@link net.osparty.api.service.DiscordBadgeService#enrichAds}, called at the same
+	 * handful of sites, immediately after it: an ad's members are enriched with badges and a player id right
+	 * before they leave this service, never as something stored.
+	 */
+	public List<Advertisement> enrichAds(List<Advertisement> ads) {
+		List<Advertisement> out = new ArrayList<>(ads.size());
+		for (Advertisement ad : ads) {
+			out.add(enrich(ad));
+		}
+		return out;
+	}
+
+	private Advertisement enrich(Advertisement ad) {
+		List<Member> members = ad.getMembers();
+		if (members == null || members.isEmpty()) {
+			return ad;
+		}
+		boolean any = false;
+		for (Member member : members) {
+			if (member.getAccountHash() != 0) {
+				any = true;
+				break;
+			}
+		}
+		if (!any) {
+			return ad;
+		}
+		List<Member> enriched = new ArrayList<>(members.size());
+		for (Member member : members) {
+			enriched.add(new Member(member.getName(), member.getAccountHash(), member.getBadges(),
+				of(member.getAccountHash())));
+		}
+		Advertisement copy = Advertisement.copyOf(ad);
+		copy.setMembers(enriched);
+		return copy;
 	}
 
 	private byte[] sha256(long accountHash) {

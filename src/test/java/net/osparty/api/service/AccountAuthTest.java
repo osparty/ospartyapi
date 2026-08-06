@@ -307,4 +307,59 @@ class AccountAuthTest {
 		assertThat(ids.of(0L)).isNull();
 		assertThat(ids.of(-1L)).isNull();
 	}
+
+	// ---- enriching board ads with playerId ----------------------------------
+
+	/**
+	 * The board's ad member list is a second place {@code accountHash} rides to a client, entirely separate
+	 * from the live-party roster -- {@code enrichAds} is what lets it carry {@code playerId} instead of
+	 * relying on it, the same way {@code DiscordBadgeService.enrichAds} adds badges. See
+	 * WEBSOCKET_AUTH_RESEARCH.md §10.3.
+	 */
+	@Test
+	void enrichAdsStampsAPlayerIdOnEachMemberWithAnAccount() {
+		PlayerIdService ids = new PlayerIdService("a-test-salt");
+		net.osparty.api.model.Advertisement ad = new net.osparty.api.model.Advertisement();
+		ad.setMembers(java.util.List.of(
+			new net.osparty.api.model.Member("Alice", 4242L),
+			new net.osparty.api.model.Member("Bob", 0L))); // no account -- nothing to enrich
+
+		net.osparty.api.model.Advertisement enriched = ids.enrichAds(java.util.List.of(ad)).get(0);
+
+		java.util.List<net.osparty.api.model.Member> members = enriched.getMembers();
+		assertThat(members.get(0).getPlayerId()).isEqualTo(ids.of(4242L));
+		assertThat(members.get(1).getPlayerId()).isNull();
+	}
+
+	/** accountHash keeps riding alongside playerId during the transition -- this only adds a field. */
+	@Test
+	void enrichAdsDoesNotRemoveAccountHash() {
+		PlayerIdService ids = new PlayerIdService("a-test-salt");
+		net.osparty.api.model.Advertisement ad = new net.osparty.api.model.Advertisement();
+		ad.setMembers(java.util.List.of(new net.osparty.api.model.Member("Alice", 4242L)));
+
+		net.osparty.api.model.Advertisement enriched = ids.enrichAds(java.util.List.of(ad)).get(0);
+
+		assertThat(enriched.getMembers().get(0).getAccountHash()).isEqualTo(4242L);
+	}
+
+	/** The stored ad is untouched -- playerId is computed fresh for the wire, never persisted. */
+	@Test
+	void enrichAdsDoesNotMutateTheOriginal() {
+		PlayerIdService ids = new PlayerIdService("a-test-salt");
+		net.osparty.api.model.Advertisement ad = new net.osparty.api.model.Advertisement();
+		ad.setMembers(java.util.List.of(new net.osparty.api.model.Member("Alice", 4242L)));
+
+		ids.enrichAds(java.util.List.of(ad));
+
+		assertThat(ad.getMembers().get(0).getPlayerId()).isNull();
+	}
+
+	@Test
+	void enrichAdsLeavesAnAdWithNoMembersAlone() {
+		PlayerIdService ids = new PlayerIdService("a-test-salt");
+		net.osparty.api.model.Advertisement ad = new net.osparty.api.model.Advertisement();
+
+		assertThat(ids.enrichAds(java.util.List.of(ad)).get(0)).isSameAs(ad);
+	}
 }

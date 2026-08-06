@@ -22,9 +22,21 @@ public class Member {
 	private long accountHash;
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	private List<String> badges;
+	/**
+	 * The account's public, non-reversible id -- stamped on outbound copies by
+	 * {@link net.osparty.api.service.PlayerIdService#enrichAds}, never present on the stored/internal object.
+	 * Same shape as {@code badges}: computed fresh for the wire, not persisted, {@code null} until the
+	 * client this rides to has a reason to read it instead of {@code accountHash}.
+	 */
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	private String playerId;
 
 	public Member(String name, long accountHash) {
-		this(name, accountHash, null);
+		this(name, accountHash, null, null);
+	}
+
+	public Member(String name, long accountHash, List<String> badges) {
+		this(name, accountHash, badges, null);
 	}
 
 	public static class MemberDeserializer extends JsonDeserializer<Member> {

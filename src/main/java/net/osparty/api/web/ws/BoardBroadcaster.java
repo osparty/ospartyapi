@@ -337,7 +337,7 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	}
 
 	private Advertisement enriched(Advertisement ad) {
-		return ad == null ? null : badges.enrichAds(List.of(ad)).get(0);
+		return ad == null ? null : playerIds.enrichAds(badges.enrichAds(List.of(ad))).get(0);
 	}
 
 	private void handleUpdate(Subscriber sub, Inbound in) {
@@ -1372,7 +1372,7 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 				return;
 			}
 		}
-		List<Advertisement> all = badges.enrichAds(store.list(sub.activity));
+		List<Advertisement> all = playerIds.enrichAds(badges.enrichAds(store.list(sub.activity)));
 		List<Advertisement> list = new java.util.ArrayList<>(all.size());
 		for (Advertisement ad : all) {
 			if (!bans.isHidden(ad) || isOwnAdvertisement(sub, ad)) {

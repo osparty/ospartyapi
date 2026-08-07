@@ -33,6 +33,15 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 
 	private static final AdvertisementUpdate TTL_TOUCH = new AdvertisementUpdate();
 
+	/**
+	 * Recovery codes a single connection may try.
+	 *
+	 * <p>Not what makes guessing hopeless -- eighty bits does that. This is here so a client stuck in a loop,
+	 * or someone feeding a list through, is stopped rather than served, and it is per connection because
+	 * that is the only scope available before a caller has proved who it is.
+	 */
+	private static final int MAX_RECOVERY_ATTEMPTS_PER_SESSION = 10;
+
 	private final AdvertisementRepository store;
 	private final ObjectMapper mapper;
 	private final net.osparty.api.service.VoiceChannelService voice;
@@ -51,6 +60,13 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	private final net.osparty.api.party.PartyAdmissionService admissions;
 	/** Mints and resolves the per-install credential that settles who a connection is. */
 	private final net.osparty.api.service.AccountAuthService auth;
+	/**
+	 * The way back onto an account when no other machine can vouch for it. Null where the board is built
+	 * without Discord at all, which the recovery frames check for rather than assume.
+	 */
+	private final net.osparty.api.service.DiscordRecoveryService discordRecovery;
+	/** Reaches an account's other machines wherever they are; without it coupling only worked per replica. */
+	private final CouplingBus couplings;
 	/** Turns an account hash into the public id other players see, so the hash itself never has to travel. */
 	private final net.osparty.api.service.PlayerIdService playerIds;
 	/** Kill switches: both lookups are reachable by the banned host's own client. */
@@ -81,10 +97,12 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		net.osparty.api.service.DiscordBadgeService badges,
 		PresenceRegistry presence,
 		InviteBus inviteBus,
+		CouplingBus couplingBus,
 		net.osparty.api.service.BanService bans,
 		BoardChangeBus changes,
 		net.osparty.api.party.PartyAdmissionService admissions,
 		net.osparty.api.service.AccountAuthService auth,
+		net.osparty.api.service.DiscordRecoveryService discordRecovery,
 		net.osparty.api.service.PlayerIdService playerIds,
 		@org.springframework.beans.factory.annotation.Value("${app.bans.filter-get-by-host:true}")
 		boolean filterByHost,
@@ -105,10 +123,12 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		this.badges = badges;
 		this.presence = presence;
 		this.inviteBus = inviteBus;
+		this.couplings = couplingBus;
 		this.bans = bans;
 		this.changes = changes;
 		this.admissions = admissions;
 		this.auth = auth;
+		this.discordRecovery = discordRecovery;
 		this.playerIds = playerIds;
 		this.filterByHost = filterByHost;
 		this.filterByCode = filterByCode;
@@ -128,6 +148,8 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			.register(meterRegistry);
 		// Cross-node invite delivery calls back here to reach a target connected to this instance.
 		inviteBus.setLocalDelivery(this::deliverInviteLocally);
+		// Same arrangement for coupling: the bus asks every node, and this is how this one answers.
+		couplings.setLocalHandlers(this::hasLocalDeviceOnline, this::sendCouplingCodeLocally);
 		Gauge.builder("parties.active", store, AdvertisementRepository::advertisementCount)
 				.description("Current number of active parties")
 				.register(meterRegistry);
@@ -252,8 +274,29 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			case "identify":
 				handleIdentify(sub, in);
 				break;
+			case "requestCouplingCode":
+				handleRequestCouplingCode(sub, in);
+				break;
 			case "couplingConfirm":
 				handleCouplingConfirm(sub, in);
+				break;
+			case "retryAuth":
+				handleRetryAuth(sub, in);
+				break;
+			case "recoveryConfirm":
+				handleRecoveryConfirm(sub, in);
+				break;
+			case "issueRecoveryCodes":
+				handleIssueRecoveryCodes(sub);
+				break;
+			case "recoveryStatus":
+				handleRecoveryStatus(sub);
+				break;
+			case "startDiscordRecovery":
+				handleStartDiscordRecovery(sub, in);
+				break;
+			case "discordRecoveryPoll":
+				handleDiscordRecoveryPoll(sub, in);
 				break;
 			case "listDevices":
 				handleListDevices(sub);
@@ -541,6 +584,34 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		return false;
 	}
 
+	/**
+	 * The stronger check, for the two frames that decide what a Discord link means: this connection must
+	 * <em>be</em> the account, not merely have named it.
+	 *
+	 * <p>{@link #actingOnOwnAccount} is a speed bump -- a session that never identified passes it. That was
+	 * tolerable while a link only lit up a badge. It is not tolerable now that a link is accepted as proof of
+	 * ownership during recovery: without this, anyone could bind their own Discord account to a hash they
+	 * merely typed and then "recover" the account it belongs to. The circularity is the whole reason the
+	 * research doc made this a prerequisite rather than a follow-up.
+	 *
+	 * <p>Only applied to accounts that have a credential. One that has never enrolled has nothing to
+	 * authenticate against, and its links are marked unverified anyway, so they buy no recovery.
+	 */
+	private boolean ownsAccountForLinking(Subscriber sub, Inbound in, String frame) {
+		if (!actingOnOwnAccount(sub, in, frame)) {
+			return false;
+		}
+		if (!auth.enrolmentEnabled() || !auth.hasActiveCredential(in.accountHash())) {
+			return true;
+		}
+		if (sub.authenticated && sub.accountHash != null && sub.accountHash.equals(in.accountHash())) {
+			return true;
+		}
+		log.warn("Refused {}: session={} is not signed in as account {}",
+			frame, sub.session.id(), in.accountHash());
+		return false;
+	}
+
 	private void handleStartDiscordLink(Subscriber sub, Inbound in) {
 		if (!discordLinks.isEnabled()) {
 			sendError(sub, null, "linking disabled");
@@ -550,8 +621,8 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			sendError(sub, null, "missing accountHash");
 			return;
 		}
-		if (!actingOnOwnAccount(sub, in, "startDiscordLink")) {
-			sendError(sub, null, "not your account");
+		if (!ownsAccountForLinking(sub, in, "startDiscordLink")) {
+			sendError(sub, null, "sign in on this device first");
 			return;
 		}
 		String url = discordLinks.beginLink(in.accountHash());
@@ -563,8 +634,10 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			sendError(sub, null, "missing accountHash");
 			return;
 		}
-		if (!actingOnOwnAccount(sub, in, "unlinkDiscord")) {
-			sendError(sub, null, "not your account");
+		// Same bar as linking: unlinking is how an attacker would clear a victim's verified link before
+		// planting their own, so leaving it on the weaker check would route straight around that one.
+		if (!ownsAccountForLinking(sub, in, "unlinkDiscord")) {
+			sendError(sub, null, "sign in on this device first");
 			return;
 		}
 		discordLinks.unlink(in.accountHash());
@@ -692,73 +765,151 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	 * <p>Silent when enrolment is off, which is how it ships: a client that gets no {@code authIssued} is
 	 * expected to carry on unauthenticated, exactly as every client from before this existed already does.
 	 *
-	 * <p>If the account already has a credential, a coupling code is generated and sent to the connected
-	 * client. The challenger must present the code to enrol.
+	 * <p>If the account already has a credential this cannot enrol, and says so with {@link AuthFailed}
+	 * rather than silently -- along with which of the ways back in are actually open, so the client can
+	 * offer those and only those.
+	 *
+	 * <p><b>Once per session per account.</b> {@code identify} is re-sent on every reconnect, and a client
+	 * that cannot enrol reconnects on every world hop and every network blip. Answering each one used to put
+	 * a modal prompt on the user's screen and a fresh six-digit code on their other machine's, over and over,
+	 * for a problem that had not changed since the first time. The client asks again with {@code retryAuth}
+	 * when the user has actually done something about it.
 	 */
 	private void maybeEnrol(Subscriber sub, Inbound in) {
 		if (sub.authenticated || !auth.enrolmentEnabled() || in.accountHash() == null) {
 			return;
 		}
-		if (auth.hasActiveCredential(in.accountHash())) {
-			auth.generateCouplingCode(in.accountHash(), sub.session.id()).ifPresent(code -> {
-				// The code goes to the machine that already holds the credential, and to nothing else. The
-				// challenger is told only that it needs one: it has to be read off the other machine by the
-				// person who owns both, which is the only thing here that a stranger cannot do. Sending the
-				// code to the challenger as well would hand it to anyone who names an account hash -- and
-				// since confirming revokes the incumbent, that is worse than not asking at all.
-				int reached = sendCouplingCodeToIncumbent(in.accountHash(), code);
-				if (reached == 0) {
-					// Nothing to read the code off. Say so rather than leaving the challenger waiting on a
-					// number that was never displayed anywhere.
-					auth.cancelCoupling(in.accountHash());
-					sendCouplingUnavailable(sub, in.accountHash());
-					return;
-				}
-				sendCouplingRequired(sub, in.accountHash());
-			});
+		if (!sub.authOffered.add(in.accountHash())) {
 			return;
 		}
-		auth.enrol(in.accountHash(), sub.clientIp, sub.deviceLabel).ifPresent(issued -> {
+		attemptEnrol(sub, in.accountHash());
+	}
+
+	private void attemptEnrol(Subscriber sub, Long accountHash) {
+		if (auth.hasActiveCredential(accountHash)) {
+			// Asked across the cluster, so the answer arrives later than the frame that triggered it. Sending
+			// the failure from the callback costs a few hundred milliseconds before a dialog the user is not
+			// waiting on appears, which is a better trade than answering "no other device" without looking.
+			couplings.anyDeviceOnline(accountHash)
+				.whenComplete((online, error) -> sendAuthFailed(sub, accountHash, Boolean.TRUE.equals(online)));
+			return;
+		}
+		auth.enrol(accountHash, sub.clientIp, sub.deviceLabel).ifPresent(issued -> {
 			sub.authenticated = true;
 			sub.accountHash = issued.accountHash();
 			sendAuthIssued(sub, issued);
 		});
 	}
 
-	/** Tell the challenger a code is needed. Carries no code: knowing it is the whole test. */
-	private void sendCouplingRequired(Subscriber sub, Long accountHash) {
-		try {
-			sendRaw(sub, new Frame(mapper.writeValueAsString(new CouplingRequired(
-				"couplingRequired", accountHash))));
+	/**
+	 * Mint a code and show it on this account's other machines, because somebody asked for one.
+	 *
+	 * <p><b>Only ever on request.</b> This used to happen automatically the moment a sign-in failed, which
+	 * meant naming an account hash was enough to put a modal on the real owner's screen -- a stranger could
+	 * do it, repeatedly, and the owner had no way to tell it apart from their own second machine. Now nothing
+	 * is displayed anywhere until a person has chosen to send one, and {@code authFailed} only reports
+	 * whether the route exists.
+	 *
+	 * <p>The code goes to those machines and to nothing else. The challenger is told how many were reached
+	 * and no more: reading it off the other screen is the whole test, so sending the code here would answer
+	 * its own question.
+	 */
+	private void handleRequestCouplingCode(Subscriber sub, Inbound in) {
+		if (in.accountHash() == null) {
+			sendError(sub, null, "missing accountHash");
+			return;
 		}
-		catch (Exception e) {
-			log.warn("Failed to deliver coupling request to session {}: {}",
-				sub.session.id(), e.toString());
+		if (sub.authenticated || !auth.hasActiveCredential(in.accountHash())) {
+			// Nothing to couple to: either this connection is already signed in, or the account has no other
+			// machine for a code to come from.
+			sendCouplingCodeSent(sub, in.accountHash(), 0);
+			return;
 		}
+		Optional<String> code = auth.generateCouplingCode(in.accountHash(), sub.session.id());
+		if (code.isEmpty()) {
+			// A code is already pending. When it is this session's own -- which is what asking twice looks
+			// like -- it is still on the other screen and still spendable, so reporting nothing sent would
+			// talk the user out of the one thing already working. Only a different challenger's request
+			// really blocks this one.
+			sendCouplingCodeSent(sub, in.accountHash(),
+				auth.hasPendingCouplingFor(in.accountHash(), sub.session.id()) ? 1 : 0);
+			return;
+		}
+		couplings.deliverCode(in.accountHash(), code.get()).whenComplete((reached, error) -> {
+			int shown = reached == null ? 0 : reached;
+			if (shown == 0) {
+				// Nothing online to read it off after all. Dropped rather than left pending, or it blocks the
+				// next attempt for its whole lifetime -- and this is the case recovery codes exist for.
+				auth.cancelCoupling(in.accountHash());
+			}
+			sendCouplingCodeSent(sub, in.accountHash(), shown);
+		});
 	}
 
-	/** Tell the challenger there is no machine online to read a code off, so it cannot proceed now. */
-	private void sendCouplingUnavailable(Subscriber sub, Long accountHash) {
+	private void sendCouplingCodeSent(Subscriber sub, Long accountHash, int reached) {
 		try {
-			sendRaw(sub, new Frame(mapper.writeValueAsString(new CouplingResult(
-				"couplingUnavailable", accountHash, false))));
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new CouplingCodeSent(
+				"couplingCodeSent", accountHash, reached))));
 		}
 		catch (Exception e) {
-			log.warn("Failed to deliver coupling unavailable to session {}: {}",
+			log.warn("Failed to deliver a coupling-code ack to session {}: {}",
 				sub.session.id(), e.toString());
 		}
 	}
 
 	/**
-	 * Show the code on the machines that already hold a credential for this account.
+	 * Tell a client that it could not be signed in, and what it can do about it.
+	 *
+	 * <p>Every route this frame advertises is one the server has just confirmed is open, so the client never
+	 * offers a door that turns out to be locked. Carries no code and no Discord identity: it goes to a
+	 * connection that has proved nothing, and naming an account hash must not be a way to learn things.
+	 */
+	private void sendAuthFailed(Subscriber sub, Long accountHash, boolean coupling) {
+		boolean recoveryCodes = auth.recoveryCodesRemaining(accountHash) > 0;
+		boolean discord = discordRecovery != null && discordRecovery.available(accountHash);
+		if (!coupling && !recoveryCodes && !discord) {
+			log.warn("Account {} could not enrol and has no recovery route", accountHash);
+		}
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new AuthFailed(
+				"authFailed", accountHash, "already-enrolled", coupling, recoveryCodes, discord))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver sign-in failure to session {}: {}",
+				sub.session.id(), e.toString());
+		}
+	}
+
+	/**
+	 * Try signing in again, because the user has done something that might have changed the answer -- opened
+	 * OSParty on the other machine, most often.
+	 *
+	 * <p>Clears the once-per-session mark {@link #maybeEnrol} sets, so this is the deliberate way past it. It
+	 * is a user action rather than a timer, which is what keeps it from becoming the reconnect spam again.
+	 */
+	private void handleRetryAuth(Subscriber sub, Inbound in) {
+		if (sub.authenticated || !auth.enrolmentEnabled() || in.accountHash() == null) {
+			return;
+		}
+		sub.authOffered.remove(in.accountHash());
+		maybeEnrol(sub, in);
+	}
+
+	/**
+	 * Show the code on this node's connections that already hold a credential for this account.
 	 *
 	 * <p>Authenticated sessions only. {@code Subscriber.accountHash} is also set from an {@code identify}
 	 * frame, which anybody can send naming anybody -- so matching on it alone would deliver the code to a
 	 * session that merely claimed the account, which is exactly the session the code exists to keep out.
 	 *
-	 * @return how many machines were shown the code; zero means nobody can read it.
+	 * <p>This node's connections only. It used to be the whole of coupling, which quietly made the feature
+	 * a coin toss: nothing pins a person's two machines to one replica, so with three of them the sweep
+	 * missed the other machine about two times in three. {@link CouplingBus} is what asks the rest of the
+	 * cluster the same question, and this is the half it calls back into here.
+	 *
+	 * @return how many machines were shown the code; zero means nobody here can read it.
 	 */
-	private int sendCouplingCodeToIncumbent(Long accountHash, String code) {
+	private int sendCouplingCodeLocally(Long accountHash, String code) {
 		int reached = 0;
 		for (Subscriber s : subscribers.values()) {
 			if (!s.authenticated || !accountHash.equals(s.accountHash)) {
@@ -775,6 +926,22 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			}
 		}
 		return reached;
+	}
+
+	/**
+	 * Whether this node holds a signed-in connection for an account.
+	 *
+	 * <p>Same authentication rule and the same reason as {@link #sendCouplingCodeLocally}: a session that
+	 * merely claimed the account is not one of its devices, and counting it would let anybody make the
+	 * coupling route look available by naming a hash.
+	 */
+	private boolean hasLocalDeviceOnline(long accountHash) {
+		for (Subscriber s : subscribers.values()) {
+			if (s.authenticated && Long.valueOf(accountHash).equals(s.accountHash)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -797,6 +964,180 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 			notifyIncumbentOfCoupling(in.accountHash(), sub.session.id());
 		} else {
 			sendCouplingResult(sub, in.accountHash(), false);
+		}
+	}
+
+	// --- Recovery ---
+
+	/**
+	 * Redeem a recovery code: the path for when the other machine is not offline but gone.
+	 *
+	 * <p>Capped per connection. Eighty bits is far out of reach of guessing, so this is not what stops a
+	 * brute force -- it stops a broken or malicious client sitting in a loop, and it costs a legitimate user
+	 * nothing, since anyone who has mistyped a code ten times has a different problem.
+	 */
+	private void handleRecoveryConfirm(Subscriber sub, Inbound in) {
+		if (in.accountHash() == null || in.code() == null) {
+			sendRecoveryResult(sub, false, "missing accountHash or code");
+			return;
+		}
+		if (sub.authenticated) {
+			// Already signed in on this account; spending a code would only burn one for nothing.
+			sendRecoveryResult(sub, false, "already signed in");
+			return;
+		}
+		if (sub.recoveryAttempts.incrementAndGet() > MAX_RECOVERY_ATTEMPTS_PER_SESSION) {
+			log.warn("Session {} over the recovery attempt ceiling", sub.session.id());
+			sendRecoveryResult(sub, false, "too many attempts, reconnect and try again");
+			return;
+		}
+		Optional<net.osparty.api.service.AccountAuthService.Issued> issued =
+			auth.redeemRecoveryCode(in.accountHash(), in.code(), sub.clientIp, sub.deviceLabel);
+		if (issued.isEmpty()) {
+			sendRecoveryResult(sub, false, "that code isn't valid");
+			return;
+		}
+		signIn(sub, issued.get());
+		sendRecoveryResult(sub, true, null);
+	}
+
+	/**
+	 * Mint a fresh set of codes for the caller's own account, replacing any it has left.
+	 *
+	 * <p>Authenticated only, and on this connection's own account -- there is deliberately no way to ask for
+	 * another account's codes by naming its hash, because that would be a way to take the account.
+	 */
+	private void handleIssueRecoveryCodes(Subscriber sub) {
+		if (!sub.authenticated) {
+			sendError(sub, null, "not authenticated");
+			return;
+		}
+		List<String> codes = auth.issueRecoveryCodes(sub.accountHash);
+		sendRecoveryCodes(sub, codes, codes.size());
+	}
+
+	/** How many codes the caller's account has left, for the device list. Never the codes themselves. */
+	private void handleRecoveryStatus(Subscriber sub) {
+		if (!sub.authenticated) {
+			sendError(sub, null, "not authenticated");
+			return;
+		}
+		sendRecoveryCodes(sub, null, auth.recoveryCodesRemaining(sub.accountHash));
+	}
+
+	/**
+	 * Begin Discord recovery: hand back a URL for the browser and a ticket for this socket to poll with.
+	 *
+	 * <p>Starting one proves nothing and grants nothing. What settles it is whether the person who follows
+	 * the URL can sign in to the Discord account this OSRS account was linked to from a signed-in session.
+	 */
+	private void handleStartDiscordRecovery(Subscriber sub, Inbound in) {
+		if (in.accountHash() == null) {
+			sendError(sub, null, "missing accountHash");
+			return;
+		}
+		if (discordRecovery == null) {
+			sendError(sub, null, "recovery unavailable");
+			return;
+		}
+		Optional<net.osparty.api.service.DiscordRecoveryService.Started> started =
+			discordRecovery.begin(in.accountHash());
+		if (started.isEmpty()) {
+			sendError(sub, null, "no verified Discord link");
+			return;
+		}
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(new DiscordRecoveryUrl(
+				"discordRecoveryUrl", started.get().url(), started.get().ticket()))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver a recovery URL to session {}: {}", sub.session.id(), e.toString());
+		}
+	}
+
+	/**
+	 * Has the browser half finished yet?
+	 *
+	 * <p>Polled rather than pushed because the two halves land on different pods: the callback is an HTTP
+	 * request to whichever replica the ingress picked, and it has no way to reach the socket. The ticket is
+	 * what ties them together, and it is the client's to hold -- so a reconnect mid-flow does not lose the
+	 * authorisation the user has already given.
+	 *
+	 * <p>A poll that finds nothing is the normal case and answers {@code pending}, not a failure.
+	 */
+	private void handleDiscordRecoveryPoll(Subscriber sub, Inbound in) {
+		if (discordRecovery == null || in.ticket() == null || in.ticket().isBlank()) {
+			sendRecoveryResult(sub, false, "recovery unavailable");
+			return;
+		}
+		if (sub.authenticated) {
+			sendRecoveryResult(sub, true, null);
+			return;
+		}
+		Optional<Long> approved = discordRecovery.claim(in.ticket());
+		if (approved.isEmpty()) {
+			sendRecoveryPending(sub);
+			return;
+		}
+		Optional<net.osparty.api.service.AccountAuthService.Issued> issued = auth.enrolVerified(
+			approved.get(), sub.clientIp, sub.deviceLabel, "Discord");
+		if (issued.isEmpty()) {
+			// The approval is spent by now, so say plainly that it has to be started again rather than
+			// leaving the client polling a ticket that will never resolve.
+			sendRecoveryResult(sub, false, "couldn't add this device, try again");
+			return;
+		}
+		signIn(sub, issued.get());
+		sendRecoveryResult(sub, true, null);
+	}
+
+	/**
+	 * Adopt a freshly issued credential onto this connection.
+	 *
+	 * <p>The account moves onto the session as <em>authenticated</em>, which is what stops a later
+	 * {@code identify} moving it somewhere else, and it is indexed for invite routing the same way an
+	 * authenticated handshake does at {@link #onOpen}.
+	 */
+	private void signIn(Subscriber sub, net.osparty.api.service.AccountAuthService.Issued issued) {
+		// A Discord recovery resolves its account from the ticket, not from the frame, so the account this
+		// session ends up as need not be the one it claimed on the way in. Drop the old index entry or that
+		// claim keeps receiving invites for an account this connection is not.
+		if (sub.accountHash != null && !sub.accountHash.equals(issued.accountHash())) {
+			sessionByAccount.remove(sub.accountHash, sub.session.id());
+		}
+		sub.authenticated = true;
+		sub.accountHash = issued.accountHash();
+		sessionByAccount.put(issued.accountHash(), sub.session.id());
+		sendAuthIssued(sub, issued);
+	}
+
+	private void sendRecoveryCodes(Subscriber sub, List<String> codes, int remaining) {
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(
+				new RecoveryCodes("recoveryCodes", codes, remaining))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver recovery codes to session {}: {}", sub.session.id(), e.toString());
+		}
+	}
+
+	private void sendRecoveryResult(Subscriber sub, boolean success, String detail) {
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(
+				new RecoveryResult("recoveryResult", success, false, detail))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver a recovery result to session {}: {}", sub.session.id(), e.toString());
+		}
+	}
+
+	private void sendRecoveryPending(Subscriber sub) {
+		try {
+			sendRaw(sub, new Frame(mapper.writeValueAsString(
+				new RecoveryResult("recoveryResult", false, true, null))));
+		}
+		catch (Exception e) {
+			log.warn("Failed to deliver a recovery poll to session {}: {}", sub.session.id(), e.toString());
 		}
 	}
 
@@ -932,7 +1273,8 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	private void sendAuthIssued(Subscriber sub, net.osparty.api.service.AccountAuthService.Issued issued) {
 		try {
 			sendRaw(sub, new Frame(mapper.writeValueAsString(new AuthIssued(
-				"authIssued", issued.token(), playerIds.of(issued.accountHash()), issued.firstDevice()))));
+				"authIssued", issued.token(), playerIds.of(issued.accountHash()), issued.firstDevice(),
+				issued.recoveryCodes().isEmpty() ? null : issued.recoveryCodes()))));
 		}
 		catch (Exception e) {
 			log.warn("Failed to deliver an issued credential to session {}: {}",
@@ -943,18 +1285,72 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	/**
 	 * Sent once, when a credential is minted. Its own frame rather than a variant of {@link Outbound} so the
 	 * token does not become a nullable field on every other frame this service sends.
+	 *
+	 * @param codes the one-time recovery codes, present only on an account's first credential -- see
+	 *     {@link net.osparty.api.service.AccountAuthService.Issued}. Absent on every later enrolment.
+	 *     <p><b>Named {@code codes}, not {@code recoveryCodes}, and it matters.</b> The plugin deserialises
+	 *     every frame into one flat class, where {@code recoveryCodes} is already the boolean on
+	 *     {@link AuthFailed} saying that route is open. Sending a list under that name made Gson bind an
+	 *     array to a Boolean, throw, and drop the whole frame -- so a first sign-in stored no credential and
+	 *     showed no codes, while the server had happily written the row. Same name as the
+	 *     {@link RecoveryCodes} frame's list, which is what a client reads it into.
 	 */
+	@JsonInclude(JsonInclude.Include.NON_NULL)
 	record AuthIssued(String type, String token,
-		String playerId, boolean firstDevice) {
+		String playerId, boolean firstDevice, List<String> codes) {
 	}
 
 	/**
-	 * Sent to the challenger: this account is already on another machine, go and read the code off it.
+	 * Sent to a client that could not be signed in, naming the ways back in that are actually open.
 	 *
-	 * <p>Deliberately carries no code. The challenger proving it can see the incumbent's screen is the
-	 * entire check, so a code on this frame would answer its own question.
+	 * <p>Replaces the pair of frames that used to say "type a code" and "there was nobody to give you one".
+	 * Both described a coupling attempt rather than the thing that had happened, which is that this device
+	 * is not signed in -- so a user who had simply lost their credential was shown a prompt about a code
+	 * that had never existed, on every reconnect, and told nothing about the two paths that would have
+	 * worked. The flags are all server-confirmed: a route offered here is one that will answer.
+	 *
+	 * @param coupling another of this account's machines is signed in somewhere, so a code <em>could</em> be
+	 *     sent to it. Deliberately not "a code is waiting": nothing is minted or displayed until a person
+	 *     asks with {@code requestCouplingCode}, because otherwise naming an account hash was enough to put
+	 *     a dialog in front of whoever really owns it
+	 * @param recoveryCodes this account has unspent recovery codes
+	 * @param discord this account has a Discord link made by a signed-in session
 	 */
-	record CouplingRequired(String type, Long accountHash) {
+	record AuthFailed(String type, Long accountHash, String reason,
+		boolean coupling, boolean recoveryCodes, boolean discord) {
+	}
+
+	/**
+	 * How many of the account's machines were shown the code just asked for.
+	 *
+	 * <p>Zero is a real answer, not an error: presence was checked before the request and the last device
+	 * can go offline in between. The client needs to tell that apart from a code sitting unread.
+	 */
+	record CouplingCodeSent(String type, Long accountHash, int reached) {
+	}
+
+	/**
+	 * The codes themselves on issue, or only how many are left on a status check.
+	 *
+	 * @param codes the plaintext, which exists here and nowhere else afterwards -- null when this is a
+	 *     status reply rather than an issue.
+	 */
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	record RecoveryCodes(String type, List<String> codes, int remaining) {
+	}
+
+	/**
+	 * How a recovery attempt went.
+	 *
+	 * @param pending set when a Discord recovery poll found no answer yet, which is the ordinary case and
+	 *     not a failure -- without it the client cannot tell "not finished" from "refused".
+	 */
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	record RecoveryResult(String type, boolean success, boolean pending, String detail) {
+	}
+
+	/** Where to send the browser, and the secret this socket polls with. See {@code DiscordRecoveryService}. */
+	record DiscordRecoveryUrl(String type, String url, String ticket) {
 	}
 
 	/** Sent to the incumbent: here is the code to display. */
@@ -1678,9 +2074,38 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 	}
 
 	/** Send a shared frame in whichever form this subscriber asked for. */
+	/**
+	 * The {@code type} of a serialised frame, for a log line that must not carry the rest of it.
+	 *
+	 * <p>Read off the front of the JSON rather than parsed: every frame here is built by this class with
+	 * {@code type} written first, and re-parsing one on the way out to produce a debug string would be work
+	 * done for the log's benefit alone. Anything unrecognisable degrades to {@code ?}, which is all a log
+	 * line needs it to do.
+	 */
+	private static String frameType(String json) {
+		if (json == null) {
+			return "?";
+		}
+		int key = json.indexOf("\"type\":\"");
+		if (key < 0) {
+			return "?";
+		}
+		int start = key + "\"type\":\"".length();
+		int end = json.indexOf('"', start);
+		return end < 0 ? "?" : json.substring(start, end);
+	}
+
 	private void sendRaw(Subscriber sub, Frame frame) {
 		if (!sub.session.isOpen()) {
 			return;
+		}
+		// The type, never the body. Everything that goes out this way is directed at one client and several
+		// of them carry a secret -- an issued token, a set of recovery codes, a coupling code -- so the
+		// payload cannot go in a log the way {@link #send}'s board frames can. Without even the type, a
+		// DEBUG session shows every frame arriving and none of the answers, which is exactly the half that
+		// was missing when authIssued was being dropped on the client and nothing anywhere said so.
+		if (log.isDebugEnabled()) {
+			log.debug("WS -> {} {}", sub.session.id(), frameType(frame.text()));
 		}
 		try {
 			byte[] compressed = sub.compressed ? frame.compressedBytes() : null;
@@ -1802,6 +2227,15 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		 */
 		volatile boolean authenticated;
 		volatile String name;
+		/**
+		 * Accounts this session has already been told it could not sign in as. {@code identify} arrives on
+		 * every reconnect, and the answer does not change between them -- so without this the user gets the
+		 * same interruption on every world hop. Cleared for one account by {@code retryAuth}.
+		 */
+		final java.util.Set<Long> authOffered = java.util.concurrent.ConcurrentHashMap.newKeySet();
+		/** Recovery codes tried on this connection, against {@link #MAX_RECOVERY_ATTEMPTS_PER_SESSION}. */
+		final java.util.concurrent.atomic.AtomicInteger recoveryAttempts =
+			new java.util.concurrent.atomic.AtomicInteger();
 		/** Advertisements reported on this connection, so each is only reported once per session. */
 		final java.util.Set<String> reportedAdIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
 		/**
@@ -1828,6 +2262,12 @@ public class BoardBroadcaster implements net.osparty.api.party.HostedAds {
 		String deviceId,
 		/** Sent with {@code renameDevice}: the new label. */
 		String label,
+		/**
+		 * Sent with {@code discordRecoveryPoll}: the secret handed back by {@code startDiscordRecovery}.
+		 * Held by the client rather than the session so a reconnect mid-flow does not lose an authorisation
+		 * the user has already given at Discord.
+		 */
+		String ticket,
 		/** Sent with {@code transferHost}: the incoming host's account type, which re-stamps the ad's badge. */
 		String hostAccountType,
 		/** Sent with {@code subscribe}: this client can read gzipped binary frames. Absent means it cannot. */

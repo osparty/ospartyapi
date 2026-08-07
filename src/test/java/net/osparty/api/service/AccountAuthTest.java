@@ -3,6 +3,7 @@ package net.osparty.api.service;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import net.osparty.api.repository.InMemoryAccountCredentialRepository;
+import net.osparty.api.repository.InMemoryAccountRecoveryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -19,7 +20,8 @@ class AccountAuthTest {
 	@BeforeEach
 	void setUp() {
 		store = new InMemoryAccountCredentialRepository();
-		auth = new AccountAuthService(store, new LocalCouplingCodeStore(), true);
+		auth = new AccountAuthService(store, new InMemoryAccountRecoveryRepository(),
+			new LocalCouplingCodeStore(), true);
 	}
 
 	@Test
@@ -319,7 +321,8 @@ class AccountAuthTest {
 	/** Ships off. A client that gets no credential carries on unauthenticated, as every old client does. */
 	@Test
 	void enrolmentIssuesNothingWhileItIsSwitchedOff() {
-		AccountAuthService disabled = new AccountAuthService(store, new LocalCouplingCodeStore(), false);
+		AccountAuthService disabled = new AccountAuthService(store, new InMemoryAccountRecoveryRepository(),
+			new LocalCouplingCodeStore(), false);
 
 		assertThat(disabled.enrol(4242L, null, null)).isEmpty();
 		assertThat(store.findActiveByAccountHash(4242L)).isEmpty();

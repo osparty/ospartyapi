@@ -70,10 +70,20 @@ public class DiscordLinkService {
 	public String beginLink(long accountHash) {
 		String nonce = newNonce();
 		redis.opsForValue().set(NONCE_KEY + nonce, Long.toString(accountHash), NONCE_TTL);
+		return authorizeUrl(nonce);
+	}
+
+	/**
+	 * Where to send a browser to have Discord identify its user, carrying {@code state} back to us.
+	 *
+	 * <p>Split out of {@link #beginLink} for {@link DiscordRecoveryService}, which needs the same URL with a
+	 * state of its own -- the two flows share one registered redirect URI and are told apart by the state.
+	 */
+	public String authorizeUrl(String state) {
 		String redirect = URLEncoder.encode(redirectUri, StandardCharsets.UTF_8);
 		return "https://discord.com/oauth2/authorize?client_id=" + clientId
 			+ "&redirect_uri=" + redirect
-			+ "&response_type=code&scope=identify&state=" + nonce;
+			+ "&response_type=code&scope=identify&state=" + URLEncoder.encode(state, StandardCharsets.UTF_8);
 	}
 
 	public Optional<Long> consumeNonce(String nonce) {
@@ -94,10 +104,28 @@ public class DiscordLinkService {
 		}
 	}
 
-	/** Binds an OSRS account to a Discord account, replacing any previous binding for that account. */
-	public void link(long accountHash, String discordId, String username) {
-		repository.link(accountHash, discordId, username);
+	/**
+	 * Binds an OSRS account to a Discord account, replacing any previous binding for that account.
+	 *
+	 * @param verified whether the session that asked for this link had proved it was that account. Only a
+	 *     verified link is ever accepted as proof of ownership by {@link DiscordRecoveryService} -- an
+	 *     unverified one says nothing more than that somebody named the account hash.
+	 */
+	public void link(long accountHash, String discordId, String username, boolean verified) {
+		repository.link(accountHash, discordId, username, verified);
 		mirror(accountHash, new Link(discordId, username));
+	}
+
+	/**
+	 * Whether this account's Discord link was made from a session that had proved it was this account.
+	 *
+	 * <p>Straight to Postgres: the Redis mirror carries only what the badge path needs, and this is asked
+	 * once per recovery attempt rather than once per party member per tick.
+	 */
+	public boolean hasVerifiedLink(long accountHash) {
+		return repository.findByAccountHash(accountHash)
+			.map(DiscordLinkRepository.Link::verified)
+			.orElse(false);
 	}
 
 	public void unlink(long accountHash) {

@@ -11,6 +11,7 @@ import java.util.List;
 import net.osparty.api.party.LocalPartyAdmissionService;
 import net.osparty.api.repository.FakeAdvertisementRepository;
 import net.osparty.api.repository.InMemoryAccountCredentialRepository;
+import net.osparty.api.repository.InMemoryAccountRecoveryRepository;
 import net.osparty.api.repository.InMemoryAdReportRepository;
 import net.osparty.api.service.AccountAuthService;
 import net.osparty.api.service.DisabledAdReportService;
@@ -36,6 +37,7 @@ class BoardBroadcasterDeviceTest {
 	@BeforeEach
 	void setUp() {
 		auth = new AccountAuthService(new InMemoryAccountCredentialRepository(),
+			new InMemoryAccountRecoveryRepository(),
 			new LocalCouplingCodeStore(), true);
 		SimpleMeterRegistry meters = new SimpleMeterRegistry();
 		board = new BoardBroadcaster(new FakeAdvertisementRepository(), mapper,
@@ -43,10 +45,12 @@ class BoardBroadcasterDeviceTest {
 			null, null, // DiscordLinkService, DiscordBadgeService: unreachable from these frames
 			new LocalPresenceRegistry(),
 			new LocalInviteBus(),
+			new LocalCouplingBus(),
 			null, // BanService: unreachable from these frames
 			new LocalBoardChangeBus(),
 			new LocalPartyAdmissionService(),
 			auth,
+			null, // DiscordRecoveryService: unreachable from these frames
 			new PlayerIdService("test-salt"),
 			true, true,
 			new InMemoryAdReportRepository(),

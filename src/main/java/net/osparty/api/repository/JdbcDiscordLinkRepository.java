@@ -11,8 +11,11 @@ import org.springframework.stereotype.Repository;
 @Repository
 @Profile("!test")
 public class JdbcDiscordLinkRepository implements DiscordLinkRepository {
+	private static final String COLUMNS = "account_hash, discord_id, discord_name, verified";
+
 	private static final RowMapper<Link> MAPPER = (ResultSet rs, int row) -> new Link(
-		rs.getLong("account_hash"), rs.getString("discord_id"), rs.getString("discord_name"));
+		rs.getLong("account_hash"), rs.getString("discord_id"), rs.getString("discord_name"),
+		rs.getBoolean("verified"));
 
 	private final JdbcClient db;
 
@@ -20,17 +23,23 @@ public class JdbcDiscordLinkRepository implements DiscordLinkRepository {
 		this.db = db;
 	}
 
+	/**
+	 * {@code verified} is overwritten on conflict like every other column, so relinking from a signed-in
+	 * session is how a row written before verification existed becomes trustworthy. It moves both ways on
+	 * purpose: a link made without proof should not inherit the standing of the one it replaces.
+	 */
 	@Override
-	public void link(long accountHash, String discordId, String discordName) {
+	public void link(long accountHash, String discordId, String discordName, boolean verified) {
 		db.sql("""
-				INSERT INTO discord_link (account_hash, discord_id, discord_name)
-				VALUES (?, ?, ?)
+				INSERT INTO discord_link (account_hash, discord_id, discord_name, verified)
+				VALUES (?, ?, ?, ?)
 				ON CONFLICT (account_hash) DO UPDATE
 				  SET discord_id = EXCLUDED.discord_id,
 				      discord_name = EXCLUDED.discord_name,
+				      verified = EXCLUDED.verified,
 				      updated_at = now()
 				""")
-			.params(accountHash, discordId, discordName)
+			.params(accountHash, discordId, discordName, verified)
 			.update();
 	}
 
@@ -41,7 +50,7 @@ public class JdbcDiscordLinkRepository implements DiscordLinkRepository {
 
 	@Override
 	public Optional<Link> findByAccountHash(long accountHash) {
-		return db.sql("SELECT account_hash, discord_id, discord_name FROM discord_link WHERE account_hash = ?")
+		return db.sql("SELECT " + COLUMNS + " FROM discord_link WHERE account_hash = ?")
 			.param(accountHash)
 			.query(MAPPER)
 			.optional();
@@ -57,7 +66,7 @@ public class JdbcDiscordLinkRepository implements DiscordLinkRepository {
 
 	@Override
 	public List<Link> findAll() {
-		return db.sql("SELECT account_hash, discord_id, discord_name FROM discord_link")
+		return db.sql("SELECT " + COLUMNS + " FROM discord_link")
 			.query(MAPPER)
 			.list();
 	}

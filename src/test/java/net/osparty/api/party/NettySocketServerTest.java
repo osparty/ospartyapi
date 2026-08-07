@@ -54,6 +54,7 @@ class NettySocketServerTest {
 		admissions = new LocalPartyAdmissionService();
 		auth = new net.osparty.api.service.AccountAuthService(
 			new net.osparty.api.repository.InMemoryAccountCredentialRepository(),
+			new net.osparty.api.repository.InMemoryAccountRecoveryRepository(),
 			new net.osparty.api.service.LocalCouplingCodeStore(), true);
 		server = new NettySocketServer(
 			new PartyFrameHandler(manager, mapper, admissions), null, 0, meters, false, auth);

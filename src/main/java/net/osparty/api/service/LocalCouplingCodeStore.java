@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -12,6 +13,8 @@ import org.springframework.stereotype.Component;
 @Profile("test")
 public class LocalCouplingCodeStore implements CouplingCodeStore {
 	private final Map<Long, Entry> pending = new ConcurrentHashMap<>();
+	/** Wrong guesses against the pending code. Cleared with it, so a fresh request starts at zero. */
+	private final Map<Long, AtomicInteger> failures = new ConcurrentHashMap<>();
 
 	private record Entry(Pending pending, Instant expiresAt) {
 		boolean expired() {
@@ -42,7 +45,13 @@ public class LocalCouplingCodeStore implements CouplingCodeStore {
 	}
 
 	@Override
+	public int recordFailure(long accountHash) {
+		return failures.computeIfAbsent(accountHash, key -> new AtomicInteger()).incrementAndGet();
+	}
+
+	@Override
 	public void remove(long accountHash) {
 		pending.remove(accountHash);
+		failures.remove(accountHash);
 	}
 }

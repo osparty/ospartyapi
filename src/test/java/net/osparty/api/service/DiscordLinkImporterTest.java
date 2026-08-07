@@ -118,7 +118,7 @@ class DiscordLinkImporterTest {
 	@Test
 	void postgresWinsAConflictWithStaleRedisData() {
 		long accountHash = seedLink("stale-discord-id", "stale-name");
-		repository.link(accountHash, "current-discord-id", "current-name");
+		repository.link(accountHash, "current-discord-id", "current-name", true);
 
 		importer.importOnce();
 
@@ -142,7 +142,7 @@ class DiscordLinkImporterTest {
 	@Test
 	void warmingRepublishesPostgresIntoTheRedisMirror() {
 		long accountHash = accountHash();
-		repository.link(accountHash, "discord-warm", "user-warm");
+		repository.link(accountHash, "discord-warm", "user-warm", true);
 		repository.setBadgesHidden(accountHash, true);
 		redis.delete("discordlink:hash:" + accountHash);
 
@@ -161,7 +161,7 @@ class DiscordLinkImporterTest {
 	@Test
 	void aMissingMirrorEntryIsRepairedFromPostgresOnRead() {
 		long accountHash = accountHash();
-		repository.link(accountHash, "discord-repair", "user-repair");
+		repository.link(accountHash, "discord-repair", "user-repair", true);
 		redis.delete("discordlink:hash:" + accountHash);
 
 		assertThat(links.getByAccountHash(accountHash))

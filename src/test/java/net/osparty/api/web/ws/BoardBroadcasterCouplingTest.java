@@ -12,6 +12,7 @@ import net.osparty.api.party.LocalPartyAdmissionService;
 import net.osparty.api.repository.AccountCredentialRepository;
 import net.osparty.api.repository.FakeAdvertisementRepository;
 import net.osparty.api.repository.InMemoryAccountCredentialRepository;
+import net.osparty.api.repository.InMemoryAccountRecoveryRepository;
 import net.osparty.api.repository.InMemoryAdReportRepository;
 import net.osparty.api.service.AccountAuthService;
 import net.osparty.api.service.DisabledAdReportService;
@@ -40,6 +41,7 @@ class BoardBroadcasterCouplingTest {
 	@BeforeEach
 	void setUp() {
 		auth = new AccountAuthService(new InMemoryAccountCredentialRepository(),
+			new InMemoryAccountRecoveryRepository(),
 			new LocalCouplingCodeStore(), true);
 		SimpleMeterRegistry meters = new SimpleMeterRegistry();
 		FakeAdvertisementRepository store = new FakeAdvertisementRepository();
@@ -49,10 +51,12 @@ class BoardBroadcasterCouplingTest {
 			null, // DiscordBadgeService: unreachable from identify/couplingConfirm
 			new LocalPresenceRegistry(),
 			new LocalInviteBus(),
+			new LocalCouplingBus(),
 			null, // BanService: unreachable from identify/couplingConfirm
 			new LocalBoardChangeBus(),
 			new LocalPartyAdmissionService(),
 			auth,
+			null, // DiscordRecoveryService: unreachable from identify/couplingConfirm
 			new PlayerIdService("test-salt"),
 			true, true,
 			new InMemoryAdReportRepository(),
@@ -87,21 +91,42 @@ class BoardBroadcasterCouplingTest {
 
 		identify(laptop, 4242L);
 
-		JsonNode required = last(laptop, "couplingRequired");
-		assertThat(required).isNotNull();
-		assertThat(required.has("code")).isFalse();
+		JsonNode failed = last(laptop, "authFailed");
+		assertThat(failed).isNotNull();
+		assertThat(failed.has("code")).isFalse();
+		assertThat(failed.path("coupling").asBoolean()).isTrue();
 	}
 
 	@Test
 	void theCodeGoesOnlyToTheAuthenticatedIncumbent() throws Exception {
 		identify(desktop, 4242L);
 		clear(desktop);
-
 		identify(laptop, 4242L);
+
+		requestCode(laptop, 4242L);
 
 		JsonNode code = last(desktop, "couplingCode");
 		assertThat(code).isNotNull();
 		assertThat(code.path("code").asText()).matches("\\d{6}");
+		assertThat(last(laptop, "couplingCodeSent").path("reached").asInt()).isEqualTo(1);
+	}
+
+	/**
+	 * Failing to sign in must not, on its own, put anything on the owner's screen. It used to: a stranger who
+	 * merely named an account hash could make a code dialog appear in front of whoever really held it, over
+	 * and over. Now the code exists only once a person has asked for one.
+	 */
+	@Test
+	void noCodeAppearsUntilSomebodyAsksForOne() throws Exception {
+		identify(desktop, 4242L);
+		clear(desktop);
+
+		identify(laptop, 4242L);
+
+		assertThat(last(laptop, "authFailed").path("coupling").asBoolean())
+			.as("the route is still offered -- it is the code that waits")
+			.isTrue();
+		assertThat(last(desktop, "couplingCode")).isNull();
 	}
 
 	/**
@@ -119,6 +144,7 @@ class BoardBroadcasterCouplingTest {
 		identify(bystander, 4242L); // claims the account; never authenticated
 
 		identify(laptop, 4242L);
+		requestCode(laptop, 4242L);
 
 		assertThat(last(bystander, "couplingCode")).isNull();
 	}
@@ -128,6 +154,7 @@ class BoardBroadcasterCouplingTest {
 		identify(desktop, 4242L);
 		clear(desktop);
 		identify(laptop, 4242L);
+		requestCode(laptop, 4242L);
 		String code = last(desktop, "couplingCode").path("code").asText();
 
 		confirm(laptop, 4242L, code);
@@ -145,6 +172,7 @@ class BoardBroadcasterCouplingTest {
 		String desktopToken = last(desktop, "authIssued").path("token").asText();
 		clear(desktop);
 		identify(laptop, 4242L);
+		requestCode(laptop, 4242L);
 		String code = last(desktop, "couplingCode").path("code").asText();
 
 		confirm(laptop, 4242L, code);
@@ -161,6 +189,7 @@ class BoardBroadcasterCouplingTest {
 		identify(desktop, 4242L);
 		clear(desktop);
 		identify(laptop, 4242L);
+		requestCode(laptop, 4242L);
 		String code = last(desktop, "couplingCode").path("code").asText();
 		clear(desktop);
 
@@ -184,17 +213,33 @@ class BoardBroadcasterCouplingTest {
 	/**
 	 * An account can hold a credential with nobody currently connected on it -- the first device is offline.
 	 * Told plainly rather than left waiting on a code nothing was ever there to display, and the pending
-	 * request is dropped rather than left to block the next attempt for its whole TTL.
+	 * request is dropped rather than left to block the next attempt for its whole TTL. The client still
+	 * gets {@code authFailed}, with {@code coupling} false and whichever other routes back in -- recovery
+	 * codes, Discord -- are actually open for this account.
 	 */
 	@Test
-	void couplingWithNoIncumbentOnlineIsReportedUnavailable() throws Exception {
+	void couplingWithNoIncumbentOnlineOffersOtherRoutes() throws Exception {
 		// Enrolled directly, so the account has an active credential with no live session behind it.
 		auth.enrol(4343L, null, null);
 
 		identify(laptop, 4343L);
 
-		assertThat(last(laptop, "couplingUnavailable")).isNotNull();
+		JsonNode failed = last(laptop, "authFailed");
+		assertThat(failed).isNotNull();
+		assertThat(failed.path("coupling").asBoolean()).isFalse();
 		assertThat(last(laptop, "authIssued")).isNull();
+	}
+
+	/**
+	 * Ask for a code, which is now the only thing that mints one.
+	 *
+	 * <p>It used to happen automatically the moment a sign-in failed, which meant naming an account hash was
+	 * enough to put a dialog on the screen of whoever really owned it. Every case below that wants a code
+	 * therefore asks for one, and the ones that do not are checking that nothing arrives unbidden.
+	 */
+	private void requestCode(CollectingSession session, long accountHash) throws Exception {
+		board.onMessage(session.id(),
+			"{\"type\":\"requestCouplingCode\",\"accountHash\":" + accountHash + "}");
 	}
 
 	private void identify(CollectingSession session, long accountHash) throws Exception {

@@ -11,6 +11,7 @@ import java.util.List;
 import net.osparty.api.party.LocalPartyAdmissionService;
 import net.osparty.api.repository.FakeAdvertisementRepository;
 import net.osparty.api.repository.InMemoryAccountCredentialRepository;
+import net.osparty.api.repository.InMemoryAccountRecoveryRepository;
 import net.osparty.api.repository.InMemoryAdReportRepository;
 import net.osparty.api.service.AccountAuthService;
 import net.osparty.api.service.DisabledAdReportService;
@@ -54,11 +55,14 @@ class BoardBroadcasterPlayerIdTest {
 			null, badges, // DiscordLinkService: unreachable from host/subscribe
 			new LocalPresenceRegistry(),
 			new LocalInviteBus(),
+			new LocalCouplingBus(),
 			bans,
 			new LocalBoardChangeBus(),
 			new LocalPartyAdmissionService(),
 			new AccountAuthService(new InMemoryAccountCredentialRepository(),
+				new InMemoryAccountRecoveryRepository(),
 				new LocalCouplingCodeStore(), true),
+			null, // DiscordRecoveryService: unreachable from host/subscribe
 			playerIds,
 			true, true,
 			new InMemoryAdReportRepository(),

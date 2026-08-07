@@ -1,0 +1,63 @@
+databaseChangeLog:
+  # One-time codes that let a machine enrol on an account without another machine being there to show
+  # a coupling code.
+  #
+  # Coupling answers "I have both computers in front of me". It has nothing to say about the case that
+  # actually loses people their account: the old machine is dead, wiped, or was reinstalled, so there
+  # is no screen anywhere to read a six-digit code off. Without a second path that user is locked out
+  # of hosting under their own name for good, because enrolment is first-come-first-served and the
+  # first came from a machine that no longer exists.
+  #
+  # Only the SHA-256 of each code is stored, for the same reason as account_credential: a dump of this
+  # table is not a set of working codes. Codes are single-use, and used rows are kept rather than
+  # deleted -- which code was spent, when, and from where is exactly what a support request about a
+  # hijacked account needs, and it is the only trail a redemption leaves.
+  #
+  # Deliberately no TTL. A recovery code is worth having precisely on the day the machine dies, which
+  # is not a day anyone schedules; expiring them would quietly remove the protection while leaving the
+  # user believing they still had it.
+  - changeSet:
+      id: 006-1-create-account-recovery-code
+      author: osparty
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE account_recovery_code (
+                code_hash    CHAR(64) PRIMARY KEY,
+                account_hash BIGINT NOT NULL,
+                issued_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                used_at      TIMESTAMPTZ,
+                used_ip      VARCHAR(64)
+              );
+              CREATE INDEX account_recovery_code_unused_idx
+                ON account_recovery_code (account_hash) WHERE used_at IS NULL;
+      rollback:
+        - sql:
+            sql: DROP TABLE account_recovery_code
+
+  # Whether a Discord link was made by a session that had already proved which account it was.
+  #
+  # This column is what makes Discord recovery safe rather than circular. Until now startDiscordLink
+  # took the account hash from the frame and checked only that the session had not previously claimed
+  # a *different* one -- so a connection that never identified could bind its own Discord account to
+  # somebody else's hash. Recovery that trusted such a row would hand the account to the attacker who
+  # planted it: link your Discord to their hash, then "recover".
+  #
+  # Linking now requires an authenticated session, so new rows are verified. Rows written before this
+  # cannot be distinguished from planted ones, so they default to FALSE and are not accepted for
+  # recovery -- the user relinks once, from a device that is signed in, and the row is trustworthy
+  # from then on. Badges, voice access and everything else read the link regardless; verification
+  # gates recovery alone, because recovery is the only thing that grants an account to a stranger.
+  - changeSet:
+      id: 006-2-add-discord-link-verified
+      author: osparty
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              ALTER TABLE discord_link
+                ADD COLUMN verified BOOLEAN NOT NULL DEFAULT FALSE
+      rollback:
+        - sql:
+            sql: ALTER TABLE discord_link DROP COLUMN verified

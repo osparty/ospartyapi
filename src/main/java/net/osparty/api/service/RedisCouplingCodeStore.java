@@ -64,8 +64,35 @@ public class RedisCouplingCodeStore implements CouplingCodeStore {
 		return Optional.of(new Pending(stored.substring(0, split), stored.substring(split + 1)));
 	}
 
+	/**
+	 * Counted in Redis rather than on the session, because a challenger that gets a free million guesses by
+	 * reconnecting has not been limited at all. Failing closed here too: if the counter cannot be written we
+	 * report the ceiling, which drops the pending code rather than letting an uncounted guess through.
+	 */
+	@Override
+	public int recordFailure(long accountHash) {
+		try {
+			Long count = redis.opsForValue().increment(failureKey(accountHash));
+			// The TTL rides the pending code's, so the counter cannot outlive what it is counting against.
+			redis.expire(failureKey(accountHash), TTL);
+			return count == null ? MAX_ATTEMPTS : count.intValue();
+		}
+		catch (RuntimeException e) {
+			log.warn("Coupling failure count write failed, treating as exhausted: {}", e.toString());
+			return MAX_ATTEMPTS;
+		}
+	}
+
 	@Override
 	public void remove(long accountHash) {
+		try {
+			redis.delete(failureKey(accountHash));
+		}
+		catch (RuntimeException e) {
+			// Harmless on its own -- the counter only means anything alongside a pending code, and the TTL
+			// clears it regardless.
+			log.warn("Coupling failure count delete failed: {}", e.toString());
+		}
 		try {
 			redis.delete(key(accountHash));
 		}
@@ -78,5 +105,9 @@ public class RedisCouplingCodeStore implements CouplingCodeStore {
 
 	private static String key(long accountHash) {
 		return PREFIX + accountHash;
+	}
+
+	private static String failureKey(long accountHash) {
+		return PREFIX + "fail:" + accountHash;
 	}
 }

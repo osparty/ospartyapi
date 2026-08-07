@@ -11,8 +11,13 @@ import java.util.Optional;
  * mirror that {@code DiscordLinkService} maintains in front of this.
  */
 public interface DiscordLinkRepository {
-	/** Upserts a binding, replacing whatever Discord account was previously linked to this hash. */
-	void link(long accountHash, String discordId, String discordName);
+	/**
+	 * Upserts a binding, replacing whatever Discord account was previously linked to this hash.
+	 *
+	 * @param verified whether the session that requested the link had proved it was this account. Gates
+	 *     Discord-based account recovery and nothing else -- see {@code 006-account-recovery.yaml}.
+	 */
+	void link(long accountHash, String discordId, String discordName, boolean verified);
 
 	void unlink(long accountHash);
 
@@ -59,6 +64,6 @@ public interface DiscordLinkRepository {
 
 	long countLinks();
 
-	record Link(long accountHash, String discordId, String discordName) {
+	record Link(long accountHash, String discordId, String discordName, boolean verified) {
 	}
 }

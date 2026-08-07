@@ -18,8 +18,8 @@ public class InMemoryDiscordLinkRepository implements DiscordLinkRepository {
 	private final Set<String> migrations = ConcurrentHashMap.newKeySet();
 
 	@Override
-	public void link(long accountHash, String discordId, String discordName) {
-		links.put(accountHash, new Link(accountHash, discordId, discordName));
+	public void link(long accountHash, String discordId, String discordName, boolean verified) {
+		links.put(accountHash, new Link(accountHash, discordId, discordName, verified));
 	}
 
 	@Override
@@ -68,7 +68,9 @@ public class InMemoryDiscordLinkRepository implements DiscordLinkRepository {
 
 	@Override
 	public boolean importIfAbsent(long accountHash, String discordId, String discordName) {
-		return links.putIfAbsent(accountHash, new Link(accountHash, discordId, discordName)) == null;
+		// Unverified, as in SQL: an imported row predates verification and cannot be shown to have been
+		// made by the account's owner.
+		return links.putIfAbsent(accountHash, new Link(accountHash, discordId, discordName, false)) == null;
 	}
 
 	@Override

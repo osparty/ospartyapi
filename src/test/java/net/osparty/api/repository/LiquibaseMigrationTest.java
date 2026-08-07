@@ -113,8 +113,8 @@ class LiquibaseMigrationTest {
 
 	@Test
 	void discordLinkUpsertsAndResolvesBothDirections() {
-		discordLinks.link(1L, "discord-1", "user one");
-		discordLinks.link(2L, "discord-1", "user one");
+		discordLinks.link(1L, "discord-1", "user one", true);
+		discordLinks.link(2L, "discord-1", "user one", true);
 
 		// One Discord account, many OSRS accounts — the index that replaced the old Redis set.
 		assertThat(discordLinks.accountHashesFor("discord-1")).containsExactlyInAnyOrder(1L, 2L);
@@ -122,7 +122,7 @@ class LiquibaseMigrationTest {
 			.get().extracting(DiscordLinkRepository.Link::discordName).isEqualTo("user one");
 
 		// Re-linking moves the account rather than duplicating it.
-		discordLinks.link(1L, "discord-2", "user two");
+		discordLinks.link(1L, "discord-2", "user two", true);
 		assertThat(discordLinks.accountHashesFor("discord-1")).containsExactly(2L);
 		assertThat(discordLinks.accountHashesFor("discord-2")).containsExactly(1L);
 		assertThat(discordLinks.countLinks()).isEqualTo(2);
@@ -149,7 +149,7 @@ class LiquibaseMigrationTest {
 
 	@Test
 	void importNeverOverwritesWhatPostgresAlreadyHas() {
-		discordLinks.link(7L, "current", "current name");
+		discordLinks.link(7L, "current", "current name", true);
 
 		assertThat(discordLinks.importIfAbsent(7L, "stale", "stale name")).isFalse();
 		assertThat(discordLinks.importIfAbsent(8L, "fresh", "fresh name")).isTrue();
@@ -179,7 +179,8 @@ class LiquibaseMigrationTest {
 			"002-1-create-ad-ban", "002-2-index-ad-ban", "002-3-index-ad-report-ban",
 			"003-1-create-discord-link", "003-2-create-account-preference",
 			"004-1-create-data-migration",
-			"005-1-create-account-credential", "005-2-create-account-enrolment-log");
+			"005-1-create-account-credential", "005-2-create-account-enrolment-log",
+			"006-1-create-account-recovery-code", "006-2-add-discord-link-verified");
 		// A second startup must be a no-op; Liquibase records checksums, so a changed file would
 		// have failed the context refresh above rather than reaching this assertion.
 		assertThat(db.sql("SELECT count(*) FROM databasechangeloglock").query(Integer.class).single())

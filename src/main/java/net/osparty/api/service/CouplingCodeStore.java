@@ -27,9 +27,26 @@ public interface CouplingCodeStore {
 	 */
 	Duration TTL = Duration.ofMinutes(5);
 
+	/**
+	 * How many wrong guesses a pending code survives.
+	 *
+	 * <p>Six digits is a million, which sounds like a lot and is not: the code lives five minutes and a
+	 * socket will take guesses as fast as they are sent, so an unbounded challenger gets a real fraction of
+	 * the space. Fingers slip, so this is not one -- but it is small enough that the space stays out of
+	 * reach, and burning the attempts costs the attacker a fresh code on the victim's screen.
+	 */
+	int MAX_ATTEMPTS = 5;
+
 	/** The code an account is waiting on, and the one connection allowed to spend it. */
 	record Pending(String code, String challengerSessionId) {
 	}
+
+	/**
+	 * Count a wrong guess against the pending code.
+	 *
+	 * @return how many have now been made. At {@link #MAX_ATTEMPTS} the caller drops the pending request.
+	 */
+	int recordFailure(long accountHash);
 
 	/**
 	 * Record a pending coupling, unless the account already has one.

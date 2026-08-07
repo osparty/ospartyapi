@@ -71,8 +71,8 @@ class DiscordLinkMultiAccountTest {
 
 	@Test
 	void badgesSyncToEveryAccountLinkedToTheSameDiscord() {
-		links.link(ACCOUNT_A, DISCORD_ID, "user#1");
-		links.link(ACCOUNT_B, DISCORD_ID, "user#1");
+		links.link(ACCOUNT_A, DISCORD_ID, "user#1", true);
+		links.link(ACCOUNT_B, DISCORD_ID, "user#1", true);
 		badges.setBadges(DISCORD_ID, List.of("developer", "backer"));
 
 		assertThat(links.accountHashesForDiscordId(DISCORD_ID)).containsExactlyInAnyOrder(ACCOUNT_A, ACCOUNT_B);
@@ -84,8 +84,8 @@ class DiscordLinkMultiAccountTest {
 
 	@Test
 	void unlinkingOneAccountLeavesTheOtherLinkedAndBadged() {
-		links.link(ACCOUNT_A, DISCORD_ID, "user#1");
-		links.link(ACCOUNT_B, DISCORD_ID, "user#1");
+		links.link(ACCOUNT_A, DISCORD_ID, "user#1", true);
+		links.link(ACCOUNT_B, DISCORD_ID, "user#1", true);
 		badges.setBadges(DISCORD_ID, List.of("developer"));
 
 		links.unlink(ACCOUNT_A);
@@ -101,8 +101,8 @@ class DiscordLinkMultiAccountTest {
 	@Test
 	void relinkingAnAccountToAnotherDiscordMovesItOffTheOldOne() {
 		String otherDiscord = DISCORD_ID + "-other";
-		links.link(ACCOUNT_A, DISCORD_ID, "user#1");
-		links.link(ACCOUNT_A, otherDiscord, "user#2");
+		links.link(ACCOUNT_A, DISCORD_ID, "user#1", true);
+		links.link(ACCOUNT_A, otherDiscord, "user#2", true);
 
 		assertThat(links.accountHashesForDiscordId(DISCORD_ID)).doesNotContain(ACCOUNT_A);
 		assertThat(links.accountHashesForDiscordId(otherDiscord)).containsExactly(ACCOUNT_A);
@@ -115,8 +115,8 @@ class DiscordLinkMultiAccountTest {
 	/** Badge visibility is a deliberate privacy choice, so it must survive on the durable side. */
 	@Test
 	void hiddenBadgesAreStrippedFromBroadcasts() {
-		links.link(ACCOUNT_A, DISCORD_ID, "user#1");
-		links.link(ACCOUNT_B, DISCORD_ID, "user#1");
+		links.link(ACCOUNT_A, DISCORD_ID, "user#1", true);
+		links.link(ACCOUNT_B, DISCORD_ID, "user#1", true);
 		badges.setBadges(DISCORD_ID, List.of("developer"));
 		badges.setBadgesHidden(ACCOUNT_A, true);
 
